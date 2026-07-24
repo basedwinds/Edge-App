@@ -37,12 +37,16 @@ export function Racing() {
       )}
 
       <div className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-4 py-3 mb-6 text-sm">
-        <div className="font-medium text-[var(--color-text)]">🏁 Racing — tracking only (not staked)</div>
-        <div className="text-xs text-[var(--color-text-dim)] mt-1">
-          F1/IndyCar/NASCAR priced by the grid + constructor + driver model (race finish) and a qualifying-Elo
-          model (pole). Pre-qualifying prices use driver + constructor only — no grid yet — and sharpen at the
-          race weekend. Shown for tracking + forward CLV, never auto-staked (racing can't be historically
-          backtested). {priced} of {rows.length} markets priced across {events.length} events.
+        <div className="font-medium text-[var(--color-text)]">🏁 Racing — paper-tracked for CLV, not real-money staked</div>
+        <div className="text-xs text-[var(--color-text-dim)] mt-1 leading-relaxed">
+          F1/IndyCar/NASCAR are priced by the grid + constructor + driver model (race finish) and a
+          qualifying-Elo model (pole), and are <span className="text-[var(--color-text)]">auto-paper-logged for
+          forward CLV exactly like every other sport</span> — the results show up in the <span className="text-[var(--color-text)]">CLV Tracker</span>.
+          "Not staked" only means racing gets no real-money bet-size suggestion (it can't be historically
+          backtested, so CLV is the sole judge), NOT that it's excluded from paper trading. Nothing has logged
+          yet only because Kalshi isn't quoting racing prices this far out — that starts at the race weekend.
+          Pre-qualifying prices use driver + constructor (no grid yet) and sharpen closer to the race.{" "}
+          {priced} of {rows.length} markets priced across {events.length} events.
         </div>
       </div>
 
