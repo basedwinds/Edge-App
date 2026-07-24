@@ -25,7 +25,7 @@ rate-limit outages instead of fully dependent on it succeeding.
 import datetime as dt
 import logging
 
-from app.clients import kalshi_lol_client
+from app.clients import kalshi_lol_client, polymarket_lol_client
 from app.db.database import SessionLocal
 from app.ingestion import lol_data, market_catalog_lol
 from app.ingestion.poller_lock import db_write_lock
@@ -200,6 +200,59 @@ def refresh_kalshi_lol_markets():
             session.close()
 
 
+def refresh_polymarket_lol_markets():
+    """LoL's Polymarket side (2026-07-24): series/game winner + games total +
+    handicap + season-winner futures. Every market type for a real match is
+    bundled under ONE Polymarket event (event_slug) -- resolve the Match Winner's
+    two team names to a LolMatch once per slug, reuse for every sibling market,
+    same pattern as poller_valorant.refresh_polymarket_valorant_markets."""
+    winner_rows = polymarket_lol_client.get_series_winner_markets()
+    map_rows = polymarket_lol_client.get_map_winner_markets()
+    total_rows = polymarket_lol_client.get_total_maps_markets()
+    handicap_rows = polymarket_lol_client.get_map_handicap_markets()
+    futures_rows = polymarket_lol_client.get_futures_markets()
+
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            teams_by_slug: dict[str, set[str]] = {}
+            event_by_slug: dict[str, str] = {}
+            start_by_slug: dict[str, str | None] = {}
+            for row in winner_rows:
+                teams_by_slug.setdefault(row["event_slug"], set()).add(row["team_name"])
+                event_by_slug.setdefault(row["event_slug"], row.get("event_title", ""))
+                start_by_slug.setdefault(row["event_slug"], row.get("estimated_start_time"))
+
+            match_id_by_slug: dict[str, int | None] = {}
+            for slug, teams in teams_by_slug.items():
+                if len(teams) == 2:
+                    team_a, team_b = tuple(teams)
+                    match = market_catalog_lol.find_or_create_upcoming_match(session, team_a, team_b, event_name=event_by_slug.get(slug))
+                    match_id_by_slug[slug] = match.id if match else None
+                    start = start_by_slug.get(slug)
+                    if match is not None and match.winner is None and start:
+                        match.estimated_start_time = start
+                else:
+                    match_id_by_slug[slug] = None
+
+            matched = sum(1 for v in match_id_by_slug.values() if v is not None)
+            for row in winner_rows:
+                market_catalog_lol.upsert_polymarket_lol_series_winner_row(session, row, match_id_by_slug.get(row["event_slug"]))
+            for row in map_rows:
+                market_catalog_lol.upsert_polymarket_lol_map_winner_row(session, row, match_id_by_slug.get(row["event_slug"]))
+            for row in total_rows:
+                market_catalog_lol.upsert_polymarket_lol_total_row(session, row, match_id_by_slug.get(row["event_slug"]))
+            for row in handicap_rows:
+                market_catalog_lol.upsert_polymarket_lol_handicap_row(session, row, match_id_by_slug.get(row["event_slug"]))
+            for row in futures_rows:
+                market_catalog_lol.upsert_polymarket_lol_futures_row(session, row)
+
+            session.commit()
+            log.info("polymarket lol: %d/%d matches matched", matched, len(match_id_by_slug))
+        finally:
+            session.close()
+
+
 def run_full_refresh_lol():
     # REAL BUG this ordering fixes (found live 2026-07-20, user report:
     # "not seeing any model %" for LoL): refresh_lol_matches() is the one
@@ -217,3 +270,4 @@ def run_full_refresh_lol():
     refresh_lol_ratings()
     refresh_lol_matches()
     refresh_kalshi_lol_markets()
+    refresh_polymarket_lol_markets()

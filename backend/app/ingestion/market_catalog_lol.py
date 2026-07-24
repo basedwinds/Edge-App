@@ -179,6 +179,81 @@ def upsert_kalshi_lol_tournament_winner_market(session: Session, row: dict) -> M
     return market
 
 
+# --- Polymarket LoL upserts (2026-07-24) -- mirror market_catalog_valorant's own
+# Polymarket upserts; source_ticker = conditionId(-team) so a Kalshi + Polymarket
+# copy of the same real bet stay distinct rows that the recommender then dedups
+# by proposition (crossPlatformKey), keeping whichever platform's edge is better.
+def upsert_polymarket_lol_series_winner_row(session: Session, row: dict, lol_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['team_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="series_winner", sport="lol")
+        session.add(market)
+    market.lol_match_id = lol_match_id
+    market.team = row["team_name"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    return market
+
+
+def upsert_polymarket_lol_map_winner_row(session: Session, row: dict, lol_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['team_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="map_winner", sport="lol")
+        session.add(market)
+    market.lol_match_id = lol_match_id
+    market.team = row["team_name"]
+    market.line = float(row["map_number"])
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    return market
+
+
+def upsert_polymarket_lol_total_row(session: Session, row: dict, lol_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-over"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="series_total", sport="lol")
+        session.add(market)
+    market.lol_match_id = lol_match_id
+    market.team = None
+    market.line = row["line"]
+    market.side = "over"
+    market.status = row.get("status") or "active"
+    outcomes, prices = row.get("outcomes", []), row.get("outcome_prices", [])
+    over_price = prices[outcomes.index("Over")] if "Over" in outcomes and len(prices) == len(outcomes) else None
+    _upsert_snapshot(session, market, over_price, row.get("volume"))
+    return market
+
+
+def upsert_polymarket_lol_handicap_row(session: Session, row: dict, lol_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['team_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="series_handicap", sport="lol")
+        session.add(market)
+    market.lol_match_id = lol_match_id
+    market.team = row["team_name"]
+    market.line = row["line"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    return market
+
+
+def upsert_polymarket_lol_futures_row(session: Session, row: dict) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['team_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="tournament_winner", sport="lol")
+        session.add(market)
+    market.team = row["team_name"]
+    market.group_label = row["group_label"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"))
+    return market
+
+
 # Roster-change cache read/write helpers removed 2026-07-23 with the esports
 # roster "Wait" badge (see market_catalog_cs2.py's note). Table left in place,
 # no longer read or written.
