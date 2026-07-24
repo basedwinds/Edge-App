@@ -16,6 +16,8 @@ import { NbaRecommended } from "./pages/NbaRecommended";
 import { NbaPlaced } from "./pages/NbaPlaced";
 import { NbaCalibration } from "./pages/NbaCalibration";
 import { WnbaRecommended } from "./pages/WnbaRecommended";
+import { WnbaPlaced } from "./pages/WnbaPlaced";
+import { WnbaCalibration } from "./pages/WnbaCalibration";
 import { Divergences } from "./pages/Divergences";
 import { ClvBuckets } from "./pages/ClvBuckets";
 import { Health } from "./pages/Health";
@@ -74,6 +76,8 @@ function App() {
         <Route path="/nba/placed" element={<NbaPlaced />} />
         <Route path="/nba/calibration" element={<NbaCalibration />} />
         <Route path="/wnba/recommended" element={<WnbaRecommended />} />
+        <Route path="/wnba/placed" element={<WnbaPlaced />} />
+        <Route path="/wnba/calibration" element={<WnbaCalibration />} />
         <Route path="/all" element={<Combined />} />
         <Route path="/tracker" element={<Tracker />} />
         <Route path="/divergences" element={<Divergences />} />

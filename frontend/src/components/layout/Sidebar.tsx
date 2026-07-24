@@ -108,11 +108,19 @@ function navItems(sport: string) {
   if (sport === "f1" || sport === "nascar" || sport === "irl") {
     return { sportItems: [{ to: `/racing/${sport}`, label: "Markets", icon: Flag, end: false }], sharedItems: shared };
   }
-  // WNBA is a moneyline-only, single-page integration (2026-07-22) -- only a
-  // Recommended page exists (no Dashboard/Futures/Placed/Calibration yet), so
-  // it gets just that one link rather than the full 5-page set.
+  // WNBA is moneyline-only with no Kalshi futures market, so it skips the
+  // Dashboard/Futures pages but DOES get Recommended/Placed/Calibration like
+  // every other sport (2026-07-24) -- so its bets track, settle and calibrate
+  // uniformly rather than living on a lone Recommended tab.
   if (sport === "wnba") {
-    return { sportItems: [{ to: "/wnba/recommended", label: "Recommended", icon: Target, end: false }], sharedItems: shared };
+    return {
+      sportItems: [
+        { to: "/wnba/recommended", label: "Recommended", icon: Target, end: false },
+        { to: "/wnba/placed", label: "Placed Bets", icon: ClipboardList, end: false },
+        { to: "/wnba/calibration", label: "Calibration", icon: Gauge, end: false },
+      ],
+      sharedItems: shared,
+    };
   }
   const prefix = sport === "nba" ? "/nba" : sport === "mlb" ? "/mlb" : sport === "mma" ? "/mma" : sport === "tennis" ? "/tennis" : sport === "soccer" ? "/soccer" : sport === "valorant" ? "/valorant" : sport === "cs2" ? "/cs2" : sport === "lol" ? "/lol" : "";
   const items = [{ to: prefix || "/", label: "Dashboard", icon: LayoutDashboard, end: true }];
