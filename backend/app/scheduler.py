@@ -18,6 +18,7 @@ from app.ingestion.poller_racing import run_full_refresh_racing
 from app.ingestion.poller_lock import serialized
 from app.models.dead_market_sanity_check import run_dead_market_sanity_check
 from app.models.snapshot_maintenance import prune_market_snapshots
+from app.models.market_cleanup import close_stale_game_markets
 from app.models.tennis_surface_backfill import run_tennis_surface_backfill
 
 log = logging.getLogger("scheduler")
@@ -105,6 +106,19 @@ def run_snapshot_prune():
         prune_market_snapshots(session)
     except Exception:
         log.exception("snapshot prune failed")
+    finally:
+        session.close()
+
+
+def run_market_cleanup():
+    """Daily -- marks past-date game markets 'closed' so Kalshi markets that
+    dropped off the open list don't linger as 'active' forever (see
+    market_cleanup.py). Only logs, never raises."""
+    session = SessionLocal()
+    try:
+        close_stale_game_markets(session)
+    except Exception:
+        log.exception("market cleanup failed")
     finally:
         session.close()
 
@@ -245,6 +259,13 @@ def start():
         "interval",
         hours=24,
         id="snapshot_prune",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        serialized(run_market_cleanup),
+        "interval",
+        hours=6,
+        id="market_cleanup",
         replace_existing=True,
     )
     # Keep the response cache warm (see run_cache_warm). Every 200s < the 300s
