@@ -43,6 +43,7 @@ class RacingMarketOut(BaseModel):
     id: int                # Market row id (for paper-logging / CLV tracking)
     series: str            # f1 | irl | nascar
     source: str            # kalshi | polymarket
+    race_event_id: int | None = None  # links a placed bet to its RaceEvent (start-time + CLV)
     event: str | None      # Kalshi event ticker (one race)
     market_type: str       # race_winner | top_n | pole
     line: int | None       # N for top_n (3/5/10), else None

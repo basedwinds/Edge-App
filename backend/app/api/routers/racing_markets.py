@@ -80,7 +80,7 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         edge = round(mp - imp, 4) if (mp is not None and imp is not None) else None
         snap = None  # volume pulled from implied path below
         out.append(RacingMarketOut(
-            id=m.id, series=series, source=m.source, event=m.source_event_id, market_type=m.market_type,
+            id=m.id, series=series, source=m.source, race_event_id=m.race_event_id, event=m.source_event_id, market_type=m.market_type,
             line=int(m.line) if m.line is not None else None, driver=m.team or "",
             implied_prob=imp, model_prob=mp, model_validated=False, edge=edge,
             volume=None, close_time=None,

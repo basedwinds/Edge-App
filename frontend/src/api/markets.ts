@@ -69,6 +69,7 @@ export interface RacingMarketRow {
   id: number;
   series: "f1" | "irl" | "nascar";
   source: "kalshi" | "polymarket";
+  race_event_id: number | null;
   event: string | null;
   market_type: "race_winner" | "top_n" | "pole";
   line: number | null;
@@ -93,6 +94,7 @@ export async function markRacingBetPlaced(row: RacingMarketRow, stakeDollars: nu
     market_type: row.market_type,
     source: row.source,
     sport: row.series,
+    race_event_id: row.race_event_id,
     team: row.driver,
     line: row.line,
     side: null,

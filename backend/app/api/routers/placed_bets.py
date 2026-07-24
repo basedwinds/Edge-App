@@ -89,6 +89,7 @@ class PlacedBetIn(BaseModel):
     valorant_match_id: int | None = None
     cs2_match_id: int | None = None
     lol_match_id: int | None = None
+    race_event_id: int | None = None  # F1/NASCAR/IndyCar -- links a racing bet to its RaceEvent for start-time + CLV
     stake_pool: str
     stake_dollars: float
     stake_units: float | None = None
