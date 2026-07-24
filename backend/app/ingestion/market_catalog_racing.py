@@ -21,7 +21,11 @@ def _parse_dt(s: str | None) -> datetime.datetime | None:
 
 
 def upsert_race_event(session: Session, series: str, event_ticker: str,
-                      name: str | None, close_time: str | None) -> int:
+                      name: str | None, close_time: str | None,
+                      real_start: "datetime.datetime | None" = None) -> int:
+    """`real_start` (the true race date, resolved from ESPN's calendar) is
+    preferred over Kalshi's `close_time`, which is an unreliable settlement
+    deadline that can sit weeks after the actual race."""
     ev = session.query(RaceEvent).filter_by(event_ticker=event_ticker).one_or_none()
     if ev is None:
         ev = RaceEvent(series=series, event_ticker=event_ticker)
@@ -29,7 +33,7 @@ def upsert_race_event(session: Session, series: str, event_ticker: str,
     ev.series = series
     if name:
         ev.name = name
-    dt = _parse_dt(close_time)
+    dt = real_start or _parse_dt(close_time)
     if dt:
         ev.start_time = dt
     session.flush()

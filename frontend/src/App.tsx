@@ -18,6 +18,7 @@ import { NbaCalibration } from "./pages/NbaCalibration";
 import { WnbaRecommended } from "./pages/WnbaRecommended";
 import { Divergences } from "./pages/Divergences";
 import { ClvBuckets } from "./pages/ClvBuckets";
+import { Health } from "./pages/Health";
 import { Combined } from "./pages/Combined";
 import { Tracker } from "./pages/Tracker";
 import { Mlb } from "./pages/Mlb";
@@ -77,6 +78,7 @@ function App() {
         <Route path="/tracker" element={<Tracker />} />
         <Route path="/divergences" element={<Divergences />} />
         <Route path="/clv-buckets" element={<ClvBuckets />} />
+        <Route path="/health" element={<Health />} />
         <Route path="/mlb" element={<Mlb />} />
         <Route path="/mlb/futures" element={<MlbFutures />} />
         <Route path="/mlb/recommended" element={<MlbRecommended />} />

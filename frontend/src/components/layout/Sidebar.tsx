@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { LayoutDashboard, Settings, History, Trophy, Target, ClipboardList, Gauge, Layers, Bell, Flag, Wallet } from "lucide-react";
+import { LayoutDashboard, Settings, History, Trophy, Target, ClipboardList, Gauge, Layers, Bell, Flag, Wallet, Activity } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { fetchNewCatalogEntries } from "../../api/markets";
@@ -99,6 +99,7 @@ function navItems(sport: string) {
     // { to: "/divergences", label: "Divergences", icon: Scale, end: false },
     { to: "/clv-buckets", label: "CLV Tracker", icon: Gauge, end: false },
     { to: "/backtests", label: "Backtests", icon: History, end: false },
+    { to: "/health", label: "Health Check", icon: Activity, end: false },
     { to: "/settings", label: "Settings", icon: Settings, end: false },
   ];
   // Motorsport leagues (F1/NASCAR/IndyCar) are one tracking-only markets page
@@ -167,7 +168,7 @@ export function Sidebar() {
   const isLolPath = pathname.startsWith("/lol");
   const isRacingPath = pathname.startsWith("/racing");
   const racingSeries = isRacingPath ? (pathname.split("/")[2] || "f1") : null;  // /racing/f1 -> "f1"
-  const isSharedPath = pathname === "/backtests" || pathname === "/settings" || pathname === "/divergences" || pathname === "/clv-buckets" || pathname === "/all" || pathname === "/tracker" || pathname === "/new-markets";
+  const isSharedPath = pathname === "/backtests" || pathname === "/settings" || pathname === "/divergences" || pathname === "/clv-buckets" || pathname === "/all" || pathname === "/tracker" || pathname === "/new-markets" || pathname === "/health";
 
   // Backtests/Settings are sport-agnostic (shared across every sport), so
   // pathname alone can't tell which sport scope to show there. Without this,

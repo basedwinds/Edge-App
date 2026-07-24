@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.response_cache import ResponseCacheMiddleware
 from sqlalchemy.orm import Session
 
-from app.api.routers import backtests, catalog, cs2_markets, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
+from app.api.routers import backtests, catalog, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
 from app.config import settings
 from app.db.database import get_session, init_db
 from app.db.models import Setting
@@ -131,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog.router)
     app.include_router(placed_bets.router)
     app.include_router(backtests.router)
+    app.include_router(health_router.router)
 
     return app
 

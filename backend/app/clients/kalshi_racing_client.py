@@ -22,10 +22,12 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
 # ticker -> (series, market_type, top_n line)
 SERIES_MAP = {
+    "KXF1RACE": ("f1", "race_winner", None),      # F1 race winner (headline market)
     "KXF1TOP5": ("f1", "top_n", 5),
     "KXF1RACEPODIUM": ("f1", "top_n", 3),
     "KXF1POLE": ("f1", "pole", None),
     "KXINDYCARRACE": ("irl", "race_winner", None),
+    "KXNASCARRACE": ("nascar", "race_winner", None),  # NASCAR race winner (headline market)
     "KXNASCARTOP3": ("nascar", "top_n", 3),
     "KXNASCARTOP5": ("nascar", "top_n", 5),
     "KXNASCARTOP10": ("nascar", "top_n", 10),
