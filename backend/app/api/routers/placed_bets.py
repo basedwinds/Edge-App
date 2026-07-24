@@ -266,6 +266,7 @@ class OpenBetOut(BaseModel):
     edge_at_placement: float | None
     placed_at: str
     start_time: str | None      # UTC ISO, None if unknown / no single start
+    start_date: str | None = None  # YYYY-MM-DD fallback (MMA fights carry an event date even when the exact time is unknown)
     clv_status: str
 
 
@@ -619,15 +620,30 @@ def get_open_bets(session: Session = Depends(get_session)):
         .filter(PlacedBet.status == "pending", PlacedBet.paper == False)  # noqa: E712
         .all()
     )
+    from app.db.models import MmaFight
+
     out: list[tuple[datetime.datetime | None, OpenBetOut]] = []
     for r in rows:
         start_dt: datetime.datetime | None = None
+        start_date: str | None = None
         try:
             game = _get_game(session, r)
             if game is not None:
                 start_dt = _game_kickoff_dt(game)
         except Exception:
             start_dt = None
+        # MMA is excluded from _get_game (whole-card CLV ambiguity), but a fight
+        # now carries its own estimated_start_time and always an event_date --
+        # surface those so MMA bets aren't dateless in the tracker.
+        if r.sport == "mma" and r.mma_fight_id:
+            fight = session.get(MmaFight, r.mma_fight_id)
+            if fight is not None:
+                start_date = fight.event_date
+                if start_dt is None and fight.estimated_start_time:
+                    try:
+                        start_dt = datetime.datetime.fromisoformat(fight.estimated_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except (ValueError, AttributeError):
+                        start_dt = None
         clv = compute_bet_clv(session, r)
         # These datetimes are naive UTC (the CLV module works in UTC); emit an
         # explicit 'Z' so the browser parses them as UTC, not local time -- else
@@ -642,6 +658,7 @@ def get_open_bets(session: Session = Depends(get_session)):
             edge_at_placement=r.edge_at_placement,
             placed_at=r.placed_at.isoformat() + "Z",
             start_time=(start_dt.isoformat() + "Z") if start_dt else None,
+            start_date=start_date,
             clv_status=clv["status"],
         )))
     # soonest first; unknown-start (None) last, then by placed_at desc within that

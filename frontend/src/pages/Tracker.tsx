@@ -113,19 +113,34 @@ function EquityCurve({ points, mode }: { points: PortfolioPointPayload[]; mode: 
   );
 }
 
-// "Starts in 3h", "Starts in 12m", "Live / started", or a date for far-out bets.
-function startLabel(iso: string | null): { text: string; soon: boolean } {
-  if (!iso) return { text: "—", soon: false };
+// "in 3h", "in 12m", "in play", or "delayed?" — the last when a bet's scheduled
+// start is well in the past but it's still pending (the game hasn't produced a
+// result, so it was probably delayed/postponed, or just needs settling).
+function startLabel(iso: string | null): { text: string; soon: boolean; late: boolean } {
+  if (!iso) return { text: "—", soon: false, late: false };
   const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return { text: "—", soon: false };
+  if (Number.isNaN(ms)) return { text: "—", soon: false, late: false };
   const diff = ms - Date.now();
-  if (diff <= 0) return { text: "started", soon: false };
-  const mins = Math.round(diff / 60000);
-  if (mins < 60) return { text: `in ${mins}m`, soon: true };
-  const hrs = mins / 60;
-  if (hrs < 24) return { text: `in ${Math.round(hrs)}h`, soon: hrs < 6 };
-  const days = Math.round(hrs / 24);
-  return { text: `in ${days}d`, soon: false };
+  if (diff > 0) {
+    const mins = Math.round(diff / 60000);
+    if (mins < 60) return { text: `in ${mins}m`, soon: true, late: false };
+    const hrs = mins / 60;
+    if (hrs < 24) return { text: `in ${Math.round(hrs)}h`, soon: hrs < 6, late: false };
+    return { text: `in ${Math.round(hrs / 24)}d`, soon: false, late: false };
+  }
+  const hoursPast = -diff / 3600000;
+  if (hoursPast > 4) return { text: "delayed?", soon: false, late: true }; // long past scheduled start, still unsettled
+  return { text: "in play", soon: false, late: false };
+}
+
+// The bet's local calendar date, from its precise start or its date-only
+// fallback (MMA). Used to bucket Open positions into Today / Next 2 days.
+function betLocalDate(b: OpenBetPayload): string | null {
+  if (b.start_time) {
+    const ms = Date.parse(b.start_time);
+    if (!Number.isNaN(ms)) return new Date(ms).toLocaleDateString("en-CA");
+  }
+  return b.start_date ?? null;
 }
 
 // The actual local start time next to the countdown, e.g. "Jul 26, 2:00 PM".
@@ -136,11 +151,11 @@ function startAbsolute(iso: string | null): string {
   return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function OpenPositions({ bets, onExplain }: { bets: OpenBetPayload[]; onExplain: (t: ReasoningTarget) => void }) {
+function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[]; onExplain: (t: ReasoningTarget) => void; emptyText?: string }) {
   if (bets.length === 0) {
     return (
       <div className="text-sm text-[var(--color-text-muted)] border border-[var(--color-border)] rounded-lg bg-[var(--color-surface)] px-4 py-6 text-center">
-        No open positions. Bets you mark placed show up here until they settle.
+        {emptyText ?? "No open positions. Bets you mark placed show up here until they settle."}
       </div>
     );
   }
@@ -162,13 +177,27 @@ function OpenPositions({ bets, onExplain }: { bets: OpenBetPayload[]; onExplain:
         <tbody className="divide-y divide-[var(--color-border)]">
           {bets.map((b) => {
             const s = startLabel(b.start_time);
+            // MMA (and any bet) with only a date, no precise time.
+            const dateOnly = !b.start_time && b.start_date
+              ? new Date(b.start_date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })
+              : null;
+            const startColor = s.late ? "text-[var(--color-warning)] font-medium" : s.soon ? "text-[var(--color-accent)] font-medium" : "text-[var(--color-text-dim)]";
             return (
               <tr key={b.id} className="hover:bg-[var(--color-surface)]">
-                <td className={`px-3 py-2 whitespace-nowrap ${s.soon ? "text-[var(--color-accent)] font-medium" : "text-[var(--color-text-dim)]"}`}>
-                  <div>{s.text}</div>
-                  {startAbsolute(b.start_time) && <div className="text-[11px] font-normal text-[var(--color-text-muted)]">{startAbsolute(b.start_time)}</div>}
+                <td className={`px-3 py-2 whitespace-nowrap ${startColor}`}>
+                  {b.start_time ? (
+                    <>
+                      <div>{s.text}</div>
+                      {startAbsolute(b.start_time) && <div className="text-[11px] font-normal text-[var(--color-text-muted)]">{startAbsolute(b.start_time)}</div>}
+                    </>
+                  ) : dateOnly ? (
+                    <>
+                      <div className="text-[var(--color-text-dim)]">{dateOnly}</div>
+                      <div className="text-[11px] font-normal text-[var(--color-text-muted)]">time TBD</div>
+                    </>
+                  ) : "—"}
                 </td>
-                <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)]">{gameResolution(b.start_time).label}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)]">{b.start_time ? gameResolution(b.start_time).label : (dateOnly ?? "—")}</td>
                 <td className="px-3 py-2 text-[var(--color-text-dim)]">{SPORT_LABEL[b.sport] ?? b.sport}</td>
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">{b.label}</div>
@@ -392,6 +421,8 @@ export function Tracker() {
   const [curveMode, setCurveMode] = useState<CurveMode>("dollars");
   const [futuresCollapsed, setFuturesCollapsed] = useState(false);
   const [completedCollapsed, setCompletedCollapsed] = useState(false);
+  const [openCollapsed, setOpenCollapsed] = useState(false);
+  const [openWindow, setOpenWindow] = useState<"today" | "2d" | "all">("all");
   const [reasoning, setReasoning] = useState<ReasoningTarget | null>(null);
 
   const decided = (data?.wins ?? 0) + (data?.losses ?? 0);
@@ -406,6 +437,18 @@ export function Tracker() {
   const settledBets = allSettled.filter((b) => b.stake_pool !== "futures");
   const futuresOpen = allOpen.filter((b) => b.stake_pool === "futures");
   const futuresSettled = allSettled.filter((b) => b.stake_pool === "futures");
+  // Open-positions time window (Today / Next 2 days / All). "today" keeps
+  // overdue-but-still-pending bets too (date <= today) so a delayed game stays
+  // visible; dateless bets only appear under "All".
+  const openFiltered = useMemo(() => {
+    if (openWindow === "all") return openBets;
+    const today = new Date().toLocaleDateString("en-CA");
+    const limit = openWindow === "today" ? today : new Date(Date.now() + 86400000).toLocaleDateString("en-CA");
+    return openBets.filter((b) => {
+      const d = betLocalDate(b);
+      return d != null && d <= limit;
+    });
+  }, [openBets, openWindow]);
 
   return (
     <PageShell title="Bet Tracker">
@@ -453,14 +496,47 @@ export function Tracker() {
           )}
 
           {/* Open positions -- the "what's coming up that I've bet on" watchlist */}
-          <div className="text-sm font-medium mb-2">Open positions {openBets.length > 0 && <span className="text-[var(--color-text-muted)] font-normal">— soonest first</span>}</div>
-          <OpenPositions bets={openBets} onExplain={setReasoning} />
-          {futuresOpen.length > 0 && (
-            <div className="text-xs text-[var(--color-text-muted)] mt-2">
-              {openBets.length === 0 ? "No game bets open, but you have " : "Plus "}
-              <span className="text-[var(--color-text-dim)]">{futuresOpen.length} futures position{futuresOpen.length === 1 ? "" : "s"}</span>
-              {" "}(${futuresOpen.reduce((s, b) => s + b.stake_dollars, 0).toLocaleString()} at risk) in the <span className="text-[var(--color-text-dim)]">Futures</span> section below.
-            </div>
+          <CollapsibleHeader
+            title="Open positions"
+            sub={openBets.length > 0
+              ? `${openBets.length} open · $${openBets.reduce((s, b) => s + b.stake_dollars, 0).toLocaleString()} at risk`
+              : "nothing open right now"}
+            collapsed={openCollapsed}
+            onToggle={() => setOpenCollapsed((v) => !v)}
+          />
+          {!openCollapsed && (
+            <>
+              {openBets.length > 0 && (
+                <div className="flex items-center gap-1.5 mb-2">
+                  {([["today", "Today"], ["2d", "Next 2 days"], ["all", "All open"]] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      onClick={() => setOpenWindow(k)}
+                      className={openWindow === k
+                        ? "text-xs font-medium px-2.5 py-1 rounded-md bg-[var(--color-accent)] text-[#1c1408]"
+                        : "text-xs font-medium px-2.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <span className="ml-1 text-[11px] text-[var(--color-text-muted)]">soonest first · "delayed?" = past its start but unsettled</span>
+                </div>
+              )}
+              <OpenPositions
+                bets={openFiltered}
+                onExplain={setReasoning}
+                emptyText={openWindow === "all"
+                  ? "No open game positions. Bets you mark placed show up here until they settle."
+                  : `No open positions ${openWindow === "today" ? "starting today" : "in the next 2 days"} — switch to All open to see everything.`}
+              />
+              {futuresOpen.length > 0 && (
+                <div className="text-xs text-[var(--color-text-muted)] mt-2">
+                  {openBets.length === 0 ? "No game bets open, but you have " : "Plus "}
+                  <span className="text-[var(--color-text-dim)]">{futuresOpen.length} futures position{futuresOpen.length === 1 ? "" : "s"}</span>
+                  {" "}(${futuresOpen.reduce((s, b) => s + b.stake_dollars, 0).toLocaleString()} at risk) in the <span className="text-[var(--color-text-dim)]">Futures</span> section below.
+                </div>
+              )}
+            </>
           )}
 
           <div className="flex items-center justify-between mb-2 mt-8">

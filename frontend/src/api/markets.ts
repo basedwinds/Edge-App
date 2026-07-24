@@ -2015,6 +2015,7 @@ export interface OpenBetPayload {
   edge_at_placement: number | null;
   placed_at: string;
   start_time: string | null;
+  start_date: string | null;
   clv_status: "closed" | "pending" | "unavailable" | "not_applicable";
 }
 
