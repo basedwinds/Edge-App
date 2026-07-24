@@ -7,6 +7,7 @@ import { BetReasoningModal } from "../components/markets/BetReasoningModal";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
 import { futuresResolution, gameResolution } from "../utils/resolution";
+import { futuresMarketName, futuresThreshold } from "../utils/futuresLabel";
 
 // Sports whose /reasoning endpoint exists (racing has no reasoning route yet).
 type ReasoningSport = "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
@@ -287,14 +288,15 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
   if (open.length === 0 && settled.length === 0) return null;
   type FRow = {
     id: number; market_id: number; sport: string; source: string; label: string; market_type: string;
-    side: string | null; entry: number | null; model_prob: number | null; stake: number; status: string; profit: number | null;
+    team: string | null; side: string | null; line: number | null;
+    entry: number | null; model_prob: number | null; stake: number; status: string; profit: number | null;
     resolves: string; resolveKey: number;
   };
   const mk = (b: OpenBetPayload | SettledBetPayload, status: string, profit: number | null): FRow => {
     const r = futuresResolution(b.sport, b.market_type);
     return {
       id: b.id, market_id: b.market_id, sport: b.sport, source: b.source, label: b.label, market_type: b.market_type,
-      side: b.side, entry: b.market_prob_at_placement, model_prob: b.model_prob_at_placement, stake: b.stake_dollars,
+      team: b.team, side: b.side, line: b.line, entry: b.market_prob_at_placement, model_prob: b.model_prob_at_placement, stake: b.stake_dollars,
       status, profit, resolves: r.label, resolveKey: r.sortKey,
     };
   };
@@ -331,9 +333,14 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
             return (
               <tr key={`${r.status}-${r.id}`} className="hover:bg-[var(--color-surface)] align-top">
                 <td className="px-3 py-2">
-                  <div className="text-[var(--color-text)]">{r.label}</div>
+                  <div className="text-[var(--color-text)]">
+                    {r.team ?? r.side ?? "—"}
+                    {futuresThreshold({ market_type: r.market_type, side: r.side, line: r.line }) && (
+                      <span className="text-[var(--color-text-dim)]"> · {futuresThreshold({ market_type: r.market_type, side: r.side, line: r.line })}</span>
+                    )}
+                  </div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
-                    {SPORT_LABEL[r.sport] ?? r.sport} · {r.market_type}{r.side ? ` · ${r.side}` : ""}
+                    {futuresMarketName({ market_type: r.market_type, side: r.side, line: r.line, group_label: r.label })} · {SPORT_LABEL[r.sport] ?? r.sport}
                   </div>
                 </td>
                 <td className="px-3 py-2">

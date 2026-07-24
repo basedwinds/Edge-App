@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
 import { fetchSettings, fetchOpenBets, fetchSettledBets, markFuturesBetPlaced } from "../../api/markets";
-import { MARKET_TYPE_LABELS } from "./FuturesTable";
+import { futuresMarketName, futuresThreshold } from "../../utils/futuresLabel";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import { BetReasoningModal } from "./BetReasoningModal";
@@ -100,9 +100,13 @@ export function CrossSportFuturesTable({ rows }: { rows: CrossSportFuturesRow[] 
           {rows.map((r) => (
             <tr key={`${r.sport}-${r.id}`} className="hover:bg-[var(--color-surface)] align-top">
               <td className="px-3 py-2 text-[var(--color-text-dim)] whitespace-nowrap">{SPORT_LABEL[r.sport] ?? r.sport}</td>
-              <td className="px-3 py-2 whitespace-nowrap">{MARKET_TYPE_LABELS[r.market_type] ?? r.market_type}</td>
+              <td className="px-3 py-2 max-w-[15rem]">
+                <div className="text-[var(--color-text)] leading-tight">{futuresMarketName(r)}</div>
+                <div className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">{r.market_type}</div>
+              </td>
               <td className="px-3 py-2">
-                <div className="text-[var(--color-text)]">{r.team ?? r.side ?? r.group_label ?? "—"}</div>
+                <div className="text-[var(--color-text)]">{r.team ?? r.side ?? "—"}</div>
+                {futuresThreshold(r) && <div className="text-[11px] text-[var(--color-text-dim)]">{futuresThreshold(r)}</div>}
                 {r.model_note && <div className="text-[10px] text-[var(--color-warning)]">approx / tracking</div>}
               </td>
               <td className="px-3 py-2 text-right tabular-nums font-mono">{pct(r.implied_prob)}</td>
