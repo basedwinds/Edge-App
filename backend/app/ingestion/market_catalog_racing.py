@@ -41,9 +41,10 @@ def upsert_race_event(session: Session, series: str, event_ticker: str,
 
 
 def upsert_racing_market(session: Session, row: dict, race_event_id: int) -> Market:
-    m = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    source = row.get("source", "kalshi")  # Polymarket racing rides the same path (see poller_racing)
+    m = session.query(Market).filter_by(source=source, source_ticker=row["ticker"]).one_or_none()
     if m is None:
-        m = Market(source="kalshi", source_ticker=row["ticker"],
+        m = Market(source=source, source_ticker=row["ticker"],
                    source_event_id=row["event_ticker"], sport=row["series"])
         session.add(m)
     m.market_type = row["market_type"]      # race_winner | top_n | pole

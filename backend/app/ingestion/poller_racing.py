@@ -6,6 +6,7 @@ exhaustion pattern as every other poller)."""
 import logging
 
 from app.clients.kalshi_racing_client import fetch_racing_markets
+from app.clients.polymarket_racing_client import fetch_polymarket_racing
 from app.clients.espn_racing_schedule import fetch_race_dates, resolve_race_date
 from app.db.database import SessionLocal
 from app.ingestion.market_catalog_racing import upsert_race_event, upsert_racing_market
@@ -27,7 +28,13 @@ def refresh_racing_markets():
         rows = fetch_racing_markets()
     except Exception:
         log.exception("kalshi racing fetch failed -- skipping this cycle")
-        return
+        rows = []
+    # Polymarket carries PRICED F1/NASCAR Winner + Pole markets while Kalshi's
+    # sit unpriced this far out -- the real source of racing prices/edges/CLV.
+    try:
+        rows = rows + fetch_polymarket_racing()
+    except Exception:
+        log.exception("polymarket racing fetch failed -- continuing with kalshi only")
     if not rows:
         return
     # Real race dates from ESPN's season calendar (Kalshi close_time is an

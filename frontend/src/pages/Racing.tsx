@@ -22,7 +22,12 @@ export function Racing() {
   const { series } = useParams<{ series?: string }>();
   const query = useQuery({ queryKey: ["racing", "markets"], queryFn: fetchRacingMarkets });
   const all = query.data ?? [];
-  const rows = series ? all.filter((r) => r.series === series) : all;
+  const rows = (series ? all.filter((r) => r.series === series) : all)
+    // Priced markets first (Polymarket has real prices; Kalshi's are unquoted
+    // this far out), then by the model's own probability -- so the actionable
+    // rows with a Market %/Edge sit at the top instead of unpriced duplicates.
+    .slice()
+    .sort((a, b) => (Number(b.implied_prob != null) - Number(a.implied_prob != null)) || ((b.model_prob ?? 0) - (a.model_prob ?? 0)));
 
   const events = [...new Set(rows.map((r) => `${r.series}|${r.event}`))];
   const priced = rows.filter((r) => r.model_prob !== null).length;
@@ -39,13 +44,14 @@ export function Racing() {
       <div className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-4 py-3 mb-6 text-sm">
         <div className="font-medium text-[var(--color-text)]">🏁 Racing — paper-tracked for CLV, not real-money staked</div>
         <div className="text-xs text-[var(--color-text-dim)] mt-1 leading-relaxed">
-          F1/IndyCar/NASCAR are priced by the grid + constructor + driver model (race finish) and a
-          qualifying-Elo model (pole), and are <span className="text-[var(--color-text)]">auto-paper-logged for
-          forward CLV exactly like every other sport</span> — the results show up in the <span className="text-[var(--color-text)]">CLV Tracker</span>.
+          F1/NASCAR/IndyCar are priced by the grid + constructor + driver model (race finish) and a
+          qualifying-Elo model (pole), compared against <span className="text-[var(--color-text)]">Polymarket</span>
+          {" "}race prices (Kalshi doesn't quote racing this far out), and are
+          {" "}<span className="text-[var(--color-text)]">auto-paper-logged for forward CLV exactly like every
+          other sport</span> — results show up in the <span className="text-[var(--color-text)]">CLV Tracker</span>.
           "Not staked" only means racing gets no real-money bet-size suggestion (it can't be historically
-          backtested, so CLV is the sole judge), NOT that it's excluded from paper trading. Nothing has logged
-          yet only because Kalshi isn't quoting racing prices this far out — that starts at the race weekend.
-          Pre-qualifying prices use driver + constructor (no grid yet) and sharpen closer to the race.{" "}
+          backtested, so CLV is the sole judge), NOT that it's excluded from paper trading. Pre-qualifying
+          prices use driver + constructor (no grid yet) and sharpen closer to the race.{" "}
           {priced} of {rows.length} markets priced across {events.length} events.
         </div>
       </div>
