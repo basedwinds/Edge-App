@@ -98,18 +98,15 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
   //  4. dedup the same proposition across Kalshi/Polymarket (keep the bigger edge),
   //  5. cap to the top 3 per (sport, market_type) so no single ladder floods,
   //  6. global cap so the list stays short.
-  // Exclude futures you've ALREADY placed (open or settled) so the shortlist
-  // surfaces NEW opportunities as they appear, instead of re-showing the same
-  // top-40 forever while they sit unsettled for months.
-  const [openBets, settledBets] = await Promise.all([guard(fetchOpenBets(), []), guard(fetchSettledBets(), [])]);
-  const placedMarketIds = new Set<number>([
-    ...openBets.filter((b) => b.stake_pool === "futures").map((b) => b.market_id),
-    ...settledBets.filter((b) => b.stake_pool === "futures").map((b) => b.market_id),
-  ]);
-
+  // NOTE: placed futures are NOT excluded here. The table itself marks them
+  // "Placed ✓" (matched by real-world proposition, so both a Kalshi and a
+  // Polymarket copy of the same future count) -- excluding by market_id used to
+  // hide the Kalshi copy while still showing the Polymarket one, so a future you
+  // HAD placed kept re-appearing as unplaced. Showing the full list with a
+  // placed badge is clearer and stops duplicate placements.
   const isPhantom = (mt: string) => mt.startsWith("season_") || mt.startsWith("leader_");
   const candidates = all
-    .filter((r) => r.edge !== null && r.edge >= 0.05 && r.volume && !isPhantom(r.market_type) && !placedMarketIds.has(r.id))
+    .filter((r) => r.edge !== null && r.edge >= 0.05 && r.volume && !isPhantom(r.market_type))
     .sort((a, b) => b.edge! - a.edge!);
 
   const bestByProp = new Map<string, CrossSportFuturesRow>();

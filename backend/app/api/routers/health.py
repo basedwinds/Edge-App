@@ -55,10 +55,14 @@ def health_check(session: Session = Depends(get_session)):
         .all()
     )
 
-    # 1) Stalled poller: freshest markets.updated_at per sport (cheap -- no
-    #    snapshot scan). Only meaningful for sports that HAVE active markets.
+    # 1) Stalled poller: freshest SNAPSHOT per sport. Must use snapshot ts, NOT
+    #    markets.updated_at -- the latter only bumps when a market ROW field
+    #    changes, so a perfectly healthy poller writing fresh snapshots on flat
+    #    odds (common for MMA/NBA futures) looked "25h stale" and false-alarmed.
+    #    The snapshot ts is the true "the poller ran and wrote a price" signal.
     latest = dict(
-        session.query(Market.sport, func.max(Market.updated_at))
+        session.query(Market.sport, func.max(MarketSnapshot.ts))
+        .join(MarketSnapshot, MarketSnapshot.market_id == Market.id)
         .filter(Market.status == "active")
         .group_by(Market.sport)
         .all()
@@ -70,20 +74,27 @@ def health_check(session: Session = Depends(get_session)):
         age_h = (now - ts).total_seconds() / 3600
         if age_h > 6:
             _issue(issues, "error" if age_h > 24 else "warning", "stale_poller", sport,
-                   f"{n} active markets but freshest update was {age_h:.0f}h ago — poller may be stalled.")
+                   f"{n} active markets but the newest price snapshot is {age_h:.0f}h old — poller may be stalled.")
 
     # 2) Unlinked game markets: active per-game markets with no game/match link.
+    #    KALSHI ONLY -- Polymarket markets are deliberately not game-linked (their
+    #    matching isn't built), so flagging them is pure noise; a Kalshi game
+    #    market with no link IS a real ticker→game mapping gap (the WNBA SPN/COO
+    #    class). Threshold >5 so a couple of just-ended games mid-settlement don't
+    #    trip it.
     unlinked_filter = [getattr(Market, f).is_(None) for f in _LINK_FIELDS]
     from sqlalchemy import and_
     unlinked = (
         session.query(Market.sport, func.count(Market.id))
-        .filter(Market.status == "active", Market.market_type.in_(_GAME_TYPES), and_(*unlinked_filter))
+        .filter(Market.status == "active", Market.source == "kalshi",
+                Market.market_type.in_(_GAME_TYPES), and_(*unlinked_filter))
         .group_by(Market.sport)
         .all()
     )
     for sport, n in unlinked:
-        _issue(issues, "warning", "unlinked_markets", sport,
-               f"{n} active game market(s) with no game/match link — can't be priced or settled (ticker→game mapping gap).")
+        if n > 5:
+            _issue(issues, "warning", "unlinked_markets", sport,
+                   f"{n} active Kalshi game market(s) with no game/match link — can't be priced or settled (ticker→game mapping gap, or stale past-game markets not yet closed).")
 
     # 3) No price ever, RACING ONLY (the one case we care about + cheap to check
     #    against a few hundred ids -- a full-table NOT IN over millions of

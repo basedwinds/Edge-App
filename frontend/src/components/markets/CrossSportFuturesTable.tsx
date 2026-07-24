@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
-import { fetchSettings, markFuturesBetPlaced } from "../../api/markets";
+import { fetchSettings, fetchOpenBets, fetchSettledBets, markFuturesBetPlaced } from "../../api/markets";
 import { MARKET_TYPE_LABELS } from "./FuturesTable";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
@@ -10,6 +10,13 @@ import { BetReasoningModal } from "./BetReasoningModal";
 
 type SportKey = "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
 export type CrossSportFuturesRow = FuturesMarketRow & { sport: SportKey };
+
+// Identifies a future by the real-world proposition, NOT the market id -- so a
+// future placed on Kalshi also marks its Polymarket twin (different id, same
+// bet) as placed, and vice-versa. Same shape as loadCombinedFutures' dedup key.
+function propKey(p: { sport: string; market_type: string; team: string | null; side: string | null; line: number | null }): string {
+  return `${p.sport}|${p.market_type}|${p.team ?? ""}|${p.side ?? ""}|${p.line ?? ""}`;
+}
 
 const SPORT_LABEL: Record<string, string> = {
   nfl: "NFL", nba: "NBA", wnba: "WNBA", mlb: "MLB", mma: "MMA",
@@ -19,6 +26,8 @@ const SPORT_LABEL: Record<string, string> = {
 function pct(v: number | null) {
   return v === null ? "—" : `${(v * 100).toFixed(0)}%`;
 }
+
+const EMPTY_KEYS: Set<string> = new Set(); // stable ref while placed bets load
 
 // Cross-sport, place-able futures list for the All Bets "Futures" window: every
 // sport's edge-qualified futures in one screen, with Mark placed (falls back to
@@ -31,6 +40,21 @@ export function CrossSportFuturesTable({ rows }: { rows: CrossSportFuturesRow[] 
   const [placedIds, setPlacedIds] = useState<Set<number>>(new Set());
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
+  // Proposition keys of every futures bet already placed (open or settled), so a
+  // future you placed last night still reads "Placed ✓" here and can't be
+  // double-placed. Refetched after each placement.
+  const placedQuery = useQuery({
+    queryKey: ["placed-futures-keys"],
+    queryFn: async () => {
+      const [open, settled] = await Promise.all([fetchOpenBets(), fetchSettledBets()]);
+      return new Set<string>(
+        [...open, ...settled].filter((b) => b.stake_pool === "futures").map((b) => propKey(b))
+      );
+    },
+  });
+  const placedKeys = placedQuery.data ?? EMPTY_KEYS;
+  const isPlaced = (row: CrossSportFuturesRow) => placedIds.has(row.id) || placedKeys.has(propKey(row));
+
   async function place(row: CrossSportFuturesRow) {
     const stakeDollars = row.suggested_stake_dollars ?? (unitDollars > 0 ? unitDollars : 10);
     const stakeUnits = row.suggested_stake_units ?? (unitDollars > 0 ? 1 : null);
@@ -39,6 +63,7 @@ export function CrossSportFuturesTable({ rows }: { rows: CrossSportFuturesRow[] 
     queryClient.invalidateQueries({ queryKey: ["portfolio"] });
     queryClient.invalidateQueries({ queryKey: ["open-bets"] });
     queryClient.invalidateQueries({ queryKey: ["settled-bets"] });
+    queryClient.invalidateQueries({ queryKey: ["placed-futures-keys"] });
     queryClient.invalidateQueries({ queryKey: ["placed-bets", row.sport] });
   }
 
@@ -96,14 +121,14 @@ export function CrossSportFuturesTable({ rows }: { rows: CrossSportFuturesRow[] 
                   </button>
                   <button
                     onClick={() => place(r)}
-                    disabled={placedIds.has(r.id)}
+                    disabled={isPlaced(r)}
                     className={
-                      placedIds.has(r.id)
+                      isPlaced(r)
                         ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-good)]/40 text-[var(--color-good)] whitespace-nowrap"
                         : "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"
                     }
                   >
-                    {placedIds.has(r.id) ? "Placed ✓" : "Mark placed"}
+                    {isPlaced(r) ? "Placed ✓" : "Mark placed"}
                   </button>
                 </div>
               </td>
