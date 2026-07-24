@@ -42,6 +42,7 @@ class RacingMarketOut(BaseModel):
 
     id: int                # Market row id (for paper-logging / CLV tracking)
     series: str            # f1 | irl | nascar
+    source: str            # kalshi | polymarket
     event: str | None      # Kalshi event ticker (one race)
     market_type: str       # race_winner | top_n | pole
     line: int | None       # N for top_n (3/5/10), else None
@@ -53,6 +54,10 @@ class RacingMarketOut(BaseModel):
     volume: float | None
     close_time: str | None
     model_note: str | None = None
+    kelly_fraction: float | None = None
+    suggested_stake_dollars: float | None = None
+    suggested_stake_units: float | None = None
+    stake_pool: str | None = None
 
 
 class FuturesMarketOut(BaseModel):

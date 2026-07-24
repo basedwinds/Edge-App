@@ -16,11 +16,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
+from app.api.routers.settings import get_racing_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
 from app.api.schemas import RacingMarketOut
 from app.db.database import get_session
 from app.db.models import Market
 from app.models import racing_sim
 from app.models.baseline import racing_ratings
+from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
 
 router = APIRouter(prefix="/racing", tags=["racing"])
 
@@ -78,7 +80,7 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         edge = round(mp - imp, 4) if (mp is not None and imp is not None) else None
         snap = None  # volume pulled from implied path below
         out.append(RacingMarketOut(
-            id=m.id, series=series, event=m.source_event_id, market_type=m.market_type,
+            id=m.id, series=series, source=m.source, event=m.source_event_id, market_type=m.market_type,
             line=int(m.line) if m.line is not None else None, driver=m.team or "",
             implied_prob=imp, model_prob=mp, model_validated=False, edge=edge,
             volume=None, close_time=None,
@@ -93,6 +95,15 @@ def list_racing_markets(session: Session = Depends(get_session)):
     snaps = _batch_latest_snapshots(session, [m.id for m in markets])
     implied_by_id = {m.id: _implied_prob(snaps.get(m.id)) for m in markets}
     vol_by_id = {m.id: (snaps.get(m.id).volume if snaps.get(m.id) else None) for m in markets}
+    src_by_id = {m.id: m.source for m in markets}
+
+    # Racing is now STAKED (paper) like every other sport -- size each edged
+    # market off the racing pool via the shared staking layer. model_validated
+    # is still False, so this is a paper stake for CLV, same as everything here.
+    pool = get_racing_pool_dollars(session)
+    unit_dollars = get_unit_dollars(session)
+    fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)
+    staking_mode, flat_marginal, flat_full = get_flat_params(session)
 
     by_event: dict[tuple[str, str], list[Market]] = defaultdict(list)
     for m in markets:
@@ -102,6 +113,14 @@ def list_racing_markets(session: Session = Depends(get_session)):
     for (series, _event), evmarkets in by_event.items():
         for row in _price_event(series, evmarkets, implied_by_id):
             row.volume = vol_by_id.get(row.id)
+            snap = snaps.get(row.id)
+            has_traded = has_real_trading(src_by_id.get(row.id), snap.volume if snap else None, snap.last_price if snap else None)
+            kelly = kelly_fraction(row.model_prob, row.implied_prob, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)
+            stake = size_stake_dollars(staking_mode, kelly, pool, row.model_prob, row.implied_prob, unit_dollars, flat_marginal, flat_full)
+            row.kelly_fraction = kelly
+            row.suggested_stake_dollars = stake
+            row.suggested_stake_units = round(stake / unit_dollars, 2) if (stake is not None and unit_dollars) else None
+            row.stake_pool = "weekly" if stake is not None else None
             out.append(row)
     out.sort(key=lambda r: (r.series, r.event or "", r.market_type, -(r.model_prob or -1)))
     return out

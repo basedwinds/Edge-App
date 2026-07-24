@@ -38,6 +38,11 @@ DEFAULT_NBA_FUTURES_SUBPOOL_PCT = 0.30
 # NBA, so it warrants NBA-style, not zero, treatment).
 WNBA_ALLOCATION_PCT_KEY = "wnba_allocation_pct"
 DEFAULT_WNBA_ALLOCATION_PCT = 0.15
+# Racing (F1/NASCAR/IndyCar share one pool). Small + no futures split -- it's
+# now staked (paper) like the others, but its models are unbacktested so it
+# defaults lighter. 2026-07-24.
+RACING_ALLOCATION_PCT_KEY = "racing_allocation_pct"
+DEFAULT_RACING_ALLOCATION_PCT = 0.04
 WNBA_FUTURES_SUBPOOL_PCT_KEY = "wnba_futures_subpool_pct"
 DEFAULT_WNBA_FUTURES_SUBPOOL_PCT = 0.0
 
@@ -513,6 +518,15 @@ def get_wnba_pool_dollars(session: Session) -> tuple[float, float]:
     wnba_futures_subpool_pct = _get_float(session, WNBA_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_WNBA_FUTURES_SUBPOOL_PCT)
     wnba_pool = bankroll * wnba_allocation_pct * _allocation_scale(session)
     return wnba_pool * (1.0 - wnba_futures_subpool_pct), wnba_pool * wnba_futures_subpool_pct
+
+
+def get_racing_pool_dollars(session: Session) -> float:
+    """Single per-race pool for F1/NASCAR/IndyCar (no futures split -- racing
+    futures aren't modeled). Racing is now staked (paper) like every other
+    sport rather than tracking-only."""
+    bankroll = _get_float(session, BANKROLL_KEY, DEFAULT_BANKROLL)
+    racing_allocation_pct = _get_float(session, RACING_ALLOCATION_PCT_KEY, DEFAULT_RACING_ALLOCATION_PCT)
+    return bankroll * racing_allocation_pct * _allocation_scale(session)
 
 
 def get_mlb_pool_dollars(session: Session) -> tuple[float, float]:

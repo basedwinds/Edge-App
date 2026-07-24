@@ -1,9 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { PageShell } from "../components/layout/PageShell";
 import { TableSkeleton } from "../components/ui/Skeleton";
 import { EdgeBadge } from "../components/markets/EdgeBadge";
-import { fetchRacingMarkets, type RacingMarketRow } from "../api/markets";
+import { fetchRacingMarkets, fetchSettings, markRacingBetPlaced, type RacingMarketRow } from "../api/markets";
 
 const SERIES_LABEL: Record<string, string> = { f1: "Formula 1", irl: "IndyCar", nascar: "NASCAR" };
 
@@ -20,7 +21,20 @@ function pct(v: number | null) {
 
 export function Racing() {
   const { series } = useParams<{ series?: string }>();
+  const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["racing", "markets"], queryFn: fetchRacingMarkets });
+  const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
+  const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
+  const [placedIds, setPlacedIds] = useState<Set<number>>(new Set());
+
+  async function place(r: RacingMarketRow) {
+    const stakeDollars = r.suggested_stake_dollars ?? (unitDollars > 0 ? unitDollars : 10);
+    const stakeUnits = r.suggested_stake_units ?? (unitDollars > 0 ? 1 : null);
+    await markRacingBetPlaced(r, stakeDollars, stakeUnits);
+    setPlacedIds((s) => new Set(s).add(r.id));
+    queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+    queryClient.invalidateQueries({ queryKey: ["open-bets"] });
+  }
   const all = query.data ?? [];
   const rows = (series ? all.filter((r) => r.series === series) : all)
     // Priced markets first (Polymarket has real prices; Kalshi's are unquoted
@@ -42,16 +56,16 @@ export function Racing() {
       )}
 
       <div className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-4 py-3 mb-6 text-sm">
-        <div className="font-medium text-[var(--color-text)]">🏁 Racing — paper-tracked for CLV, not real-money staked</div>
+        <div className="font-medium text-[var(--color-text)]">🏁 Racing — priced, staked & paper-tracked like every other sport</div>
         <div className="text-xs text-[var(--color-text-dim)] mt-1 leading-relaxed">
           F1/NASCAR/IndyCar are priced by the grid + constructor + driver model (race finish) and a
           qualifying-Elo model (pole), compared against <span className="text-[var(--color-text)]">Polymarket</span>
-          {" "}race prices (Kalshi doesn't quote racing this far out), and are
-          {" "}<span className="text-[var(--color-text)]">auto-paper-logged for forward CLV exactly like every
-          other sport</span> — results show up in the <span className="text-[var(--color-text)]">CLV Tracker</span>.
-          "Not staked" only means racing gets no real-money bet-size suggestion (it can't be historically
-          backtested, so CLV is the sole judge), NOT that it's excluded from paper trading. Pre-qualifying
-          prices use driver + constructor (no grid yet) and sharpen closer to the race.{" "}
+          {" "}race prices (Kalshi doesn't quote racing this far out). Edged markets now get a quarter-Kelly
+          <span className="text-[var(--color-text)]"> Stake</span> suggestion off the racing pool and are
+          {" "}<span className="text-[var(--color-text)]">auto-paper-logged for forward CLV</span> — results show
+          up in the CLV Tracker. Still <span className="text-[var(--color-text)]">model_validated: false</span>
+          {" "}(unbacktested — CLV is the judge), so treat the stakes as paper. Pre-qualifying prices use driver
+          + constructor (no grid yet) and sharpen closer to the race.{" "}
           {priced} of {rows.length} markets priced across {events.length} events.
         </div>
       </div>
@@ -73,7 +87,9 @@ export function Racing() {
                 <th className="text-right px-3 py-2">Market %</th>
                 <th className="text-right px-3 py-2">Model %</th>
                 <th className="text-right px-3 py-2">Edge</th>
+                <th className="text-right px-3 py-2">Stake</th>
                 <th className="text-right px-3 py-2">Volume</th>
+                <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border)]">
@@ -90,7 +106,23 @@ export function Racing() {
                     )}
                   </td>
                   <td className="px-3 py-2 text-right"><EdgeBadge edge={r.edge} /></td>
+                  <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)] whitespace-nowrap">
+                    {r.suggested_stake_units != null ? `${r.suggested_stake_units.toFixed(1)}u` : r.suggested_stake_dollars != null ? `$${r.suggested_stake_dollars}` : "—"}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)]">{r.volume ? Math.round(r.volume).toLocaleString() : "—"}</td>
+                  <td className="px-3 py-2 text-right">
+                    {r.suggested_stake_dollars != null && (
+                      <button
+                        onClick={() => place(r)}
+                        disabled={placedIds.has(r.id)}
+                        className={placedIds.has(r.id)
+                          ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-good)]/40 text-[var(--color-good)] whitespace-nowrap"
+                          : "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"}
+                      >
+                        {placedIds.has(r.id) ? "Placed ✓" : "Mark placed"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -66,7 +66,9 @@ export async function fetchCs2Futures(): Promise<FuturesMarketRow[]> {
 }
 
 export interface RacingMarketRow {
+  id: number;
   series: "f1" | "irl" | "nascar";
+  source: "kalshi" | "polymarket";
   event: string | null;
   market_type: "race_winner" | "top_n" | "pole";
   line: number | null;
@@ -78,6 +80,30 @@ export interface RacingMarketRow {
   volume: number | null;
   close_time: string | null;
   model_note?: string | null;
+  kelly_fraction?: number | null;
+  suggested_stake_dollars?: number | null;
+  suggested_stake_units?: number | null;
+  stake_pool?: string | null;
+}
+
+export async function markRacingBetPlaced(row: RacingMarketRow, stakeDollars: number, stakeUnits: number | null): Promise<PlacedBetPayload> {
+  const mt = row.market_type === "top_n" ? `Top ${row.line}` : row.market_type === "pole" ? "Pole" : "Race Winner";
+  return apiPost<PlacedBetPayload>("/placed-bets", {
+    market_id: row.id,
+    market_type: row.market_type,
+    source: row.source,
+    sport: row.series,
+    team: row.driver,
+    line: row.line,
+    side: null,
+    label: `${row.driver} — ${mt}`,
+    stake_pool: "weekly",
+    stake_dollars: stakeDollars,
+    stake_units: stakeUnits,
+    market_prob_at_placement: row.implied_prob,
+    model_prob_at_placement: row.model_prob,
+    edge_at_placement: row.edge,
+  });
 }
 
 export async function fetchRacingMarkets(): Promise<RacingMarketRow[]> {
