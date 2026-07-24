@@ -27,6 +27,8 @@ SERIES_MAP = {
     "KXF1RACEPODIUM": ("f1", "top_n", 3),
     "KXF1POLE": ("f1", "pole", None),
     "KXINDYCARRACE": ("irl", "race_winner", None),
+    "KXINDYCARTOP3": ("irl", "top_n", 3),   # IndyCar podium
+    "KXINDYCARTOP10": ("irl", "top_n", 10),
     "KXNASCARRACE": ("nascar", "race_winner", None),  # NASCAR race winner (headline market)
     "KXNASCARTOP3": ("nascar", "top_n", 3),
     "KXNASCARTOP5": ("nascar", "top_n", 5),

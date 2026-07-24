@@ -15,6 +15,7 @@ import { NbaFutures } from "./pages/NbaFutures";
 import { NbaRecommended } from "./pages/NbaRecommended";
 import { NbaPlaced } from "./pages/NbaPlaced";
 import { NbaCalibration } from "./pages/NbaCalibration";
+import { WnbaDashboard } from "./pages/WnbaDashboard";
 import { WnbaRecommended } from "./pages/WnbaRecommended";
 import { WnbaPlaced } from "./pages/WnbaPlaced";
 import { WnbaCalibration } from "./pages/WnbaCalibration";
@@ -75,6 +76,7 @@ function App() {
         <Route path="/nba/recommended" element={<NbaRecommended />} />
         <Route path="/nba/placed" element={<NbaPlaced />} />
         <Route path="/nba/calibration" element={<NbaCalibration />} />
+        <Route path="/wnba" element={<WnbaDashboard />} />
         <Route path="/wnba/recommended" element={<WnbaRecommended />} />
         <Route path="/wnba/placed" element={<WnbaPlaced />} />
         <Route path="/wnba/calibration" element={<WnbaCalibration />} />

@@ -127,6 +127,14 @@ function startLabel(iso: string | null): { text: string; soon: boolean } {
   return { text: `in ${days}d`, soon: false };
 }
 
+// The actual local start time next to the countdown, e.g. "Jul 26, 2:00 PM".
+function startAbsolute(iso: string | null): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return "";
+  return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 function OpenPositions({ bets, onExplain }: { bets: OpenBetPayload[]; onExplain: (t: ReasoningTarget) => void }) {
   if (bets.length === 0) {
     return (
@@ -155,7 +163,10 @@ function OpenPositions({ bets, onExplain }: { bets: OpenBetPayload[]; onExplain:
             const s = startLabel(b.start_time);
             return (
               <tr key={b.id} className="hover:bg-[var(--color-surface)]">
-                <td className={`px-3 py-2 whitespace-nowrap ${s.soon ? "text-[var(--color-accent)] font-medium" : "text-[var(--color-text-dim)]"}`}>{s.text}</td>
+                <td className={`px-3 py-2 whitespace-nowrap ${s.soon ? "text-[var(--color-accent)] font-medium" : "text-[var(--color-text-dim)]"}`}>
+                  <div>{s.text}</div>
+                  {startAbsolute(b.start_time) && <div className="text-[11px] font-normal text-[var(--color-text-muted)]">{startAbsolute(b.start_time)}</div>}
+                </td>
                 <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)]">{gameResolution(b.start_time).label}</td>
                 <td className="px-3 py-2 text-[var(--color-text-dim)]">{SPORT_LABEL[b.sport] ?? b.sport}</td>
                 <td className="px-3 py-2">

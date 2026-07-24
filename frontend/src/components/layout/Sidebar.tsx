@@ -19,7 +19,7 @@ const SPORT_GROUPS: { label: string; sports: { key: string; label: string; to: s
     sports: [
       { key: "nfl", label: "NFL", to: "/" },
       { key: "nba", label: "NBA", to: "/nba" },
-      { key: "wnba", label: "WNBA", to: "/wnba/recommended" },
+      { key: "wnba", label: "WNBA", to: "/wnba" },
       { key: "mlb", label: "MLB", to: "/mlb" },
       { key: "soccer", label: "Soccer", to: "/soccer" },
     ],
@@ -108,13 +108,13 @@ function navItems(sport: string) {
   if (sport === "f1" || sport === "nascar" || sport === "irl") {
     return { sportItems: [{ to: `/racing/${sport}`, label: "Markets", icon: Flag, end: false }], sharedItems: shared };
   }
-  // WNBA is moneyline-only with no Kalshi futures market, so it skips the
-  // Dashboard/Futures pages but DOES get Recommended/Placed/Calibration like
-  // every other sport (2026-07-24) -- so its bets track, settle and calibrate
-  // uniformly rather than living on a lone Recommended tab.
+  // WNBA gets the full per-sport page set EXCEPT Futures (moneyline-only; Kalshi
+  // lists no WNBA spread/total/futures markets) -- Dashboard/Recommended/Placed/
+  // Calibration, uniform with every other sport (2026-07-24).
   if (sport === "wnba") {
     return {
       sportItems: [
+        { to: "/wnba", label: "Dashboard", icon: LayoutDashboard, end: true },
         { to: "/wnba/recommended", label: "Recommended", icon: Target, end: false },
         { to: "/wnba/placed", label: "Placed Bets", icon: ClipboardList, end: false },
         { to: "/wnba/calibration", label: "Calibration", icon: Gauge, end: false },
