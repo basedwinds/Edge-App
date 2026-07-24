@@ -106,7 +106,14 @@ function navItems(sport: string) {
   // each (the chip selects the series), so they get a single "Markets" link
   // rather than the full per-sport page set -- same reduced-nav idea as WNBA.
   if (sport === "f1" || sport === "nascar" || sport === "irl") {
-    return { sportItems: [{ to: `/racing/${sport}`, label: "Markets", icon: Flag, end: false }], sharedItems: shared };
+    return {
+      sportItems: [
+        { to: `/racing/${sport}`, label: "Markets", icon: Flag, end: true },
+        { to: `/racing/${sport}/placed`, label: "Placed Bets", icon: ClipboardList, end: false },
+        { to: `/racing/${sport}/calibration`, label: "Calibration", icon: Gauge, end: false },
+      ],
+      sharedItems: shared,
+    };
   }
   // WNBA gets the full per-sport page set EXCEPT Futures (moneyline-only; Kalshi
   // lists no WNBA spread/total/futures markets) -- Dashboard/Recommended/Placed/

@@ -12,12 +12,12 @@ historically backtested -- thin retention).
 """
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
 from app.api.routers.settings import get_racing_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
-from app.api.schemas import RacingMarketOut
+from app.api.schemas import RacingMarketOut, ReasoningOut, ReasoningFactorOut
 from app.db.database import get_session
 from app.db.models import Market
 from app.models import racing_sim
@@ -124,3 +124,87 @@ def list_racing_markets(session: Session = Depends(get_session)):
             out.append(row)
     out.sort(key=lambda r: (r.series, r.event or "", r.market_type, -(r.model_prob or -1)))
     return out
+
+
+_MT_LABEL = {"race_winner": "Race Winner", "pole": "Pole Position", "top_n": "Top-N Finish"}
+
+
+@router.get("/markets/{market_id}/reasoning", response_model=ReasoningOut)
+def get_racing_market_reasoning(
+    market_id: int,
+    model_prob: float | None = None,
+    market_prob: float | None = None,
+    session: Session = Depends(get_session),
+):
+    m = session.get(Market, market_id)
+    if m is None or m.sport not in RACING_SPORTS:
+        raise HTTPException(404, "market not found")
+    series = m.sport
+    driver = m.team or "this driver"
+    mt_label = "Top " + str(int(m.line)) if (m.market_type == "top_n" and m.line is not None) else _MT_LABEL.get(m.market_type, m.market_type)
+    label = f"{driver} — {mt_label}"
+    edge = round(model_prob - market_prob, 4) if (model_prob is not None and market_prob is not None) else None
+
+    factors: list[ReasoningFactorOut] = []
+    did = racing_ratings.resolve_driver_id(series, driver)
+    st = racing_ratings._series_state(series)
+    cc = st.get("current_constructor", {})
+    if did:
+        if m.market_type == "pole":
+            q = racing_ratings.quali_strength(series, did)
+            if q is not None:
+                factors.append(ReasoningFactorOut(label="Qualifying Elo", detail=f"{q:.0f}"))
+        else:
+            s = racing_ratings.strength(series, did, cc.get(did), None)
+            if s is not None:
+                factors.append(ReasoningFactorOut(label="Driver+constructor strength", detail=f"{s:.0f}"))
+            if cc.get(did):
+                factors.append(ReasoningFactorOut(label="Constructor", detail=str(cc.get(did))))
+    if m.source:
+        factors.append(ReasoningFactorOut(label="Market", detail=m.source.title()))
+
+    if m.market_type == "pole":
+        methodology = (
+            "Qualifying-only Elo: each driver's one-lap pace rating is turned into a pole probability via a "
+            "softmax over the whole qualifying field. Race-day car setup/grid isn't used (this is pure quali)."
+        )
+        insight = (
+            f"{driver}'s pole price comes from a qualifying-Elo model: their one-lap rating is compared against "
+            f"the rest of the field and normalised into a pole probability. Model says {(_pct(model_prob))}, the "
+            f"market {(_pct(market_prob))}{_edge_phrase(edge)}."
+        )
+    else:
+        methodology = (
+            "Grid+constructor+driver Monte Carlo (racing_sim): every entered driver's driver+constructor Elo "
+            "seeds a finishing-position simulation run ~20,000 times; the share of runs where the driver "
+            f"{'wins' if m.market_type == 'race_winner' else 'finishes in the top N'} becomes the price. Grid "
+            "position isn't wired yet (ESPN publishes it only at the race weekend), so pre-qualifying prices "
+            "are driver+constructor and sharpen closer to the race."
+        )
+        insight = (
+            f"{driver}'s {mt_label.lower()} price is read off a race simulation seeded by their driver + "
+            f"constructor strength, run tens of thousands of times. Model says {(_pct(model_prob))} vs the "
+            f"market's {(_pct(market_prob))}{_edge_phrase(edge)}."
+        )
+
+    caveats = [
+        "model_validated: false -- racing can't be historically backtested (thin retention), so forward CLV is the only judge.",
+        "Pre-qualifying: no grid yet, so race-finish prices use driver+constructor and sharpen at the race weekend.",
+    ]
+    return ReasoningOut(
+        market_id=m.id, market_type=m.market_type, label=label,
+        model_prob=model_prob, market_prob=market_prob, edge=edge,
+        insight=insight, methodology=methodology, factors=factors, caveats=caveats,
+    )
+
+
+def _pct(v):
+    return "—" if v is None else f"{v * 100:.0f}%"
+
+
+def _edge_phrase(edge):
+    if edge is None:
+        return "."
+    if edge > 0:
+        return f", a {edge * 100:.1f}pp edge toward this pick."
+    return f", so the market already rates this pick at least as high ({edge * 100:.1f}pp)."

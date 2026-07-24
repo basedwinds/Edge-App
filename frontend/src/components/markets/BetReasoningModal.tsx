@@ -18,7 +18,7 @@ export function BetReasoningModal({
   marketId: number;
   modelProb: number | null;
   marketProb: number | null;
-  sport?: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
+  sport?: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" | "f1" | "nascar" | "irl";
   onClose: () => void;
 }) {
   const { data, isLoading, isError } = useQuery({

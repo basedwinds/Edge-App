@@ -8,6 +8,8 @@ import { Calibration } from "./pages/Calibration";
 import { Settings } from "./pages/Settings";
 import { NewMarkets } from "./pages/NewMarkets";
 import { Racing } from "./pages/Racing";
+import { RacingPlaced } from "./pages/RacingPlaced";
+import { RacingCalibration } from "./pages/RacingCalibration";
 import { Backtests } from "./pages/Backtests";
 import { MarketDetail } from "./pages/MarketDetail";
 import { Nba } from "./pages/Nba";
@@ -122,6 +124,8 @@ function App() {
         <Route path="/new-markets" element={<NewMarkets />} />
         <Route path="/racing" element={<Racing />} />
         <Route path="/racing/:series" element={<Racing />} />
+        <Route path="/racing/:series/placed" element={<RacingPlaced />} />
+        <Route path="/racing/:series/calibration" element={<RacingCalibration />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </div>

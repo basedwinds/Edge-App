@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
+import { Info } from "lucide-react";
 import { PageShell } from "../components/layout/PageShell";
 import { TableSkeleton } from "../components/ui/Skeleton";
 import { EdgeBadge } from "../components/markets/EdgeBadge";
+import { BetReasoningModal } from "../components/markets/BetReasoningModal";
 import { fetchRacingMarkets, fetchSettings, markRacingBetPlaced, type RacingMarketRow } from "../api/markets";
 
 const SERIES_LABEL: Record<string, string> = { f1: "Formula 1", irl: "IndyCar", nascar: "NASCAR" };
@@ -26,6 +28,7 @@ export function Racing() {
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
   const [placedIds, setPlacedIds] = useState<Set<number>>(new Set());
+  const [reasoning, setReasoning] = useState<RacingMarketRow | null>(null);
 
   async function place(r: RacingMarketRow) {
     const stakeDollars = r.suggested_stake_dollars ?? (unitDollars > 0 ? unitDollars : 10);
@@ -110,24 +113,45 @@ export function Racing() {
                     {r.suggested_stake_units != null ? `${r.suggested_stake_units.toFixed(1)}u` : r.suggested_stake_dollars != null ? `$${r.suggested_stake_dollars}` : "—"}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)]">{r.volume ? Math.round(r.volume).toLocaleString() : "—"}</td>
-                  <td className="px-3 py-2 text-right">
-                    {r.suggested_stake_dollars != null && (
-                      <button
-                        onClick={() => place(r)}
-                        disabled={placedIds.has(r.id)}
-                        className={placedIds.has(r.id)
-                          ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-good)]/40 text-[var(--color-good)] whitespace-nowrap"
-                          : "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"}
-                      >
-                        {placedIds.has(r.id) ? "Placed ✓" : "Mark placed"}
-                      </button>
-                    )}
+                  <td className="px-3 py-2">
+                    <div className="flex items-center justify-end gap-1.5">
+                      {r.model_prob != null && (
+                        <button
+                          onClick={() => setReasoning(r)}
+                          className="p-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]"
+                          title="Why this number? (model explanation)"
+                        >
+                          <Info size={13} />
+                        </button>
+                      )}
+                      {r.suggested_stake_dollars != null && (
+                        <button
+                          onClick={() => place(r)}
+                          disabled={placedIds.has(r.id)}
+                          className={placedIds.has(r.id)
+                            ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-good)]/40 text-[var(--color-good)] whitespace-nowrap"
+                            : "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"}
+                        >
+                          {placedIds.has(r.id) ? "Placed ✓" : "Mark placed"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {reasoning && (
+        <BetReasoningModal
+          marketId={reasoning.id}
+          modelProb={reasoning.model_prob}
+          marketProb={reasoning.implied_prob}
+          sport={reasoning.series}
+          onClose={() => setReasoning(null)}
+        />
       )}
     </PageShell>
   );

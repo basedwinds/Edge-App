@@ -204,13 +204,14 @@ export async function fetchMarketReasoning(
   marketId: number,
   modelProb: number | null,
   marketProb: number | null,
-  sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" = "nfl"
+  sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" | "f1" | "nascar" | "irl" = "nfl"
 ): Promise<ReasoningPayload> {
   const params = new URLSearchParams();
   if (modelProb !== null) params.set("model_prob", String(modelProb));
   if (marketProb !== null) params.set("market_prob", String(marketProb));
   const path =
-    sport === "nba" ? `/nba/markets/${marketId}/reasoning`
+    sport === "f1" || sport === "nascar" || sport === "irl" ? `/racing/markets/${marketId}/reasoning`
+    : sport === "nba" ? `/nba/markets/${marketId}/reasoning`
     : sport === "wnba" ? `/wnba/markets/${marketId}/reasoning`
     : sport === "mlb" ? `/mlb/markets/${marketId}/reasoning`
     : sport === "mma" ? `/mma/markets/${marketId}/reasoning`
