@@ -1,0 +1,450 @@
+"""DB upsert layer for Tennis matches/markets -- parallel to
+market_catalog_mma.py, with one real structural difference: MMA's MmaFight
+rows come from an authoritative external schedule (ufcstats' upcoming-card
+page); no equivalent free schedule source exists for Tennis (tennis-data.co.uk
+and tennisexplorer.com are both RESULTS archives, not draws/schedules --
+confirmed live 2026-07-18, neither lists future not-yet-played matches).
+Kalshi/Polymarket's own moneyline listings ARE the closest thing to a live
+Tennis schedule this app has, so `find_or_create_upcoming_match` derives
+TennisMatch rows directly from whichever platform's poller runs first, and
+the OTHER platform's poller then matches onto that same row by player name
+(via market_matcher_tennis.match_upcoming_tennis_match) rather than creating
+a duplicate -- this is the opposite direction of every other sport's
+"external schedule feeds both platforms' matchers" pattern in this app.
+
+Every Market/PlacedBet row this writes gets sport="tennis". Market.team
+holds the player's real full name (same repurposed-field pattern as
+MmaFight's fighter names)."""
+import datetime
+
+from sqlalchemy.orm import Session
+
+from app.db.models import Market, MarketSnapshot, TennisMatch
+from app.ingestion.market_matcher_tennis import full_name_to_abbreviated_key, match_upcoming_tennis_match
+
+
+def _load_upcoming_matches(session: Session) -> list[dict]:
+    rows = session.query(TennisMatch).filter(TennisMatch.winner_key.is_(None)).all()
+    return [
+        {"id": r.id, "player_a_name": r.player_a_name, "player_b_name": r.player_b_name}
+        for r in rows
+    ]
+
+
+# Grand Slam surface, keyed by a lowercase substring found in whichever
+# tournament-name text the caller has (Kalshi's product_metadata.competition,
+# e.g. "Wimbledon Men Singles"; Polymarket's event title, e.g. "Australian
+# Open Men's: A vs B" -- both confirmed live 2026-07-18). "us open" is safe
+# as a bare substring here since this text only ever comes from Tennis event
+# titles, never e.g. golf. Values use the SAME casing ("Hard"/"Clay"/"Grass")
+# as TennisMatch.surface's historical values (tennis-data.co.uk/tennisexplorer,
+# see models.py) -- elo_tennis.py keys its surface-rating dict on this string
+# verbatim, so a casing mismatch would silently zero out the surface blend
+# for every live Slam match rather than erroring.
+_SLAM_SURFACE_BY_NAME = {
+    "wimbledon": "Grass",
+    "french open": "Clay",
+    "roland garros": "Clay",
+    "australian open": "Hard",
+    "us open": "Hard",
+}
+
+
+def _infer_slam_attributes(tour: str, tournament_text: str) -> tuple[int, str] | None:
+    """Best-effort best_of/surface for a live-created match. Fixes a real gap:
+    without this, EVERY live-created TennisMatch defaulted to best_of=3 and
+    surface=None (see tennis_markets.py::_match_best_of) since no free live
+    source flags Grand Slam status -- silently wrong the moment a real Bo5
+    men's Slam match went live (game_total/set_total would price off Bo3
+    constants). Deliberately narrow: only resolves the 4 Slams, not every
+    tournament's real surface -- the rest of this app already tolerates
+    surface=None as an honest gap (elo_tennis.py blends gracefully), so this
+    only needs to fix the one case that was actively wrong, not guess broadly.
+    Qualifying rounds are always best-of-3 for both tours even at a Slam."""
+    text = tournament_text.lower()
+    surface = next((s for name, s in _SLAM_SURFACE_BY_NAME.items() if name in text), None)
+    if surface is None:
+        return None
+    is_qualifying = "qualif" in text
+    best_of = 3 if (tour == "wta" or is_qualifying) else 5
+    return best_of, surface
+
+
+def find_or_create_upcoming_match(
+    session: Session, tour: str, tier: str, player_a_name: str, player_b_name: str,
+    tournament_text: str = "",
+) -> TennisMatch | None:
+    if not player_a_name or not player_b_name:
+        return None
+    upcoming = _load_upcoming_matches(session)
+    found = match_upcoming_tennis_match(player_a_name, player_b_name, upcoming)
+    if found is not None:
+        return session.get(TennisMatch, found["id"])
+
+    slam = _infer_slam_attributes(tour, tournament_text)
+    match = TennisMatch(
+        source="live", source_match_id=f"live:{tour}:{tier}:{player_a_name}:{player_b_name}",
+        tour=tour, tier=tier, tourney_name=tournament_text,
+        best_of=slam[0] if slam else None,
+        surface=slam[1] if slam else None,
+        match_date=datetime.date.today().isoformat(),
+        # Stored in the SAME abbreviated "surname i." key space
+        # normalize_player_key() builds from tennis-data.co.uk/tennisexplorer's
+        # own historical rows (see full_name_to_abbreviated_key's docstring) --
+        # NOT the raw full name -- so elo_service_tennis's offline-trained
+        # ratings are actually reachable for a live-created match. Falls back
+        # to the lowercased full name only for the (rare) single-token-name
+        # case full_name_to_abbreviated_key can't convert -- that player
+        # simply won't have an offline rating to look up either way.
+        player_a_key=full_name_to_abbreviated_key(player_a_name) or player_a_name.lower(),
+        player_a_name=player_a_name,
+        player_b_key=full_name_to_abbreviated_key(player_b_name) or player_b_name.lower(),
+        player_b_name=player_b_name,
+    )
+    session.add(match)
+    session.flush()
+    return match
+
+
+def update_match_estimated_start_time(match: TennisMatch | None, estimated_start_time: str | None) -> None:
+    """Keeps TennisMatch.estimated_start_time fresh every poll while the
+    match is still upcoming -- same "genuine estimate, always overwrite"
+    reasoning as MmaFight.estimated_start_time (see poller_mma.py). Whichever
+    platform's poller has a real value for this match wins; never touched
+    once the match is decided (winner_key set)."""
+    if match is not None and match.winner_key is None and estimated_start_time:
+        match.estimated_start_time = estimated_start_time
+
+
+def upsert_kalshi_tennis_moneyline_market(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="moneyline", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = row["player_name"]
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_polymarket_tennis_moneyline_row(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['player_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
+            market_type="moneyline", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = row["player_name"]
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_kalshi_tennis_set_winner_market(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """market.line holds the SET NUMBER (1, 2, ...) -- Kalshi structures
+    this as one event PER SET, not one per match, see kalshi_tennis_client.py."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="set_winner", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = row["player_name"]
+    market.line = float(row["set_number"])
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_kalshi_tennis_game_spread_market(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """market.line holds the game-spread threshold; market.team is the
+    player this specific YES side favors (same "wins by more than line"
+    convention as game_lines_tennis.py::prob_game_spread_cover)."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="game_spread", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = row.get("player_name")
+    market.line = row.get("line")
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_kalshi_tennis_game_total_market(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """market.line holds the total-games threshold; market.side="over"
+    (single-sided ladder, same convention as this app's other totals)."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="game_total", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = None
+    market.line = row.get("line")
+    market.side = "over"
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_kalshi_tennis_exact_match_market(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """market.team is the player this scoreline is about; market.side
+    encodes the exact scoreline as "{player_sets}-{opponent_sets}" (e.g.
+    "2-1") -- a string encoding since there's no existing numeric field
+    shaped for a two-part score."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="exact_score", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = row["player_name"]
+    market.side = f"{row['player_sets']}-{row['opponent_sets']}"
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_polymarket_tennis_set_winner_row(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """market.line holds the SET NUMBER, same convention as Kalshi's
+    set_winner (see upsert_kalshi_tennis_set_winner_market)."""
+    source_ticker = f"{row['condition_id']}-{row['player_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
+            market_type="set_winner", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = row["player_name"]
+    market.line = float(row["set_number"])
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_polymarket_tennis_match_total_row(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """Same market_type ("game_total") as Kalshi's match-level total --
+    reuses the exact same model_prob function in tennis_markets.py."""
+    source_ticker = f"{row['condition_id']}-over"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
+            market_type="game_total", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = None
+    market.line = row["line"]
+    market.side = "over"
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("over_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_polymarket_tennis_set_handicap_row(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """Same market_type ("game_spread") as Kalshi's KXATPGSPREAD -- confirmed
+    live to be the same real concept (games differential for the whole
+    match), just named "Set Handicap" by Polymarket and structured as a
+    single +/-1.5 line rather than a ladder."""
+    source_ticker = f"{row['condition_id']}-{row['player_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
+            market_type="game_spread", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = row["player_name"]
+    market.line = row["line"]
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_polymarket_tennis_set_game_total_row(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """PER-SET game total ("set_total" market_type) -- no Kalshi equivalent.
+    market.side encodes the set number (e.g. "set_1") since market.line is
+    already used for the O/U threshold itself."""
+    source_ticker = f"{row['condition_id']}-over"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
+            market_type="set_total", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = None
+    market.line = row["line"]
+    market.side = f"set_{row['set_number']}"
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("over_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_polymarket_tennis_total_sets_row(session: Session, row: dict, tennis_match_id: int | None) -> Market:
+    """Whether the match goes the full distance in SET count -- no Kalshi
+    equivalent. market_type="total_sets", market.line is the O/U threshold."""
+    source_ticker = f"{row['condition_id']}-over"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
+            market_type="total_sets", sport="tennis",
+        )
+        session.add(market)
+    market.tennis_match_id = tennis_match_id
+    market.team = None
+    market.line = row["line"]
+    market.side = "over"
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("over_price"), volume=row.get("volume"),
+    ))
+    return market
+
+
+# Real tournament-name -> tennisexplorer.com slug (confirmed live 2026-07-19
+# against every currently-open ATP/WTA tournament-winner event: "ATP Bastad"
+# -> bastad, "ATP Umag" -> umag, "ATP Gstaad" -> gstaad, "WTA Iasi" -> iasi,
+# "2026 WTA Athens" -> athens, "US Open" -> us-open, all real 200s). NOT
+# derived from the Kalshi event ticker's own suffix, which is inconsistent
+# (confirmed live: Bastad's ticker is "KXATP-26BASTAD" but Athens' is a bare
+# "KXATP-26", no city code at all) -- the `competition` text Kalshi already
+# provides is the one reliable source for this.
+def tournament_name_to_slug(competition: str) -> str:
+    import re
+
+    text = re.sub(r"^\d{4}\s+", "", competition)  # strip a leading year, e.g. "2026 WTA Athens"
+    text = re.sub(r"^(ATP|WTA)\s+", "", text, flags=re.IGNORECASE)
+    # Strip the "(Men's)"/"(Women's)" display suffix this module's own
+    # upsert appends to Grand Slam group_labels (see
+    # upsert_kalshi_tennis_tournament_winner_market) -- the slug itself is
+    # gender-agnostic (tennisexplorer's own /atp-men//wta-women/ path suffix
+    # already carries that distinction).
+    text = re.sub(r"\s*\((Men's|Women's)\)\s*$", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", "-", text.strip().lower())
+
+
+def upsert_kalshi_tennis_tournament_winner_market(session: Session, row: dict) -> Market:
+    """market_type="tournament_winner", market.team is the player's real
+    full name, market.group_label is the real tournament name (e.g. "ATP
+    Bastad") -- same shape FuturesMarketOut/other sports' futures already
+    use, no tennis_match_id (this isn't tied to one specific match)."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="tournament_winner", sport="tennis",
+        )
+        session.add(market)
+    market.team = row["player_name"]
+    # Grand Slam competition text (e.g. "US Open") carries NO gender marker
+    # at all, unlike every other tournament ("ATP Bastad"/"WTA Iasi") --
+    # confirmed live 2026-07-19 once the real Women's US Open market
+    # appeared alongside the Men's, both under the identical bare "US Open"
+    # text. Appends "(Men's)"/"(Women's)" so the two don't display as if
+    # they were the same tournament -- tournament_name_to_slug() already
+    # strips this same "ATP "/"WTA " prefix pattern, so checking for its
+    # absence here is the same real signal, not a guess.
+    import re as _re
+
+    competition = row["competition"]
+    # Strip a leading year (e.g. "2026 WTA Athens") before checking for the
+    # ATP/WTA prefix -- without this, a year-prefixed competition string
+    # would look "bare" by this check even though it already names its own
+    # tour, producing a redundant "2026 WTA Athens (Women's)" label.
+    competition_sans_year = _re.sub(r"^\d{4}\s+", "", competition)
+    if not _re.match(r"^(ATP|WTA)\s", competition_sans_year, _re.IGNORECASE):
+        gender_label = "Men's" if row["tour"] == "atp" else "Women's"
+        competition = f"{competition} ({gender_label})"
+    market.group_label = competition
+    # `side` is otherwise unused for this market_type -- repurposed to carry
+    # "atp"/"wta" (needed to pick the right tennisexplorer tour suffix,
+    # atp-men vs wta-women, when fetching the real draw -- see
+    # tennis_markets.py's futures endpoint), same "reuse an existing column
+    # for a sport-specific meaning" pattern as MmaFight's fighter-name fields.
+    market.side = row["tour"]
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=None, yes_ask=None,
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market

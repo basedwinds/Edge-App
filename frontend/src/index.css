@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@theme {
+  /* "Ledger" palette -- picked over the redesign-directions comparison
+     (2026-07-16): warm dark ground, brass/amber accent, hairline borders. */
+  --color-bg: #14171c;
+  --color-surface: #1c2027;
+  --color-surface-hover: #262b34;
+  --color-border: #2b303a;
+  --color-text: #e9e6de;
+  --color-text-dim: #a19d92;
+  --color-text-muted: #6f6a5c;
+  --color-accent: #c9973f;
+
+  /* Status palette (validated: dataviz skill references/palette.md, dark steps) */
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+
+  --font-sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}

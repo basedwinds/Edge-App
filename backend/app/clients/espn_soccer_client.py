@@ -1,0 +1,232 @@
+"""ESPN's free, unauthenticated public scoreboard API -- confirmed live
+2026-07-19 for MLS ("usa.1" slug): `site.api.espn.com/apis/site/v2/sports/
+soccer/usa.1/scoreboard?dates=YYYYMMDD-YYYYMMDD` returns real historical
+match results (final score, date, home/away team) for a date range with no
+API key. This is the only free source found for MLS during the live audit --
+football-data.co.uk does not cover MLS at all (confirmed: no `mlsm.php` or
+equivalent page). Results ONLY, no odds -- MLS rows built from this client
+never get home_odds/draw_odds/away_odds populated (see SoccerMatch's
+docstring in app/db/models.py), so MLS can never clear the backtest gate the
+way the 5 football-data.co.uk-sourced leagues can.
+
+A single `dates=YYYYMMDD` (no range) query was confirmed live to return ZERO
+events even on a date with real MLS games recorded via the range query --
+this endpoint apparently doesn't reliably serve single-day queries the same
+way as a range, so this client always queries in ranges even when the caller
+wants one day's worth of results.
+
+The maximum date-range width this endpoint accepts is NOT documented and was
+NOT stress-tested during the audit (only a 10-day window was confirmed to
+work) -- fetch_season_range chunks conservatively in ~25-day windows rather
+than assuming a wider range is safe, to avoid a silent truncation that would
+look like "no games happened" instead of a real fetch limit."""
+from __future__ import annotations
+
+import datetime as dt
+
+import httpx
+
+SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard"
+CHUNK_DAYS = 25
+
+# Real live standings feed (confirmed 2026-07-19): one request per league
+# returns the WHOLE table (rank/points/games played per team) -- 20 real
+# rows for E0/SP1/I1, 18 for D1/F1, matching each league's own real team
+# count exactly. Keyed by THIS app's own football-data.co.uk-style codes for
+# a direct join against SoccerMatch.league, same convention as
+# transfermarkt_client.py's COMPETITION_CODES. MLS deliberately excluded --
+# confirmed live its own standings response is conference-split (15 teams in
+# "children[0]", not the real 30-team single table), a genuinely different
+# structure this app's motivation signal (see motivation_rules_soccer.py)
+# isn't built to handle, same "MLS is structurally different, scope it out"
+# precedent as season_sim_soccer.py's own relegation/top4 scope.
+STANDINGS_LEAGUE_CODES = {
+    "E0": "eng.1",
+    "SP1": "esp.1",
+    "I1": "ita.1",
+    "D1": "ger.1",
+    "F1": "fra.1",
+}
+
+
+# All 6 leagues' ESPN slugs -- MLS repeats usa.1 (already hardcoded into
+# SCOREBOARD_URL above for the historical-cache builder; kept as its own
+# separate constant there rather than refactored to reuse this dict, to
+# avoid touching that already-working pipeline). Used by
+# refresh_soccer_results (poller_soccer.py) to backfill REAL final scores
+# for live-tracked matches across every league, not just MLS -- confirmed
+# live 2026-07-19 the same scoreboard endpoint pattern generalizes cleanly
+# to every non-MLS league too (e.g. a real Crystal Palace 1-1 Fulham result
+# for eng.1 on 2026-01-01).
+LEAGUE_CODES = {**STANDINGS_LEAGUE_CODES, "MLS": "usa.1"}
+
+
+def fetch_scoreboard(league: str, start: dt.date, end: dt.date) -> list[dict]:
+    """Same real shape/limitations as fetch_range (see module docstring:
+    date-RANGE queries only, chunked conservatively) -- parameterized by
+    league instead of hardcoded to MLS's usa.1."""
+    code = LEAGUE_CODES.get(league)
+    if code is None:
+        return []
+    params = {"dates": f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}"}
+    try:
+        resp = httpx.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard", params=params, timeout=30.0)
+        resp.raise_for_status()
+        return resp.json().get("events", [])
+    except Exception:
+        return []
+
+
+def parse_final_results(raw_events: list[dict]) -> list[dict]:
+    """Simplified sibling of parse_final_events -- only the fields needed to
+    MATCH a real ESPN result onto an already-existing, live-tracked
+    SoccerMatch row (team names, date, final score), not to build a fresh
+    historical-cache row (no source_match_id/season/league needed here,
+    those are already known at the call site)."""
+    out = []
+    for e in raw_events:
+        comps = e.get("competitions") or []
+        if not comps:
+            continue
+        comp = comps[0]
+        status_name = ((comp.get("status") or {}).get("type") or {}).get("name")
+        if status_name != "STATUS_FULL_TIME":
+            continue
+        competitors = comp.get("competitors") or []
+        home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+        away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+        if home is None or away is None:
+            continue
+        try:
+            home_goals = int(home.get("score"))
+            away_goals = int(away.get("score"))
+        except (TypeError, ValueError):
+            continue
+        home_name = (home.get("team") or {}).get("displayName")
+        away_name = (away.get("team") or {}).get("displayName")
+        if not home_name or not away_name:
+            continue
+        event_date = e.get("date")
+        match_date = event_date[:10] if event_date else None
+        if match_date is None:
+            continue
+        result_ft = "H" if home_goals > away_goals else ("A" if away_goals > home_goals else "D")
+        out.append({
+            "home_team": home_name, "away_team": away_name, "match_date": match_date,
+            "home_goals_ft": home_goals, "away_goals_ft": away_goals, "result_ft": result_ft,
+        })
+    return out
+
+
+def fetch_standings(league: str) -> dict[str, dict]:
+    """{team_display_name: {rank, points, games_played}} for one league's
+    CURRENT real table. Returns {} on any failure or for an unrecognized/
+    unsupported league (e.g. MLS) -- a missing standings table degrades the
+    motivation signal to "no adjustment" for that match, not a crash."""
+    code = STANDINGS_LEAGUE_CODES.get(league)
+    if code is None:
+        return {}
+    try:
+        resp = httpx.get(f"https://site.api.espn.com/apis/v2/sports/soccer/{code}/standings", timeout=15.0)
+        resp.raise_for_status()
+        entries = resp.json()["children"][0]["standings"]["entries"]
+    except Exception:
+        return {}
+
+    out = {}
+    for entry in entries:
+        team_name = (entry.get("team") or {}).get("displayName")
+        if not team_name:
+            continue
+        stats = {s["name"]: s.get("value") for s in entry.get("stats", [])}
+        rank, points, games_played = stats.get("rank"), stats.get("points"), stats.get("gamesPlayed")
+        if rank is None or points is None or games_played is None:
+            continue
+        out[team_name] = {"rank": int(rank), "points": int(points), "games_played": int(games_played)}
+    return out
+
+
+def fetch_range(start: dt.date, end: dt.date) -> list[dict]:
+    """Raw ESPN event dicts for [start, end] inclusive. Returns [] (not
+    raises) on a non-200 or malformed response -- a gap in MLS history is
+    less harmful than crashing the whole cache build over one bad window."""
+    params = {"dates": f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}"}
+    try:
+        resp = httpx.get(SCOREBOARD_URL, params=params, timeout=30.0)
+        resp.raise_for_status()
+        return resp.json().get("events", [])
+    except Exception:
+        return []
+
+
+def fetch_season_range(start: dt.date, end: dt.date) -> list[dict]:
+    """Chunks [start, end] into CHUNK_DAYS-wide windows (see module
+    docstring on why the real max width is unverified) and concatenates."""
+    events: list[dict] = []
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + dt.timedelta(days=CHUNK_DAYS - 1), end)
+        events.extend(fetch_range(cursor, chunk_end))
+        cursor = chunk_end + dt.timedelta(days=1)
+    return events
+
+
+def parse_final_events(raw_events: list[dict]) -> list[dict]:
+    """Keeps only events ESPN marks fully completed ("STATUS_FULL_TIME") --
+    in-progress/scheduled/postponed rows have no real final score to train
+    on. Returns SoccerMatch-shaped dicts (source="espn", league="MLS", no
+    odds fields -- see module docstring)."""
+    out = []
+    for e in raw_events:
+        comps = e.get("competitions") or []
+        if not comps:
+            continue
+        comp = comps[0]
+        status_name = ((comp.get("status") or {}).get("type") or {}).get("name")
+        if status_name != "STATUS_FULL_TIME":
+            continue
+        competitors = comp.get("competitors") or []
+        home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+        away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+        if home is None or away is None:
+            continue
+        try:
+            home_goals = int(home.get("score"))
+            away_goals = int(away.get("score"))
+        except (TypeError, ValueError):
+            continue
+        home_name = ((home.get("team") or {}).get("displayName"))
+        away_name = ((away.get("team") or {}).get("displayName"))
+        if not home_name or not away_name:
+            continue
+        event_date = e.get("date")  # ISO instant, e.g. "2026-04-05T23:00Z"
+        match_date = event_date[:10] if event_date else None
+        if match_date is None:
+            continue
+        result_ft = "H" if home_goals > away_goals else ("A" if away_goals > home_goals else "D")
+        out.append({
+            "source": "espn",
+            "source_match_id": f"espn:{e.get('id')}",
+            "league": "MLS",
+            "season": _season_label(match_date),
+            "match_date": match_date,
+            "home_team": home_name,
+            "away_team": away_name,
+            "home_goals_ft": home_goals,
+            "away_goals_ft": away_goals,
+            "home_goals_ht": None,  # ESPN's scoreboard payload doesn't expose a half-time score
+            "away_goals_ht": None,
+            "result_ft": result_ft,
+            "home_odds": None,  # see module docstring -- MLS has no free odds source
+            "draw_odds": None,
+            "away_odds": None,
+        })
+    return out
+
+
+def _season_label(iso_date: str) -> str:
+    """MLS runs within a single calendar year (Feb-Dec), unlike the
+    Aug-May European season football-data.co.uk covers -- season label is
+    just the match's own year, not a two-year span."""
+    year = int(iso_date[:4])
+    return str(year)

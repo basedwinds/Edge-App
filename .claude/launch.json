@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "C:\\Users\\awaws\\Downloads\\nfl-edge-app\\backend\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8756", "--app-dir", "C:\\Users\\awaws\\Downloads\\nfl-edge-app\\backend"],
+      "port": 8756
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Users\\awaws\\Downloads\\nfl-edge-app\\frontend"],
+      "port": 5173
+    }
+  ]
+}

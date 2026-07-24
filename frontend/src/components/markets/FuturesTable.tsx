@@ -1,0 +1,298 @@
+import { useMemo, useState } from "react";
+import {
+  createColumnHelper,
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type SortingState,
+} from "@tanstack/react-table";
+import { ArrowUpDown, Info } from "lucide-react";
+import type { FuturesMarketRow } from "../../types/market";
+import { SourceBadge } from "./SourceBadge";
+import { EdgeBadge } from "./EdgeBadge";
+import { BetReasoningModal } from "./BetReasoningModal";
+
+type SportKey = "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
+
+export const MARKET_TYPE_LABELS: Record<string, string> = {
+  division_winner: "Division Winner",
+  conference_champion: "Conference Champion",
+  one_seed: "1 Seed",
+  super_bowl_champion: "Super Bowl Champion",
+  playoff_qualifier: "Playoff Qualifier",
+  best_record: "Best Regular Season Record",
+  undefeated_season: "Undefeated Season (any team)",
+  win_total: "Season Win Total (O/U)",
+  exact_win_total: "Exact Season Win Total",
+  wins_any: "Any Team Hits Win Threshold",
+  week1_qb: "Week 1 Starting QB",
+  mvp: "MVP",
+  coach_of_year: "Coach of the Year",
+  opoy: "Offensive Player of the Year",
+  dpoy: "Defensive Player of the Year",
+  division_wins: "Division Total Wins",
+  division_order: "Division Exact Order",
+  div_least_wins: "Fewest-Wins Division",
+  div_most_wins: "Most-Wins Division",
+  worst_to_first: "Worst-to-First (any team)",
+  h2h_wins: "Head-to-Head Win Total",
+  leader_pass_yds: "Passing Yards Leader",
+  leader_pass_tds: "Passing TDs Leader",
+  leader_pass_int: "Interceptions Thrown Leader",
+  leader_rush_yds: "Rushing Yards Leader",
+  leader_rush_tds: "Rushing TDs Leader",
+  leader_rec_yds: "Receiving Yards Leader",
+  leader_rec_tds: "Receiving TDs Leader",
+  leader_def_int: "Interceptions (Defense) Leader",
+  leader_sacks: "Sacks Leader",
+  team_pts_most: "Most Points Scored (Team)",
+  team_pts_least: "Fewest Points Scored (Team)",
+  team_dpts_most: "Most Points Allowed (Team)",
+  team_dpts_least: "Fewest Points Allowed (Team)",
+  season_pass_yds: "Season Passing Yards",
+  season_rush_yds: "Season Rushing Yards",
+  season_rush_tds: "Season Rushing TDs",
+  season_rec_yds: "Season Receiving Yards",
+  season_rec_tds: "Season Receiving TDs",
+  season_rec: "Season Receptions",
+  // NBA (2026-07-16) -- shares this same lookup/table component rather than
+  // a duplicate NBA-only copy, since the shape is identical.
+  championship: "Championship",
+  play_in_qualifier: "Play-In Qualifier",
+  worst_record: "Worst Regular Season Record",
+  // Soccer (added 2026-07-19) -- shares this same table component too.
+  league_winner: "League Winner",
+  relegation: "Relegation",
+  // EPL-only real inventory (added 2026-07-19, see kalshi_soccer_client.py::TOP_N_SERIES).
+  top_half: "Top Half",
+  top4: "Top 4",
+  top2: "Top 2",
+  stage_of_elimination: "Stage of Elimination",
+};
+
+// stage_of_elimination: the distinguishing field is `side`, not line -- shown
+// in the Line column via formatLine below.
+const STAGE_OF_ELIM_LABELS: Record<string, string> = {
+  reg: "Miss playoffs",
+  wc: "Out: Wild Card",
+  div: "Out: Divisional",
+  conf: "Out: Conf. Champ.",
+  sb_loss: "Lose Super Bowl",
+  sb_win: "Win Super Bowl",
+};
+
+const SEASON_STAT_UNITS: Record<string, string> = {
+  season_pass_yds: "yds",
+  season_rush_yds: "yds",
+  season_rec_yds: "yds",
+  season_rush_tds: "TDs",
+  season_rec_tds: "TDs",
+  season_rec: "rec",
+};
+
+function formatLine(row: FuturesMarketRow): string {
+  if (row.market_type === "stage_of_elimination") return STAGE_OF_ELIM_LABELS[row.side ?? ""] ?? row.side ?? "—";
+  if (row.line === null || row.line === undefined) return "—";
+  if (row.market_type === "exact_win_total") return `${row.line} wins`;
+  if (row.market_type === "win_total" || row.market_type === "wins_any") return `${row.line}+ wins`;
+  const unit = SEASON_STAT_UNITS[row.market_type];
+  if (unit) return `${Math.ceil(row.line)}+ ${unit}`;
+  return String(row.line);
+}
+
+const columnHelper = createColumnHelper<FuturesMarketRow>();
+
+function formatPct(v: number | null) {
+  return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
+}
+
+const columns = [
+  columnHelper.accessor("market_type", {
+    header: "Market",
+    cell: (info) => (
+      <span className="font-medium whitespace-nowrap">{MARKET_TYPE_LABELS[info.getValue()] ?? info.getValue()}</span>
+    ),
+  }),
+  columnHelper.accessor("group_label", {
+    header: "Group",
+    cell: (info) => <span className="text-[var(--color-text-dim)] whitespace-nowrap">{info.getValue() ?? "—"}</span>,
+  }),
+  columnHelper.accessor("team", {
+    header: "Team",
+    cell: (info) => <span className="font-medium">{info.getValue() ?? "—"}</span>,
+  }),
+  columnHelper.display({
+    id: "line",
+    header: "Line",
+    cell: ({ row }) => <span className="tabular-nums font-mono text-[var(--color-text-dim)] whitespace-nowrap">{formatLine(row.original)}</span>,
+  }),
+  columnHelper.accessor("source", {
+    header: "Source",
+    cell: (info) => <SourceBadge source={info.getValue()} />,
+  }),
+  columnHelper.accessor("implied_prob", {
+    header: () => <span title="Team win probability implied by the market price">Market %</span>,
+    cell: (info) => <span className="tabular-nums font-mono">{formatPct(info.getValue())}</span>,
+  }),
+  columnHelper.accessor("model_prob", {
+    header: () => (
+      <span title="Season Monte Carlo simulation using current Elo ratings -- not validated to beat the market, see disclaimer">
+        Est. %
+      </span>
+    ),
+    cell: (info) => {
+      const note = info.row.original.model_note;
+      return (
+        <span className="tabular-nums font-mono text-[var(--color-text-dim)] inline-flex items-center gap-1">
+          {formatPct(info.getValue())}
+          {note && (
+            <span
+              title={note}
+              className="cursor-help rounded-sm border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)] text-[9px] px-1 leading-tight"
+            >
+              approx
+            </span>
+          )}
+        </span>
+      );
+    },
+  }),
+  columnHelper.accessor("edge", {
+    header: "Edge",
+    cell: (info) => <EdgeBadge edge={info.getValue()} />,
+  }),
+  columnHelper.accessor("volume", {
+    header: "Volume",
+    cell: (info) => (
+      <span className="tabular-nums font-mono text-[var(--color-text-dim)]">
+        {info.getValue() ? Math.round(info.getValue()!).toLocaleString() : "—"}
+      </span>
+    ),
+  }),
+  columnHelper.accessor("suggested_stake_dollars", {
+    header: () => <span title="Quarter Kelly, capped at 5% of its pool (weekly or futures) -- see Settings">Stake</span>,
+    cell: (info) => {
+      const kelly = info.row.original.kelly_fraction;
+      const units = info.row.original.suggested_stake_units;
+      if (info.getValue() === null || kelly === null) {
+        return <span className="text-[var(--color-text-muted)]">—</span>;
+      }
+      return (
+        <span className="tabular-nums font-mono text-[var(--color-good)]">
+          {units !== null ? `${units.toFixed(1)}u` : `$${info.getValue()!.toLocaleString()}`}
+          <span className="text-[var(--color-text-muted)] ml-1">(${info.getValue()!.toLocaleString()}, {(kelly * 100).toFixed(1)}%)</span>
+        </span>
+      );
+    },
+  }),
+];
+
+export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarketRow[]; onMarkPlaced?: (row: FuturesMarketRow) => void; sport?: SportKey }) {
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "market_type", desc: false },
+    { id: "implied_prob", desc: true },
+  ]);
+  const [reasoningRow, setReasoningRow] = useState<FuturesMarketRow | null>(null);
+  const data = useMemo(() => rows, [rows]);
+
+  // Actions column: a "why" (reasoning) button when a sport is provided, and a
+  // "Mark placed" button when the page wires a handler. Built here (not at
+  // module scope) so the buttons close over sport/onMarkPlaced.
+  const allColumns = useMemo(() => {
+    if (!onMarkPlaced && !sport) return columns;
+    return [
+      ...columns,
+      columnHelper.display({
+        id: "actions",
+        header: "",
+        cell: ({ row }) => (
+          <div className="flex items-center justify-end gap-1.5">
+            {sport && (
+              <button
+                onClick={() => setReasoningRow(row.original)}
+                className="p-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]"
+                title="Why this number? (model explanation)"
+              >
+                <Info size={13} />
+              </button>
+            )}
+            {onMarkPlaced && (
+              <button
+                onClick={() => onMarkPlaced(row.original)}
+                className="text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"
+                title="Log this futures position in the tracker (Futures section)"
+              >
+                Mark placed
+              </button>
+            )}
+          </div>
+        ),
+      }),
+    ];
+  }, [onMarkPlaced, sport]);
+
+  const table = useReactTable({
+    data,
+    columns: allColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-x-auto">
+      <table className="w-full text-sm border-collapse min-w-[720px]">
+        <thead>
+          {table.getHeaderGroups().map((hg) => (
+            <tr key={hg.id} className="border-b border-[var(--color-border)]">
+              {hg.headers.map((header) => (
+                <th
+                  key={header.id}
+                  onClick={header.column.getToggleSortingHandler()}
+                  className="text-left px-4 py-3 text-xs uppercase tracking-wide text-[var(--color-text-dim)] font-medium cursor-pointer select-none hover:text-[var(--color-text)] transition-colors whitespace-nowrap"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    {flexRender(header.column.columnDef.header, header.getContext())}
+                    {header.column.getIsSorted() && <ArrowUpDown size={12} />}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((row) => (
+            <tr
+              key={row.id}
+              className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-hover)] transition-colors"
+            >
+              {row.getVisibleCells().map((cell) => (
+                <td key={cell.id} className="px-4 py-3 whitespace-nowrap">
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </td>
+              ))}
+            </tr>
+          ))}
+          {table.getRowModel().rows.length === 0 && (
+            <tr>
+              <td colSpan={columns.length} className="px-4 py-10 text-center text-[var(--color-text-dim)]">
+                No futures markets tracked yet.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      {reasoningRow && sport && (
+        <BetReasoningModal
+          marketId={reasoningRow.id}
+          modelProb={reasoningRow.model_prob}
+          marketProb={reasoningRow.implied_prob}
+          sport={sport}
+          onClose={() => setReasoningRow(null)}
+        />
+      )}
+    </div>
+  );
+}

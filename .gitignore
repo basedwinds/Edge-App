@@ -1,0 +1,12 @@
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+frontend/node_modules/
+frontend/dist/
+data/
+*.db
+.env
+*.db-shm
+*.db-wal
+.DS_Store
+backtest_results.json

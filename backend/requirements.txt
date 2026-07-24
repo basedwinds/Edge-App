@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic-settings==2.7.1
+sqlalchemy==2.0.36
+alembic==1.14.0
+apscheduler==3.10.4
+httpx==0.28.1
+pywebview==5.4
+pandas>=2.2
+pyarrow>=16.0
+scikit-learn>=1.4
+beautifulsoup4>=4.12
+openpyxl>=3.1
+xlrd>=2.0.1

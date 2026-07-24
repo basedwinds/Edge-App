@@ -1,0 +1,300 @@
+import logging
+from datetime import datetime, timedelta
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from app.db.database import SessionLocal
+from app.ingestion.catalog_scan import scan_catalog
+from app.ingestion.poller import run_full_refresh
+from app.ingestion.poller_nba import run_full_refresh_nba
+from app.ingestion.poller_mlb import run_full_refresh_mlb
+from app.ingestion.poller_tennis import run_full_refresh_tennis
+from app.ingestion.poller_mma import run_full_refresh_mma
+from app.ingestion.poller_soccer import run_full_refresh_soccer
+from app.ingestion.poller_valorant import run_full_refresh_valorant
+from app.ingestion.poller_cs2 import run_full_refresh_cs2
+from app.ingestion.poller_lol import run_full_refresh_lol
+from app.ingestion.poller_racing import run_full_refresh_racing
+from app.ingestion.poller_lock import serialized
+from app.models.dead_market_sanity_check import run_dead_market_sanity_check
+from app.models.snapshot_maintenance import prune_market_snapshots
+from app.models.tennis_surface_backfill import run_tennis_surface_backfill
+
+log = logging.getLogger("scheduler")
+
+scheduler = BackgroundScheduler()
+
+
+def run_sanity_check():
+    """Catches the "dead/decided market shown as live" bug class (see
+    dead_market_sanity_check.py's own docstring) -- runs after the price
+    pollers so it's checking freshly-refreshed data, not stale rows from
+    before this tick. Only logs; never raises out to the scheduler."""
+    try:
+        run_dead_market_sanity_check()
+    except Exception:
+        log.exception("dead-market sanity check crashed")
+
+
+def run_surface_backfill():
+    """Real surface (tennisexplorer.com) doesn't change once a tournament
+    starts, so once/day is plenty -- same cadence reasoning as
+    run_catalog_scan, not the 5-minute price pollers. Only logs/commits;
+    never raises out to the scheduler (see tennis_surface_backfill.py's own
+    docstring for what this actually does and its known partial-coverage
+    limitation)."""
+    try:
+        run_tennis_surface_backfill()
+    except Exception:
+        log.exception("tennis surface backfill crashed")
+
+
+_WARM_PATHS = [
+    "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
+    "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets", "/lol/markets",
+    "/racing/markets",
+    "/markets/cross-platform-divergences",
+    # Futures endpoints that run a real model (tennis draw sim, esports
+    # tournament Monte Carlo, team-sport season sims) -- warmed too so a
+    # cold-Elo compute right after restart never gets cached and served stale
+    # (the exact class of bug the startup Elo warm + this warmer exist to kill),
+    # and so their heavier recompute stays off the user's request path.
+    "/markets/futures", "/nba/futures", "/mlb/futures", "/tennis/futures",
+    "/soccer/futures", "/valorant/futures", "/cs2/futures",
+]
+
+
+def run_cache_warm():
+    """Keeps the response cache (response_cache.py) warm by recomputing each
+    heavy list endpoint off the request path, so real user requests -- the
+    combined /all page fires ~10 at once -- always hit a fresh cached copy
+    instead of a 5-31s recompute that contends with the pollers. Self-HTTPs
+    the running server with the refresh header so even a still-fresh entry gets
+    replaced (the cache never ages out under a user). Only logs; never raises."""
+    import httpx
+
+    from app.api.response_cache import REFRESH_HEADER
+
+    try:
+        with httpx.Client(timeout=90.0) as client:
+            for path in _WARM_PATHS:
+                try:
+                    client.get(f"http://127.0.0.1:8756{path}", headers={REFRESH_HEADER: "1"})
+                except Exception:
+                    pass  # a slow/failing endpoint shouldn't stop warming the rest
+    except Exception:
+        log.exception("cache warm failed")
+
+
+def run_paper_log_job():
+    """Auto-log the app's current recommendations as paper bets so forward CLV
+    accrues (see paper_logger.py). Only logs; never raises out to the
+    scheduler. Self-HTTP + a quick DB write, like the cache warmer."""
+    try:
+        from app.models.paper_logger import run_paper_log
+        run_paper_log()
+    except Exception:
+        log.exception("paper log job crashed")
+
+
+def run_snapshot_prune():
+    """Daily -- caps MarketSnapshot growth (see snapshot_maintenance.py). Keeps
+    the last 14 days + each market's latest; only logs, never raises."""
+    session = SessionLocal()
+    try:
+        prune_market_snapshots(session)
+    except Exception:
+        log.exception("snapshot prune failed")
+    finally:
+        session.close()
+
+
+def run_catalog_scan():
+    """Daily, not every-5-min like run_full_refresh -- this hits Kalshi's
+    full /series?category=Sports and Polymarket's full NFL event list
+    (hundreds of items), unlike the targeted per-series calls the 5-minute
+    price refresh makes, so it doesn't need to run nearly as often."""
+    session = SessionLocal()
+    try:
+        scan_catalog(session)
+    except Exception:
+        log.exception("catalog scan failed")
+    finally:
+        session.close()
+
+
+#  Same next_run_time for every 5-minute job meant all five pollers (plus
+# run_catalog_scan's own daily tick, whenever it happens to land near one)
+# hit the same SQLite file at once on every recurring tick, not just at
+# startup -- reproduced "database is locked" errors that killed poller
+# threads mid-refresh even with WAL mode + a busy_timeout configured
+# (2026-07-18). IntervalTrigger just adds the interval to the previous
+# run time, so staggering the *first* next_run_time keeps every later tick
+# staggered too, not just the first one. Kept even after the 2026-07-20
+# poller_lock.py fix (whole-function serialized() removed from the 9
+# sports' own jobs below) purely to avoid every sport hammering its own
+# external API at the exact same instant -- no longer needed to prevent DB
+# contention, that's poller_lock.py::db_write_lock's job now.
+JOB_STAGGER_SECONDS = 20
+
+
+def start():
+    # next_run_time is set to now+interval, not None: passing None tells APScheduler to
+    # add the job paused (per its add_job docstring), which means it never fires again on
+    # its own. The explicit startup thread in main.py handles the first run of each poller.
+    base_tick = datetime.now() + timedelta(minutes=5)
+    scheduler.add_job(
+        run_full_refresh,
+        "interval",
+        minutes=5,
+        id="full_refresh",
+        next_run_time=base_tick,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_nba,
+        "interval",
+        minutes=5,
+        id="full_refresh_nba",
+        next_run_time=base_tick + timedelta(seconds=JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_mlb,
+        "interval",
+        minutes=5,
+        id="full_refresh_mlb",
+        next_run_time=base_tick + timedelta(seconds=2 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_tennis,
+        "interval",
+        minutes=5,
+        id="full_refresh_tennis",
+        next_run_time=base_tick + timedelta(seconds=3 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_mma,
+        "interval",
+        minutes=5,
+        id="full_refresh_mma",
+        next_run_time=base_tick + timedelta(seconds=4 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_soccer,
+        "interval",
+        minutes=5,
+        id="full_refresh_soccer",
+        next_run_time=base_tick + timedelta(seconds=5 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_valorant,
+        "interval",
+        minutes=5,
+        id="full_refresh_valorant",
+        next_run_time=base_tick + timedelta(seconds=6 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_cs2,
+        "interval",
+        minutes=5,
+        id="full_refresh_cs2",
+        next_run_time=base_tick + timedelta(seconds=7 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # LoL's own Leaguepedia Cargo API applies a real rate limit to anonymous
+    # requests (confirmed live 2026-07-19 -- see lol_data.py's own
+    # docstring), stricter than every other sport's free data source here.
+    # Sharing the same 5-minute cadence as everything else risks tripping
+    # that limit on every single tick -- given 5 was already the standing
+    # default for every sport in this app and no live evidence yet shows
+    # whether 5 minutes alone is too fast, this stays at 5 for now with the
+    # rate limit's own graceful failure handling (poller_lol.py::
+    # refresh_lol_matches) as the real safety net; revisit with a longer
+    # LoL-specific interval if production polling shows it tripping often.
+    scheduler.add_job(
+        run_full_refresh_lol,
+        "interval",
+        minutes=5,
+        id="full_refresh_lol",
+        next_run_time=base_tick + timedelta(seconds=8 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_full_refresh_racing,
+        "interval",
+        minutes=5,
+        id="full_refresh_racing",
+        next_run_time=base_tick + timedelta(seconds=9 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        serialized(run_catalog_scan),
+        "interval",
+        hours=24,
+        id="catalog_scan",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        serialized(run_snapshot_prune),
+        "interval",
+        hours=24,
+        id="snapshot_prune",
+        replace_existing=True,
+    )
+    # Keep the response cache warm (see run_cache_warm). Every 200s < the 300s
+    # cache TTL, so entries never expire under a user. NOT serialized -- it's
+    # read-only self-HTTP, no DB write lock needed -- and staggered to start
+    # after the first poll cycle has populated markets.
+    scheduler.add_job(
+        run_cache_warm,
+        "interval",
+        seconds=200,
+        id="cache_warm",
+        next_run_time=base_tick + timedelta(seconds=11 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # Auto paper-trading logger (see paper_logger.py) -- snapshots the current
+    # recommendations as paper bets so forward CLV accrues. Every 3h is plenty:
+    # it dedupes per market and only needs to catch a market once before its
+    # game. Staggered well after startup so pricing + Elo are warm first. Not
+    # serialized() here -- it takes db_write_lock() itself only around its quick
+    # write, after the (network) self-HTTP, same pattern as the pollers.
+    scheduler.add_job(
+        run_paper_log_job,
+        "interval",
+        hours=3,
+        id="paper_log",
+        next_run_time=base_tick + timedelta(seconds=13 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # Runs every 10 minutes (not every 5, like the price pollers -- this is a
+    # detection aid, not something that needs to react within one poll cycle)
+    # staggered to start after every sport's first refresh has had a chance
+    # to land, so the very first run isn't checking empty/half-refreshed data.
+    scheduler.add_job(
+        serialized(run_sanity_check),
+        "interval",
+        minutes=10,
+        id="dead_market_sanity_check",
+        next_run_time=base_tick + timedelta(seconds=9 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        serialized(run_surface_backfill),
+        "interval",
+        hours=24,
+        id="tennis_surface_backfill",
+        next_run_time=base_tick + timedelta(seconds=10 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    scheduler.start()
+
+
+def stop():
+    scheduler.shutdown(wait=False)
