@@ -2016,6 +2016,8 @@ export interface OpenBetPayload {
   placed_at: string;
   start_time: string | null;
   start_date: string | null;
+  original_start_time: string | null;
+  rescheduled: boolean;
   clv_status: "closed" | "pending" | "unavailable" | "not_applicable";
 }
 

@@ -15,6 +15,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   no_market_price: "No market price",
   no_schedule: "No games scheduled",
   race_date_mismatch: "Wrong race date",
+  missing_platform: "Missing platform",
 };
 
 const SEV = {

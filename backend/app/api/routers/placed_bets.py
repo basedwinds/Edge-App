@@ -267,6 +267,8 @@ class OpenBetOut(BaseModel):
     placed_at: str
     start_time: str | None      # UTC ISO, None if unknown / no single start
     start_date: str | None = None  # YYYY-MM-DD fallback (MMA fights carry an event date even when the exact time is unknown)
+    original_start_time: str | None = None  # scheduled start at placement, for reschedule detection
+    rescheduled: bool = False   # current start is materially later than at placement (delayed/postponed to a new time)
     clv_status: str
 
 
@@ -644,6 +646,16 @@ def get_open_bets(session: Session = Depends(get_session)):
                         start_dt = datetime.datetime.fromisoformat(fight.estimated_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
                     except (ValueError, AttributeError):
                         start_dt = None
+        # Reschedule: the live start is materially later than where it stood at
+        # placement -> the game was delayed/postponed to a new time. >3h guards
+        # against minor order-of-play drift being flagged as a reschedule.
+        rescheduled = False
+        if r.original_start_time and start_dt is not None:
+            try:
+                orig = datetime.datetime.fromisoformat(r.original_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
+                rescheduled = (start_dt - orig).total_seconds() > 3 * 3600
+            except (ValueError, AttributeError):
+                rescheduled = False
         clv = compute_bet_clv(session, r)
         # These datetimes are naive UTC (the CLV module works in UTC); emit an
         # explicit 'Z' so the browser parses them as UTC, not local time -- else
@@ -659,6 +671,8 @@ def get_open_bets(session: Session = Depends(get_session)):
             placed_at=r.placed_at.isoformat() + "Z",
             start_time=(start_dt.isoformat() + "Z") if start_dt else None,
             start_date=start_date,
+            original_start_time=r.original_start_time,
+            rescheduled=rescheduled,
             clv_status=clv["status"],
         )))
     # soonest first; unknown-start (None) last, then by placed_at desc within that
@@ -734,10 +748,42 @@ def get_clv_buckets(session: Session = Depends(get_session)):
     return bucket_report(session)
 
 
+def _resolve_bet_start(session: Session, bet: PlacedBet) -> tuple["datetime.datetime | None", str | None]:
+    """(start_datetime, start_date) for a bet's game/match, MMA-aware. Shared by
+    /open and placement (which snapshots it as original_start_time)."""
+    from app.models.clv import _get_game, _game_kickoff_dt
+    from app.db.models import MmaFight
+
+    start_dt = None
+    start_date = None
+    try:
+        game = _get_game(session, bet)
+        if game is not None:
+            start_dt = _game_kickoff_dt(game)
+    except Exception:
+        start_dt = None
+    if bet.sport == "mma" and bet.mma_fight_id:
+        fight = session.get(MmaFight, bet.mma_fight_id)
+        if fight is not None:
+            start_date = fight.event_date
+            if start_dt is None and fight.estimated_start_time:
+                try:
+                    start_dt = datetime.datetime.fromisoformat(fight.estimated_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
+                except (ValueError, AttributeError):
+                    start_dt = None
+    return start_dt, start_date
+
+
 @router.post("", response_model=PlacedBetOut)
 def create_placed_bet(body: PlacedBetIn, session: Session = Depends(get_session)):
     row = PlacedBet(**body.model_dump())
     session.add(row)
+    session.flush()
+    # Snapshot the game's scheduled start now, so a later reschedule (start moves
+    # to a different day) is detectable in /open.
+    start_dt, _ = _resolve_bet_start(session, row)
+    if start_dt is not None:
+        row.original_start_time = start_dt.isoformat() + "Z"
     session.commit()
     session.refresh(row)
     return _to_out(session, row)

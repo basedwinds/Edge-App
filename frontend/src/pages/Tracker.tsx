@@ -185,6 +185,11 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
             return (
               <tr key={b.id} className="hover:bg-[var(--color-surface)]">
                 <td className={`px-3 py-2 whitespace-nowrap ${startColor}`}>
+                  {b.rescheduled && (
+                    <div className="text-[10px] font-medium text-[var(--color-warning)] mb-0.5" title={b.original_start_time ? `Was scheduled for ${startAbsolute(b.original_start_time)}` : "Moved to a later time"}>
+                      ⟳ rescheduled
+                    </div>
+                  )}
                   {b.start_time ? (
                     <>
                       <div>{s.text}</div>

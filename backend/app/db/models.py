@@ -657,6 +657,12 @@ class PlacedBet(Base):
     # but are EXCLUDED from real-money views (/locked portfolio budget, /stats
     # ROI). Default False so every existing/real bet is unaffected.
     paper = Column(Boolean, nullable=False, default=False)
+    # The game/match start time as it stood WHEN THIS BET WAS PLACED. Compared
+    # against the live-resolved start in /open to detect a reschedule (the game
+    # moved to a later time/day) -- so the tracker can show the new date AND keep
+    # it flagged as delayed/rescheduled. Nullable: legacy bets + markets with no
+    # single start (auto-migrated additively, see _add_missing_columns).
+    original_start_time = Column(String, nullable=True)  # ISO UTC
 
 
 class RaceEvent(Base):

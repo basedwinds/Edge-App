@@ -122,6 +122,28 @@ def health_check(session: Session = Depends(get_session)):
             _issue(issues, "info", "no_schedule", sport,
                    "No active markets — off-season, between events, or on break.")
 
+    # 4b) Platform coverage: every sport should be checked on BOTH Kalshi AND
+    #     Polymarket. Flag any sport missing a platform that DOES list it, so a
+    #     whole-source gap surfaces continuously (this is how racing sat unpriced
+    #     — Kalshi-only — and how CS2/LoL/WNBA are missing Polymarket right now).
+    src_by_sport: dict[str, set[str]] = {}
+    for sp, source in (session.query(Market.sport, Market.source)
+                       .filter(Market.status == "active").distinct().all()):
+        src_by_sport.setdefault(sp, set()).add(source)
+    # Platforms confirmed to list each sport (probed 2026-07-24). IndyCar has no
+    # Polymarket tag; every other tracked sport is on both platforms.
+    POLYMARKET_SPORTS = {"nfl", "nba", "wnba", "mlb", "mma", "tennis", "soccer", "cs2", "lol", "valorant", "f1", "nascar"}
+    for sport in KNOWN:
+        if active.get(sport, 0) == 0:
+            continue  # empty sports already flagged by no_schedule above
+        srcs = src_by_sport.get(sport, set())
+        if sport in POLYMARKET_SPORTS and "polymarket" not in srcs:
+            _issue(issues, "warning", "missing_platform", sport,
+                   "Polymarket lists this sport but we ingest none of it — a whole platform's prices/edges/CLV are missing (add a Polymarket client, like racing got).")
+        if "kalshi" not in srcs:
+            _issue(issues, "warning", "missing_platform", sport,
+                   "No Kalshi markets ingested — Kalshi may list this sport; check the feed.")
+
     # 5) Racing date sanity: RaceEvent.start_time vs ESPN's real calendar date.
     #    This is the check that guards the exact bug where a race showed weeks off.
     try:
