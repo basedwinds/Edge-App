@@ -43,17 +43,85 @@ def _norm_start(raw) -> str | None:
     return t
 
 
-def _market_type_for(event_title: str) -> str | None:
-    """race_winner / pole from the event title; None for season futures
-    (Champion/Constructor) and anything we don't model."""
+def _classify(event_title: str) -> "tuple[str | None, int | None]":
+    """(market_type, line) from a per-race event title. None -> not modelled:
+      * champion    -> season futures (fetch_polymarket_racing_futures)
+      * fastest lap -> near-random (late free-stop on fresh tyres), skip
+      * practice    -> low signal (sandbagging / tyre programmes), skip
+      * scores 1st  -> a constructor combined-points question we don't model yet
+    Modelled: podium->top_n(3), head-to-head->h2h, constructor pole, pole, winner."""
     t = event_title.lower()
-    if "champion" in t or "constructor" in t:
-        return None
+    if "champion" in t:
+        return None, None
+    if "fastest lap" in t or "practice" in t:
+        return None, None
+    if "scores 1st" in t or "scores first" in t:
+        return None, None
+    if "podium" in t:
+        return "top_n", 3
+    if "head-to-head" in t or "head to head" in t:
+        return "h2h", None
+    if "constructor" in t and "pole" in t:
+        return "constructor_pole", None
     if "pole" in t:
-        return "pole"
+        return "pole", None
     if "winner" in t:
-        return "race_winner"
+        return "race_winner", None
+    return None, None
+
+
+def _futures_type_for(event_title: str) -> str | None:
+    """drivers_champion / constructors_champion from a season-title event."""
+    t = event_title.lower()
+    if "champion" not in t:
+        return None
+    if "constructor" in t:
+        return "constructors_champion"
+    if "driver" in t:
+        return "drivers_champion"
     return None
+
+
+def fetch_polymarket_racing_futures() -> list[dict]:
+    """One row per (season-title event, driver/constructor) for the Drivers'/
+    Constructors' Champion markets. Same row shape as fetch_polymarket_racing so
+    market_catalog_racing persists it uniformly; priced by the championship sim,
+    not racing_sim. F1 only (cumulative-points title); NASCAR's playoff title
+    isn't a points question so it's left unpriced."""
+    out: list[dict] = []
+    try:
+        events = _events("f1")
+    except Exception:
+        log.exception("polymarket f1 futures fetch failed")
+        return out
+    for e in events:
+        ftype = _futures_type_for(e.get("title", ""))
+        if not ftype:
+            continue
+        for m in e.get("markets", []):
+            name = (m.get("groupItemTitle") or "").strip()  # driver or constructor
+            if not name:
+                continue
+            p = extract_market_prices(m)
+            if p["outcomes"] != ["Yes", "No"] or not p["outcome_prices"]:
+                continue
+            out.append({
+                "series": "f1",
+                "market_type": ftype,
+                "line": None,
+                "driver": name,  # constructor name for constructors_champion
+                "event_ticker": e.get("slug", ""),
+                "event_title": e.get("title", ""),
+                "ticker": p["condition_id"] or m.get("slug"),
+                "close_time": _norm_start(m.get("gameStartTime")),
+                "status": "closed" if (m.get("closed") or not m.get("active", True)) else "active",
+                "last_price": p["outcome_prices"][0],  # P(Yes) = P(champion), 0-1
+                "yes_bid": None,
+                "yes_ask": None,
+                "volume": p["volume"],
+                "source": "polymarket",
+            })
+    return out
 
 
 def fetch_polymarket_racing() -> list[dict]:
@@ -68,27 +136,40 @@ def fetch_polymarket_racing() -> list[dict]:
             log.exception("polymarket racing fetch failed for tag %s", tag)
             continue
         for e in events:
-            mtype = _market_type_for(e.get("title", ""))
+            mtype, line = _classify(e.get("title", ""))
             if not mtype:
                 continue
             for m in e.get("markets", []):
-                driver = (m.get("groupItemTitle") or "").strip()
-                if not driver:
+                git = (m.get("groupItemTitle") or "").strip()
+                if not git:
                     continue
                 p = extract_market_prices(m)
-                if p["outcomes"] != ["Yes", "No"] or not p["outcome_prices"]:
+                if not p["outcome_prices"]:
                     continue
+                driver = git  # driver / constructor label
+                if mtype == "h2h":
+                    # 2-way market: outcomes ARE the two driver surnames. Build the
+                    # "A vs B" label FROM outcomes order (Polymarket's outcomes are
+                    # NOT always in groupItemTitle order) so last_price = P(A) stays
+                    # aligned with the first-named driver -- otherwise the model
+                    # prices the wrong side and every h2h shows a phantom ~20pp edge.
+                    outs = p["outcomes"]
+                    if len(outs) != 2 or len(p["outcome_prices"]) != 2:
+                        continue
+                    driver = f"{outs[0]} vs {outs[1]}"
+                elif p["outcomes"] != ["Yes", "No"]:
+                    continue  # per-driver/constructor Yes/No markets only
                 out.append({
                     "series": series,
                     "market_type": mtype,
-                    "line": None,
-                    "driver": driver,
+                    "line": line,
+                    "driver": driver,  # driver / constructor / "A vs B" for h2h
                     "event_ticker": e.get("slug", ""),
                     "event_title": e.get("title", ""),
                     "ticker": p["condition_id"] or m.get("slug"),
                     "close_time": _norm_start(m.get("gameStartTime")),
                     "status": "closed" if (m.get("closed") or not m.get("active", True)) else "active",
-                    "last_price": p["outcome_prices"][0],  # P(Yes) = P(driver wins/poles), 0-1
+                    "last_price": p["outcome_prices"][0],  # P(Yes) / P(first driver higher)
                     "yes_bid": None,
                     "yes_ask": None,
                     "volume": p["volume"],

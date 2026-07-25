@@ -71,7 +71,7 @@ export interface RacingMarketRow {
   source: "kalshi" | "polymarket";
   race_event_id: number | null;
   event: string | null;
-  market_type: "race_winner" | "top_n" | "pole";
+  market_type: "race_winner" | "top_n" | "pole" | "h2h" | "constructor_pole" | "drivers_champion" | "constructors_champion";
   line: number | null;
   driver: string;
   implied_prob: number | null;
@@ -145,13 +145,41 @@ export interface ClvBucketRow {
   sport: string;
   market_type: string;
   n: number;
+  median_clv_pp: number;
   avg_clv_pp: number;
+  n_contaminated: number;
   enabled: boolean;
   status: string;
 }
 
 export async function fetchClvBuckets(): Promise<ClvBucketRow[]> {
   return apiGet<ClvBucketRow[]>("/placed-bets/clv-buckets");
+}
+
+export interface ClvSliceRow {
+  band?: string;
+  tier?: string;
+  n: number;
+  median_clv_pp: number;
+  mean_clv_pp: number;
+}
+export interface ClvConditional {
+  by_edge_band: ClvSliceRow[];
+  by_tennis_tier: ClvSliceRow[];
+}
+export async function fetchClvConditional(): Promise<ClvConditional> {
+  return apiGet<ClvConditional>("/placed-bets/clv-conditional");
+}
+
+export interface AlertConfig {
+  webhook_configured: boolean;
+  min_edge_pp: number;
+}
+export async function fetchAlertConfig(): Promise<AlertConfig> {
+  return apiGet<AlertConfig>("/settings/alerts");
+}
+export async function updateAlertConfig(body: { webhook_url?: string; min_edge_pp?: number }): Promise<AlertConfig> {
+  return apiPut<AlertConfig>("/settings/alerts", body);
 }
 
 export interface PaperSummary {
@@ -284,6 +312,7 @@ export interface SettingsPayload {
   lol_pool_dollars: number;
   lol_futures_pool_dollars: number;
   lol_weekly_pool_dollars: number;
+  racing_weekly_pool_dollars: number;
 }
 
 export async function fetchSettings(): Promise<SettingsPayload> {
@@ -429,7 +458,7 @@ export interface RecommendedBetRow {
    * settings.py::VALORANT_ALLOCATION_PCT_KEY), same as every other sport.
    * Threaded through to markBetPlaced so it knows which game-id field to
    * send. */
-  sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
+  sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" | "f1" | "nascar" | "irl";
   nbaGameId: string | null;
   /** Optional so only the WNBA builder sets it -- every other sport's builder
    * omits it (undefined), avoiding a churn edit across all ~9 builders. */
@@ -441,6 +470,9 @@ export interface RecommendedBetRow {
   valorantMatchId: number | null;
   cs2MatchId: number | null;
   lolMatchId: number | null;
+  /** Racing (f1/nascar/irl) only -- links the placed bet to its RaceEvent for
+   * start-time + CLV. Optional so the other builders don't set it. */
+  raceEventId?: number | null;
   /** Identifies the underlying real-world proposition, independent of which
    * platform or which threshold rung priced it -- see buildRecommendedBets. */
   groupKey: string;
@@ -1858,6 +1890,66 @@ export function buildLolRecommendedBets(
   );
 }
 
+const RACING_MT_LABEL: Record<string, string> = {
+  race_winner: "Race Winner", pole: "Pole Position", top_n: "Top-N Finish",
+  h2h: "Head-to-Head", constructor_pole: "Constructor Pole",
+};
+
+/** Racing (f1/nascar/irl) rows arrive already priced + staked off the racing
+ * pool by the backend, so this adapter only does what the cross-sport view
+ * needs: keep PER-RACE markets (champion futures belong on the Futures page),
+ * cap to one bet per race event, apply the same 60%-of-pool portfolio ceiling
+ * as every other sport, and map to RecommendedBetRow so racing finally shows up
+ * in the cross-sport Recommended / All Bets list. */
+export function buildRacingRecommendedBets(
+  markets: RacingMarketRow[],
+  weeklyPoolDollars: number,
+  lockedWeeklyDollars = 0
+): RecommendedBetsResult {
+  const CHAMP = new Set(["drivers_champion", "constructors_champion"]);
+  const staked = markets.filter(
+    (m) => !CHAMP.has(m.market_type) && (m.suggested_stake_dollars ?? 0) > 0 && m.model_prob != null && m.edge != null
+  );
+  const rawCandidateCount = staked.length;
+
+  const byStake = (a: RacingMarketRow, b: RacingMarketRow) => (b.suggested_stake_dollars ?? 0) - (a.suggested_stake_dollars ?? 0);
+  const bestByEvent = new Map<string, RacingMarketRow>();
+  for (const m of [...staked].sort(byStake)) {
+    const key = `${m.series}|${m.race_event_id ?? m.event ?? ""}`;
+    if (!bestByEvent.has(key)) bestByEvent.set(key, m); // one bet per race event
+  }
+  const deduped = [...bestByEvent.values()];
+  const collapsedCount = rawCandidateCount - deduped.length;
+
+  const ceiling = Math.max(0, weeklyPoolDollars * PORTFOLIO_CEILING_PCT - lockedWeeklyDollars);
+  const rows: RecommendedBetRow[] = [];
+  let running = 0;
+  let cutByPortfolioCapCount = 0;
+  for (const m of deduped.sort(byStake)) {
+    const stake = m.suggested_stake_dollars ?? 0;
+    if (running + stake > ceiling && rows.length > 0) { cutByPortfolioCapCount++; continue; }
+    running += stake;
+    rows.push({
+      key: `racing-${m.id}`, marketId: m.id,
+      label: `${m.driver} — ${RACING_MT_LABEL[m.market_type] ?? m.market_type}`,
+      marketType: m.market_type, team: m.driver, line: m.line, side: null,
+      gameday: m.close_time ? m.close_time.slice(0, 10) : null, gametime: null,
+      estimatedStartTime: m.close_time ?? null,
+      source: m.source, impliedProb: m.implied_prob, estProb: m.model_prob, edge: m.edge,
+      lineMovePp: null, kellyFraction: m.kelly_fraction ?? 0,
+      suggestedStakeDollars: stake, suggestedStakeUnits: m.suggested_stake_units ?? null,
+      stakePool: "weekly", volume: m.volume,
+      nflGameId: null, sport: m.series, nbaGameId: null, mlbGameId: null,
+      mmaFightId: null, tennisMatchId: null, soccerMatchId: null,
+      valorantMatchId: null, cs2MatchId: null, lolMatchId: null,
+      raceEventId: m.race_event_id,
+      groupKey: `racing|${m.series}|${m.market_type}|${m.driver}`,
+      waitReason: null,
+    });
+  }
+  return { rows, rawCandidateCount, collapsedCount, cutByPortfolioCapCount };
+}
+
 /** Collapses each game's two per-team moneyline rows (one binary market per
  * team side, per source) into a single home-team-perspective row -- cleaner
  * to read as a table, same as how a sportsbook shows one moneyline per game. */
@@ -2153,6 +2245,7 @@ export async function markBetPlaced(row: RecommendedBetRow): Promise<PlacedBetPa
     valorant_match_id: row.valorantMatchId,
     cs2_match_id: row.cs2MatchId,
     lol_match_id: row.lolMatchId,
+    race_event_id: row.raceEventId ?? null,
     stake_pool: row.stakePool,
     stake_dollars: row.suggestedStakeDollars,
     stake_units: row.suggestedStakeUnits,

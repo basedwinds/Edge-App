@@ -43,8 +43,25 @@ def _final_score_str(game) -> str | None:
         return f"{getattr(game, 'home_team', '?')} {rft} {getattr(game, 'away_team', '?')}"
     if getattr(game, "winner_key", None) is not None:  # tennis
         winner = game.player_a_name if game.winner_key == game.player_a_key else game.player_b_name
+        loser = game.player_b_name if game.winner_key == game.player_a_key else game.player_a_name
         sc = getattr(game, "score", None)
-        return f"{winner} def. opp{f' ({sc})' if sc else ''}"
+        return f"{winner} def. {loser}{f' {sc}' if sc else ''}"
+    if getattr(game, "winner_id", None) is not None:  # MMA
+        w = game.fighter_a_name if game.winner_id == game.fighter_a_id else game.fighter_b_name
+        method = getattr(game, "method", None)
+        rd = getattr(game, "round", None)
+        return f"{w} def. by {method or 'decision'}{f' (R{rd})' if rd else ''}"
+    rj = getattr(game, "result_json", None)  # racing
+    if rj:
+        try:
+            import json
+            from app.models.baseline import racing_ratings
+            order = (json.loads(rj) or {}).get("order") or []
+            if order:
+                name = racing_ratings._series_state(getattr(game, "series", "f1")).get("id_to_name", {}).get(order[0], order[0])
+                return f"Winner: {name}"
+        except Exception:
+            return None
     return None
 
 
@@ -647,14 +664,18 @@ def get_open_bets(session: Session = Depends(get_session)):
                         start_dt = datetime.datetime.fromisoformat(fight.estimated_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
                     except (ValueError, AttributeError):
                         start_dt = None
-        # Reschedule: the live start is materially later than where it stood at
-        # placement -> the game was delayed/postponed to a new time. >3h guards
-        # against minor order-of-play drift being flagged as a reschedule.
+        # Reschedule = the match moved to a DIFFERENT CALENDAR DAY vs placement
+        # (a genuine postponement). The old ">3h later" rule false-fired
+        # constantly on soft, same-day start ESTIMATES that just drift as the day
+        # firms up -- tennis order-of-play especially (e.g. an "02:00" estimate
+        # sliding to "08:00" is not a reschedule, just the estimate updating).
+        # Same-day lateness is handled by the "delayed?" label + sort, not this
+        # badge.
         rescheduled = False
         if r.original_start_time and start_dt is not None:
             try:
                 orig = datetime.datetime.fromisoformat(r.original_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
-                rescheduled = (start_dt - orig).total_seconds() > 3 * 3600
+                rescheduled = start_dt.date() != orig.date() and start_dt > orig
             except (ValueError, AttributeError):
                 rescheduled = False
         clv = compute_bet_clv(session, r)
@@ -676,8 +697,25 @@ def get_open_bets(session: Session = Depends(get_session)):
             rescheduled=rescheduled,
             clv_status=clv["status"],
         )))
-    # soonest first; unknown-start (None) last, then by placed_at desc within that
-    out.sort(key=lambda t: (t[0] is None, t[0] or datetime.datetime.max))
+    # Ordering: UPCOMING first (soonest start at top -- the actionable ones),
+    # then genuinely-DELAYED bets (start already >4h past but still pending --
+    # waiting on a result/settlement, not actionable) pushed BELOW them, then
+    # no-start futures last. A bet rescheduled to a NEW future time carries that
+    # new time as start_dt, so it lands back among the upcoming bets in its new
+    # slot instead of clinging to the top as "delayed" (per the tracker's own
+    # start-time display + reschedule badge).
+    now = datetime.datetime.utcnow()
+
+    def _sort_key(t):
+        dt = t[0]
+        if dt is None:
+            return (2, 0.0)
+        ts = dt.timestamp()
+        if (now - dt).total_seconds() > 4 * 3600:
+            return (1, -ts)  # delayed/overdue: below upcoming, most-recent first
+        return (0, ts)       # upcoming (or just-started): soonest first
+
+    out.sort(key=_sort_key)
     return [o for _, o in out]
 
 
@@ -694,12 +732,14 @@ def get_settled_bets(session: Session = Depends(get_session)):
     def _key(r: PlacedBet):
         return r.settled_at or r.placed_at or datetime.datetime.min
     rows.sort(key=_key, reverse=True)
-    from app.models.clv import _get_game
+    # bet_settlement._get_game links EVERY sport (incl. MMA + racing), unlike
+    # clv._get_game which excludes MMA -- so final scores resolve for all sports.
+    from app.models.bet_settlement import _get_game as _settle_get_game
     out: list[SettledBetOut] = []
     for r in rows:
         clv = compute_bet_clv(session, r)
         try:
-            final_score = _final_score_str(_get_game(session, r))
+            final_score = _final_score_str(_settle_get_game(session, r))
         except Exception:
             final_score = None
         out.append(SettledBetOut(
@@ -747,6 +787,14 @@ def get_clv_buckets(session: Session = Depends(get_session)):
     clv_selection.py). Cross-sport."""
     from app.models.clv_selection import bucket_report
     return bucket_report(session)
+
+
+@router.get("/clv-conditional")
+def get_clv_conditional(session: Session = Depends(get_session)):
+    """Pre-registered conditional-CLV slices (edge-magnitude, tennis tier) -- the
+    'is the edge hiding in a subset?' view. See clv_selection.conditional_clv_report."""
+    from app.models.clv_selection import conditional_clv_report
+    return conditional_clv_report(session)
 
 
 def _resolve_bet_start(session: Session, bet: PlacedBet) -> tuple["datetime.datetime | None", str | None]:

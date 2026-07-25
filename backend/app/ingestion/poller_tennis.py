@@ -184,8 +184,32 @@ def refresh_polymarket_tennis_markets():
             session.close()
 
 
+def refresh_tennis_results():
+    """Backfill final winner+score onto finished TennisMatch rows so tennis bets
+    can auto-settle. Network fetch (multiple flaky tennisexplorer requests) runs
+    BEFORE the write lock; only the short apply/commit takes it."""
+    from app.ingestion.tennis_results import fetch_results_index, apply_results_index
+    try:
+        session = SessionLocal()
+        try:
+            index = fetch_results_index(session)  # reads + network, no write lock
+        finally:
+            session.close()
+        if not index:
+            return
+        with db_write_lock():
+            session = SessionLocal()
+            try:
+                apply_results_index(session, index)
+            finally:
+                session.close()
+    except Exception:
+        log.exception("tennis results backfill failed")
+
+
 def run_full_refresh_tennis():
     refresh_tennis_ratings()
     refresh_kalshi_tennis_markets()
     refresh_polymarket_tennis_markets()
     refresh_kalshi_tennis_futures()
+    refresh_tennis_results()

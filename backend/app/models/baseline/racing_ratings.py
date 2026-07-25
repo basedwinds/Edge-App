@@ -130,6 +130,25 @@ def resolve_driver_id(series: str, name: str) -> str | None:
     return _series_state(series)["name_to_id"].get(_norm(name))
 
 
+def resolve_driver_loose(series: str, name: str) -> str | None:
+    """Like resolve_driver_id but also matches a SURNAME-only label (Polymarket's
+    head-to-head markets use "Colapinto vs Gasly"). Surname matching is scoped to
+    drivers active THIS season (current_constructor keys) so historical namesakes
+    (Jos vs Max Verstappen, Michael vs Mick Schumacher) don't collide; an
+    ambiguous or unknown surname returns None (left unpriced, never guessed)."""
+    exact = resolve_driver_id(series, name)
+    if exact:
+        return exact
+    st = _series_state(series)
+    id_to_name = st.get("id_to_name", {})
+    target = _norm(name)
+    matches = [
+        i for i in st.get("current_constructor", {})
+        if id_to_name.get(i) and _norm(id_to_name[i].split()[-1]) == target
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def strength(series: str, driver_id: str, constructor: str | None, grid: int | None) -> float | None:
     """Validated blend for the sim. grid=None -> no grid term (pre-qualifying).
     None if the driver has no rating (unknown entrant -> left unpriced)."""

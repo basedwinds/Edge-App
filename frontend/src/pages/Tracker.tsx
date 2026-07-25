@@ -207,7 +207,7 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">{b.label}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
-                    {b.market_type}{b.team ? ` · ${b.team}` : ""}{b.side ? ` ${b.side}` : ""}{b.line != null ? ` ${b.line}` : ""}
+                    {b.market_type}{b.team ? ` · ${b.team}` : ""}{b.side ? ` ${b.side}` : ""}{b.line != null ? (b.market_type === "map_winner" ? ` · Map ${b.line}` : ` ${b.line}`) : ""}
                   </div>
                 </td>
                 <td className="px-3 py-2">
@@ -281,7 +281,7 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">{b.label}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
-                    {b.market_type}{b.team ? ` · ${b.team}` : ""}{b.side ? ` ${b.side}` : ""}{b.line != null ? ` ${b.line}` : ""}{b.stake_pool === "futures" ? " · futures" : ""}
+                    {b.market_type}{b.team ? ` · ${b.team}` : ""}{b.side ? ` ${b.side}` : ""}{b.line != null ? (b.market_type === "map_winner" ? ` · Map ${b.line}` : ` ${b.line}`) : ""}{b.stake_pool === "futures" ? " · futures" : ""}
                   </div>
                 </td>
                 <td className="px-3 py-2">

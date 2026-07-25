@@ -277,9 +277,16 @@ def compute_bet_clv(session: Session, bet: PlacedBet) -> dict:
     if not game_is_final and kickoff is not None and now < kickoff:
         return {"closing_prob": None, "clv_pp": None, "status": "pending"}
 
-    query = session.query(MarketSnapshot).filter(MarketSnapshot.market_id == bet.market_id)
-    if kickoff is not None:
-        query = query.filter(MarketSnapshot.ts <= kickoff)
+    # Without a kickoff we CAN'T establish a real closing line -- taking the
+    # latest snapshot would grab an in-play/post-match price (a winning side
+    # trading near 100%), which fabricates huge CLV. Better to report no CLV
+    # than a contaminated one.
+    if kickoff is None:
+        return {"closing_prob": None, "clv_pp": None, "status": "unavailable"}
+    query = (
+        session.query(MarketSnapshot)
+        .filter(MarketSnapshot.market_id == bet.market_id, MarketSnapshot.ts <= kickoff)
+    )
     closing_snap = query.order_by(MarketSnapshot.ts.desc()).first()
     closing_prob = _implied_prob(closing_snap)
     if closing_prob is None:

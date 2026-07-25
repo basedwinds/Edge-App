@@ -71,6 +71,9 @@ _MISSING_COLUMNS_BY_TABLE = {
         ("sport", "VARCHAR"),
         ("disposition", "VARCHAR"),
     ],
+    "race_events": [
+        ("result_json", "VARCHAR"),
+    ],
     "mma_fights": [
         ("estimated_start_time", "VARCHAR"),
     ],

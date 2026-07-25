@@ -202,6 +202,7 @@ class SettingsOut(BaseModel):
     lol_pool_dollars: float
     lol_futures_pool_dollars: float
     lol_weekly_pool_dollars: float
+    racing_weekly_pool_dollars: float  # f1/nascar/irl share one pool (no futures sub-pool)
     # Sum of every sport's allocation pct. >1.0 means the per-sport pools
     # over-commit the bankroll (if every sport maxed its bets at once you'd
     # stake more than 100%). Surfaced so the over-allocation is visible; the
@@ -255,6 +256,32 @@ def _set_float(session: Session, key: str, value: float) -> None:
         row.value = str(value)
 
 
+def _get_str(session: Session, key: str, default: str = "") -> str:
+    row = session.get(Setting, key)
+    return row.value if (row and row.value) else default
+
+
+def _set_str(session: Session, key: str, value: str) -> None:
+    row = session.get(Setting, key)
+    if row is None:
+        session.add(Setting(key=key, value=value))
+    else:
+        row.value = value
+
+
+# ---- new-recommendation alerts (Discord webhook) ----------------------------
+DISCORD_WEBHOOK_KEY = "discord_webhook_url"
+ALERT_MIN_EDGE_KEY = "alert_min_edge_pp"
+DEFAULT_ALERT_MIN_EDGE = 0.05  # only alert for edges >= 5pp (avoid marginal-bet spam)
+
+
+def get_alert_config(session: Session) -> dict:
+    return {
+        "webhook_url": _get_str(session, DISCORD_WEBHOOK_KEY),
+        "min_edge": _get_float(session, ALERT_MIN_EDGE_KEY, DEFAULT_ALERT_MIN_EDGE),
+    }
+
+
 def _build_settings_out(
     bankroll_dollars: float,
     bankroll_units: float,
@@ -281,6 +308,7 @@ def _build_settings_out(
     fractional_kelly: float,
     max_stake_fraction: float,
     min_edge_to_bet: float,
+    racing_weekly_pool_dollars: float,  # precomputed by the caller (needs the session)
 ) -> SettingsOut:
     unit_dollars = bankroll_dollars / bankroll_units if bankroll_units > 0 else 0.0
     _bs_scale = _scale_for_total(
@@ -375,6 +403,7 @@ def _build_settings_out(
         lol_pool_dollars=lol_pool_dollars,
         lol_futures_pool_dollars=lol_futures_pool_dollars,
         lol_weekly_pool_dollars=lol_weekly_pool_dollars,
+        racing_weekly_pool_dollars=racing_weekly_pool_dollars,
         total_allocation_pct=round(
             nfl_allocation_pct + nba_allocation_pct + wnba_allocation_pct + mlb_allocation_pct
             + mma_allocation_pct + tennis_allocation_pct + soccer_allocation_pct
@@ -413,7 +442,35 @@ def _read_all(session: Session) -> SettingsOut:
         _get_float(session, FRACTIONAL_KELLY_KEY, FRACTIONAL_KELLY),
         _get_float(session, MAX_STAKE_FRACTION_KEY, MAX_STAKE_FRACTION),
         _get_float(session, MIN_EDGE_TO_BET_KEY, MIN_EDGE_TO_BET),
+        get_racing_pool_dollars(session),
     )
+
+
+class AlertConfigOut(BaseModel):
+    webhook_configured: bool  # never echo the URL back (it's a secret)
+    min_edge_pp: float
+
+
+class AlertConfigIn(BaseModel):
+    webhook_url: str | None = None  # None = leave unchanged; "" = clear it
+    min_edge_pp: float | None = None
+
+
+@router.get("/alerts", response_model=AlertConfigOut)
+def get_alert_settings(session: Session = Depends(get_session)):
+    cfg = get_alert_config(session)
+    return AlertConfigOut(webhook_configured=bool(cfg["webhook_url"]), min_edge_pp=cfg["min_edge"])
+
+
+@router.put("/alerts", response_model=AlertConfigOut)
+def update_alert_settings(body: AlertConfigIn, session: Session = Depends(get_session)):
+    if body.webhook_url is not None:
+        _set_str(session, DISCORD_WEBHOOK_KEY, body.webhook_url.strip())
+    if body.min_edge_pp is not None:
+        _set_float(session, ALERT_MIN_EDGE_KEY, body.min_edge_pp)
+    session.commit()
+    cfg = get_alert_config(session)
+    return AlertConfigOut(webhook_configured=bool(cfg["webhook_url"]), min_edge_pp=cfg["min_edge"])
 
 
 @router.get("", response_model=SettingsOut)

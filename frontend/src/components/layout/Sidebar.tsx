@@ -109,6 +109,11 @@ function navItems(sport: string) {
     return {
       sportItems: [
         { to: `/racing/${sport}`, label: "Markets", icon: Flag, end: true },
+        // Season Drivers'/Constructors' Champion futures live on their own page
+        // (like every other sport's Futures), separate from the per-race markets.
+        // Only F1 has priced champion futures; NASCAR's title is a playoff format
+        // (untraded on both books), so its Futures page shows nothing yet.
+        ...(sport === "f1" ? [{ to: `/racing/${sport}/futures`, label: "Futures", icon: Trophy, end: false }] : []),
         { to: `/racing/${sport}/placed`, label: "Placed Bets", icon: ClipboardList, end: false },
         { to: `/racing/${sport}/calibration`, label: "Calibration", icon: Gauge, end: false },
       ],

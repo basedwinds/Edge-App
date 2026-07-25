@@ -389,10 +389,14 @@ def mark_refresh_complete():
 
 
 def settle_placed_bets():
-    """Auto-grades placed bets tied to a real NFL game once its final score
-    lands -- see app/models/bet_settlement.py for exactly which market
-    types can be graded this way and why (only full-game scores are
-    ingested, not half-time)."""
+    """Auto-grades pending placed bets. TWO paths, both run every cycle:
+    (1) settle_finished_games -- reconstructs win/loss from each sport's own
+    modelled result (works for Polymarket bets too, no Kalshi ticker needed);
+    (2) settle_from_kalshi_resolution -- grades straight from the Kalshi market's
+    OWN finalized result, the authoritative 100%-coverage path that also catches
+    what (1) can't (lower-tier matches missing from result feeds, map_winner,
+    futures). (2) does its own network fetch + locking, so it runs OUTSIDE the
+    lock (1) takes."""
     from app.models.bet_settlement import settle_finished_games
 
     with db_write_lock():
@@ -401,6 +405,12 @@ def settle_placed_bets():
             settle_finished_games(session)
         finally:
             session.close()
+
+    try:
+        from app.ingestion.market_resolution_settlement import settle_from_kalshi_resolution
+        settle_from_kalshi_resolution()
+    except Exception:
+        log.exception("kalshi-resolution settlement failed")
 
 
 def refresh_kalshi_win_totals():

@@ -10,6 +10,7 @@ the race weekend) so race-finish prices are driver+constructor for now, sharper
 later. model_validated=False; forward CLV is the judge (racing can't be
 historically backtested -- thin retention).
 """
+import re
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,7 +22,7 @@ from app.api.schemas import RacingMarketOut, ReasoningOut, ReasoningFactorOut
 from app.db.database import get_session
 from app.db.models import Market
 from app.models import racing_sim
-from app.models.baseline import racing_ratings
+from app.models.baseline import racing_ratings, racing_championship
 from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
 
 router = APIRouter(prefix="/racing", tags=["racing"])
@@ -32,6 +33,35 @@ TRACKING_NOTE = (
     "(pole). Pre-qualifying prices use driver+constructor (no grid yet); they "
     "sharpen at the race weekend. Validated forward by CLV, not backtested."
 )
+CHAMP_NOTE = (
+    "Season-title price: a standings-aware Monte Carlo simulates the remaining "
+    "races from current championship points and driver strength. model_validated: "
+    "false; forward CLV is the judge."
+)
+
+
+def _norm_con(name: str) -> str:
+    """Fold Polymarket constructor labels onto the ratings labels
+    ('Red Bull Racing'->'red bull', 'Audi Revolut'->'audi')."""
+    return (name or "").lower().replace("racing", "").replace("revolut", "").strip()
+
+
+def _h2h_model_prob(series: str, label: str, cc: dict) -> "float | None":
+    """'A vs B' -> P(A finishes ahead of B) from race (driver+constructor)
+    strength, closed-form Bradley-Terry. Surname-only labels resolve via
+    resolve_driver_loose; an unknown driver leaves it unpriced."""
+    parts = re.split(r"\s+vs\.?\s+", label, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return None
+    a = racing_ratings.resolve_driver_loose(series, parts[0].strip())
+    b = racing_ratings.resolve_driver_loose(series, parts[1].strip())
+    if not a or not b:
+        return None
+    sa = racing_ratings.strength(series, a, cc.get(a), None)
+    sb = racing_ratings.strength(series, b, cc.get(b), None)
+    if sa is None or sb is None:
+        return None
+    return racing_sim.h2h_prob(sa, sb)
 
 
 def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, float | None]) -> list[RacingMarketOut]:
@@ -51,25 +81,49 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
                     race_field[d] = s
     sim = racing_sim.simulate(race_field, trials=20000) if len(race_field) >= 2 else {}
 
+    # Pole probabilities over the FULL current grid (series-wide, from ratings),
+    # not just this event's pole markets -- so constructor-pole markets, which
+    # Polymarket lists in a SEPARATE event from the driver-pole markets, can still
+    # be priced (they'd otherwise see an empty pole field). It's also the correct
+    # softmax denominator: pole is contested by the whole grid.
     pole_field: dict[str, float] = {}
-    for m in markets:
-        if m.market_type == "pole":
-            d = did(m.team or "")
-            if d and d not in pole_field:
-                q = racing_ratings.quali_strength(series, d)
-                if q is not None:
-                    pole_field[d] = q
+    if any(m.market_type in ("pole", "constructor_pole") for m in markets):
+        for dr in cc:
+            q = racing_ratings.quali_strength(series, dr)
+            if q is not None:
+                pole_field[dr] = q
     pole_p: dict[str, float] = {}
     if len(pole_field) >= 2:
         vs = {d: 10 ** (s / 400.0) for d, s in pole_field.items()}
         tot = sum(vs.values())
         pole_p = {d: v / tot for d, v in vs.items()}
 
+    # Constructor pole = P(EITHER of a team's drivers takes pole). Poles are
+    # mutually exclusive, so the team probability is exactly the sum of its two
+    # drivers' pole probabilities. Keyed by normalised constructor name so
+    # Polymarket's labels ("Red Bull Racing") match the ratings' ("Red Bull").
+    constructor_pole_p: dict[str, float] = {}
+    for dr, p in pole_p.items():
+        c = cc.get(dr)
+        if c:
+            constructor_pole_p[_norm_con(c)] = constructor_pole_p.get(_norm_con(c), 0.0) + p
+
     out: list[RacingMarketOut] = []
     for m in markets:
         d = did(m.team or "")
         mp = None
-        if d:
+        if m.market_type == "drivers_champion":
+            # Season title -> standings-aware championship sim (not racing_sim),
+            # matched by driver NAME (m.team) rather than the race-field id.
+            mp = racing_championship.driver_championship_prob(series, m.team or "")
+        elif m.market_type == "constructors_champion":
+            mp = racing_championship.constructor_championship_prob(series, m.team or "")
+        elif m.market_type == "h2h":
+            # "A vs B" -> P(A finishes ahead of B), closed-form from race strength.
+            mp = _h2h_model_prob(series, m.team or "", cc)
+        elif m.market_type == "constructor_pole":
+            mp = constructor_pole_p.get(_norm_con(m.team or ""))
+        elif d:
             if m.market_type == "race_winner":
                 mp = sim.get(d, {}).get("win")
             elif m.market_type == "top_n" and m.line is not None:
@@ -78,13 +132,14 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
                 mp = pole_p.get(d)
         imp = implied_by_id.get(m.id)
         edge = round(mp - imp, 4) if (mp is not None and imp is not None) else None
-        snap = None  # volume pulled from implied path below
+        is_champ = m.market_type in ("drivers_champion", "constructors_champion")
+        note = CHAMP_NOTE if is_champ else TRACKING_NOTE
         out.append(RacingMarketOut(
             id=m.id, series=series, source=m.source, race_event_id=m.race_event_id, event=m.source_event_id, market_type=m.market_type,
             line=int(m.line) if m.line is not None else None, driver=m.team or "",
             implied_prob=imp, model_prob=mp, model_validated=False, edge=edge,
             volume=None, close_time=None,
-            model_note=TRACKING_NOTE if mp is not None else None,
+            model_note=note if mp is not None else None,
         ))
     return out
 
@@ -126,7 +181,11 @@ def list_racing_markets(session: Session = Depends(get_session)):
     return out
 
 
-_MT_LABEL = {"race_winner": "Race Winner", "pole": "Pole Position", "top_n": "Top-N Finish"}
+_MT_LABEL = {
+    "race_winner": "Race Winner", "pole": "Pole Position", "top_n": "Top-N Finish",
+    "drivers_champion": "Drivers' Champion", "constructors_champion": "Constructors' Champion",
+    "h2h": "Head-to-Head", "constructor_pole": "Constructor Pole",
+}
 
 
 @router.get("/markets/{market_id}/reasoning", response_model=ReasoningOut)
@@ -145,11 +204,20 @@ def get_racing_market_reasoning(
     label = f"{driver} — {mt_label}"
     edge = round(model_prob - market_prob, 4) if (model_prob is not None and market_prob is not None) else None
 
+    is_champ = m.market_type in ("drivers_champion", "constructors_champion")
     factors: list[ReasoningFactorOut] = []
     did = racing_ratings.resolve_driver_id(series, driver)
     st = racing_ratings._series_state(series)
     cc = st.get("current_constructor", {})
-    if did:
+    if is_champ:
+        meta = racing_championship.championship_meta(series)
+        rem = meta.get("remaining_races")
+        if rem is not None:
+            factors.append(ReasoningFactorOut(label="Races remaining", detail=str(rem)))
+        pts = (meta.get("points") or {}).get(driver)
+        if pts is not None:
+            factors.append(ReasoningFactorOut(label="Current points", detail=f"{pts:.0f}"))
+    elif did:
         if m.market_type == "pole":
             q = racing_ratings.quali_strength(series, did)
             if q is not None:
@@ -163,7 +231,39 @@ def get_racing_market_reasoning(
     if m.source:
         factors.append(ReasoningFactorOut(label="Market", detail=m.source.title()))
 
-    if m.market_type == "pole":
+    if is_champ:
+        who = "constructor" if m.market_type == "constructors_champion" else "driver"
+        methodology = (
+            "Standings-aware season Monte Carlo (racing_championship_sim): starting from the real current "
+            "championship points, each of thousands of simulated seasons plays out the remaining races -- "
+            "sampling a full finishing order from driver strength (Plackett-Luce) and awarding F1 points -- "
+            f"and the {who} leading at the end is champion. The share of seasons won is the price. This is why "
+            "a fast car far back in the points is still a long shot: pace alone can't price a title."
+        )
+        insight = (
+            f"{driver}'s title price comes from simulating the rest of the season off the current standings, "
+            f"not raw pace. Model says {(_pct(model_prob))} vs the market's {(_pct(market_prob))}{_edge_phrase(edge)}."
+        )
+    elif m.market_type == "h2h":
+        methodology = (
+            "Head-to-head: P(the first-named driver finishes ahead of the second) is the closed-form "
+            "Bradley-Terry value of their race (driver+constructor) strength ratings — no simulation needed "
+            "for a clean two-way. Grid isn't used pre-qualifying, so it sharpens at the weekend like race finish."
+        )
+        insight = (
+            f"{driver} — this price compares the two drivers' race-strength ratings head-to-head. Model says "
+            f"{(_pct(model_prob))} for the first-named driver vs the market's {(_pct(market_prob))}{_edge_phrase(edge)}."
+        )
+    elif m.market_type == "constructor_pole":
+        methodology = (
+            "Constructor pole = P(EITHER of the team's two drivers takes pole) = the sum of their individual "
+            "qualifying-Elo pole probabilities (poles are mutually exclusive, so summing is exact)."
+        )
+        insight = (
+            f"{driver}'s pole price is the combined qualifying-Elo pole probability of its two drivers. Model "
+            f"says {(_pct(model_prob))} vs the market's {(_pct(market_prob))}{_edge_phrase(edge)}."
+        )
+    elif m.market_type == "pole":
         methodology = (
             "Qualifying-only Elo: each driver's one-lap pace rating is turned into a pole probability via a "
             "softmax over the whole qualifying field. Race-day car setup/grid isn't used (this is pure quali)."
@@ -189,8 +289,11 @@ def get_racing_market_reasoning(
 
     caveats = [
         "model_validated: false -- racing can't be historically backtested (thin retention), so forward CLV is the only judge.",
-        "Pre-qualifying: no grid yet, so race-finish prices use driver+constructor and sharpen at the race weekend.",
     ]
+    if is_champ:
+        caveats.append("Title odds assume the current standings and each driver's season-long pace hold; a mid-season form swing or DNF streak isn't modelled.")
+    else:
+        caveats.append("Pre-qualifying: no grid yet, so race-finish prices use driver+constructor and sharpen at the race weekend.")
     return ReasoningOut(
         market_id=m.id, market_type=m.market_type, label=label,
         model_prob=model_prob, market_prob=market_prob, edge=edge,

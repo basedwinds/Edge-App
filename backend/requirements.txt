@@ -5,7 +5,8 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 apscheduler==3.10.4
 httpx==0.28.1
-pywebview==5.4
+numpy>=1.26
+pywebview==5.4  # desktop GUI only; the server never imports it (safe to skip on a headless host)
 pandas>=2.2
 pyarrow>=16.0
 scikit-learn>=1.4

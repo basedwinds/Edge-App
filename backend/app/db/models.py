@@ -680,6 +680,10 @@ class RaceEvent(Base):
     name = Column(String, nullable=True)
     start_time = Column(DateTime, nullable=True)     # UTC; CLV closing-line cutoff
     status = Column(String, nullable=False, default="upcoming")
+    # Final finishing result once the race is done (JSON string), populated by
+    # the racing results scraper -> lets bet_settlement grade race markets.
+    # Shape: {"order": [driver_id, ...] best->worst, "pole": driver_id|null}.
+    result_json = Column(String, nullable=True)
     updated_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 

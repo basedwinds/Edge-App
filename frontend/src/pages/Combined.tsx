@@ -17,6 +17,7 @@ import {
   fetchValorantMarkets, buildValorantRecommendedBets,
   fetchCs2Markets, buildCs2RecommendedBets,
   fetchLolMarkets, buildLolRecommendedBets,
+  fetchRacingMarkets, buildRacingRecommendedBets,
   markBetPlaced,
   fetchFutures, fetchNbaFutures, fetchMlbFutures, fetchTennisFutures,
   fetchSoccerFutures, fetchValorantFutures, fetchCs2Futures, fetchLolFutures,
@@ -51,12 +52,12 @@ async function loadCombined(): Promise<RecommendedBetRow[]> {
   // depth-chart lookups) and season-long, not "upcoming". They stay on each
   // sport's own Futures page. `[]` is passed for the futures arg below.
   const [
-    nflM, nbaM, wnbaM, mlbM, mmaM, tenM, socM, valM, cs2M, lolM,
+    nflM, nbaM, wnbaM, mlbM, mmaM, tenM, socM, valM, cs2M, lolM, racingM,
   ] = await Promise.all([
     guard(fetchMarkets(), []), guard(fetchNbaMarkets(), []),
     guard(fetchWnbaMarkets(), []), guard(fetchMlbMarkets(), []), guard(fetchMmaMarkets(), []),
     guard(fetchTennisMarkets(), []), guard(fetchSoccerMarkets(), []), guard(fetchValorantMarkets(), []),
-    guard(fetchCs2Markets(), []), guard(fetchLolMarkets(), []),
+    guard(fetchCs2Markets(), []), guard(fetchLolMarkets(), []), guard(fetchRacingMarkets(), []),
   ]);
   const rows = [
     ...buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).rows,
@@ -69,6 +70,7 @@ async function loadCombined(): Promise<RecommendedBetRow[]> {
     ...buildValorantRecommendedBets(valM, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars).rows,
     ...buildCs2RecommendedBets(cs2M, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars).rows,
     ...buildLolRecommendedBets(lolM, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars).rows,
+    ...buildRacingRecommendedBets(racingM, s.racing_weekly_pool_dollars).rows,
   ];
   rows.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars);
   return rows;

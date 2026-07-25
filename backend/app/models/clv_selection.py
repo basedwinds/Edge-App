@@ -16,16 +16,25 @@ data-driven successor to "bet everything the model flags," and the only
 mechanism in this app designed to turn "no average edge" into "edge in the
 buckets that survive."
 """
+import statistics
 import time
 from collections import defaultdict
 
 from sqlalchemy.orm import Session
 
-from app.db.models import PlacedBet
+from app.db.models import PlacedBet, TennisMatch
 from app.models.clv import compute_bet_clv
 
 DEFAULT_MIN_SAMPLE = 20   # closed bets before a bucket's CLV is trusted
-DEFAULT_MIN_CLV_PP = 0.0  # require non-negative average CLV to stay enabled
+DEFAULT_MIN_CLV_PP = 0.0  # require non-negative median CLV to stay enabled
+
+# |CLV| above this is almost never a real closing-line move -- it's an in-play
+# price leak (a "closing" snapshot captured AFTER the match started, when the
+# winning side already trades near 100%). Real CLV is single-digit pp. These
+# are excluded from the aggregate (but counted) so a handful of contaminated
+# bets can't fabricate a +22pp bucket average. The median is also reported as
+# the primary robust stat -- see bucket_clv_stats.
+_CONTAMINATION_PP = 0.20
 
 # bucket_clv_stats recomputes CLV for EVERY placed bet, and is called on every
 # sport list request (for gate_kelly). With paper-logging (paper_logger.py) the
@@ -47,10 +56,17 @@ def bucket_clv_stats(session: Session) -> dict[tuple[str, str], dict]:
         clv = compute_bet_clv(session, bet)
         if clv["status"] == "closed" and clv["clv_pp"] is not None:
             buckets[(bet.sport, bet.market_type)].append(clv["clv_pp"])
-    value = {
-        key: {"n": len(vals), "avg_clv_pp": round(sum(vals) / len(vals), 4)}
-        for key, vals in buckets.items()
-    }
+    value = {}
+    for key, vals in buckets.items():
+        clean = [v for v in vals if abs(v) <= _CONTAMINATION_PP]
+        used = clean or vals  # if EVERY bet is extreme, fall back so n>0 stays honest
+        value[key] = {
+            "n": len(clean),                       # trustworthy sample size (contaminated excluded)
+            "n_raw": len(vals),
+            "n_contaminated": len(vals) - len(clean),
+            "avg_clv_pp": round(sum(used) / len(used), 4),      # clean mean
+            "median_clv_pp": round(statistics.median(used), 4),  # robust primary stat
+        }
     _stats_cache.update(at=now, value=value)
     return value
 
@@ -68,7 +84,9 @@ def is_bucket_enabled(
     b = stats.get((sport, market_type))
     if b is None or b["n"] < min_sample:
         return True  # not enough data to judge -> don't suppress
-    return b["avg_clv_pp"] >= min_clv_pp
+    # Gate on the MEDIAN (robust) rather than the mean, so a couple of residual
+    # in-play outliers can't keep a truly-negative bucket alive (or vice-versa).
+    return b.get("median_clv_pp", b["avg_clv_pp"]) >= min_clv_pp
 
 
 def gate_kelly(kelly, clv_stats: dict, sport: str, market_type: str):
@@ -87,7 +105,12 @@ def bucket_report(session: Session, min_sample: int = DEFAULT_MIN_SAMPLE, min_cl
     stats = bucket_clv_stats(session)
     rows = [
         {
-            "sport": sport, "market_type": mt, "n": b["n"], "avg_clv_pp": b["avg_clv_pp"],
+            "sport": sport, "market_type": mt, "n": b["n"],
+            # median is the headline (robust); mean kept for reference; contaminated
+            # count surfaces how many in-play-leak bets were excluded.
+            "median_clv_pp": b.get("median_clv_pp", b["avg_clv_pp"]),
+            "avg_clv_pp": b["avg_clv_pp"],
+            "n_contaminated": b.get("n_contaminated", 0),
             "enabled": is_bucket_enabled(stats, sport, mt, min_sample, min_clv_pp),
             "status": ("suppressed (negative CLV)" if not is_bucket_enabled(stats, sport, mt, min_sample, min_clv_pp)
                        else "enabled (proven)" if b["n"] >= min_sample else "enabled (gathering data)"),
@@ -96,3 +119,70 @@ def bucket_report(session: Session, min_sample: int = DEFAULT_MIN_SAMPLE, min_cl
     ]
     rows.sort(key=lambda r: r["n"], reverse=True)
     return rows
+
+
+# ---- CONDITIONAL CLV: does the edge live in a SUBSET, not the average? -------
+# "No average edge" doesn't mean "no edge anywhere" -- these pre-registered
+# slices let a real edge in a corner of the data surface (or not). Discipline:
+# only a-priori-sensible slices, and a slice needs real per-slice sample before
+# it means anything (same min_sample logic as the buckets). NOT a fishing licence.
+_EDGE_BANDS = [(0.03, 0.05, "3-5pp"), (0.05, 0.08, "5-8pp"), (0.08, 0.12, "8-12pp"), (0.12, 1.0, "12pp+")]
+
+_COND_TTL_SECONDS = 300
+_cond_cache: dict = {"at": 0.0, "value": None}
+
+
+def _clean_closed_clvs(session: Session):
+    """[(bet, clv_pp)] for closed, non-contaminated bets -- the shared input to
+    every conditional slice (contamination excluded, same |clv|<=0.20 rule)."""
+    out = []
+    for bet in session.query(PlacedBet).all():
+        clv = compute_bet_clv(session, bet)
+        v = clv.get("clv_pp")
+        if clv["status"] == "closed" and v is not None and abs(v) <= _CONTAMINATION_PP:
+            out.append((bet, v))
+    return out
+
+
+def _slice_row(label_key: str, label: str, vals: list[float]) -> dict:
+    return {
+        label_key: label, "n": len(vals),
+        "median_clv_pp": round(statistics.median(vals), 4) if vals else 0.0,
+        "mean_clv_pp": round(statistics.mean(vals), 4) if vals else 0.0,
+    }
+
+
+def conditional_clv_report(session: Session) -> dict:
+    """Pre-registered conditional-CLV slices (TTL-cached). Currently:
+      * by_edge_band -- does a BIGGER model edge earn better CLV? (the skill test)
+      * by_tennis_tier -- is the edge in thinner/softer markets (challenger/itf)?
+    Both report median (robust) + mean + n, contamination excluded."""
+    now = time.time()
+    if _cond_cache["value"] is not None and now - _cond_cache["at"] < _COND_TTL_SECONDS:
+        return _cond_cache["value"]
+
+    rows = _clean_closed_clvs(session)
+
+    by_band: dict[str, list[float]] = {lbl: [] for _lo, _hi, lbl in _EDGE_BANDS}
+    for bet, v in rows:
+        e = bet.edge_at_placement
+        if e is None:
+            continue
+        for lo, hi, lbl in _EDGE_BANDS:
+            if lo <= e < hi:
+                by_band[lbl].append(v)
+                break
+
+    tennis_tier: dict[str, list[float]] = defaultdict(list)
+    for bet, v in rows:
+        if bet.sport == "tennis" and bet.tennis_match_id:
+            m = session.get(TennisMatch, bet.tennis_match_id)
+            if m and m.tier:
+                tennis_tier[m.tier].append(v)
+
+    value = {
+        "by_edge_band": [_slice_row("band", lbl, by_band[lbl]) for _lo, _hi, lbl in _EDGE_BANDS if by_band[lbl]],
+        "by_tennis_tier": [_slice_row("tier", t, vs) for t, vs in sorted(tennis_tier.items())],
+    }
+    _cond_cache.update(at=now, value=value)
+    return value

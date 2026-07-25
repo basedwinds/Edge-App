@@ -14,8 +14,14 @@ function marketLabel(r: RacingMarketRow): string {
   if (r.market_type === "race_winner") return "Race Winner";
   if (r.market_type === "pole") return "Pole Position";
   if (r.market_type === "top_n") return r.line === 3 ? "Podium (Top 3)" : `Top ${r.line}`;
+  if (r.market_type === "drivers_champion") return "Drivers' Champion";
+  if (r.market_type === "constructors_champion") return "Constructors' Champion";
+  if (r.market_type === "h2h") return "Head-to-Head";
+  if (r.market_type === "constructor_pole") return "Constructor Pole";
   return r.market_type;
 }
+
+const CHAMP_TYPES = new Set(["drivers_champion", "constructors_champion"]);
 
 function pct(v: number | null) {
   return v === null || v === undefined ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -46,9 +52,79 @@ export function Racing() {
     .slice()
     .sort((a, b) => (Number(b.implied_prob != null) - Number(a.implied_prob != null)) || ((b.model_prob ?? 0) - (a.model_prob ?? 0)));
 
-  const events = [...new Set(rows.map((r) => `${r.series}|${r.event}`))];
-  const priced = rows.filter((r) => r.model_prob !== null).length;
+  // Champion futures moved to their own Futures tab (RacingFutures.tsx); this
+  // page shows per-race markets only.
+  const raceRows = rows.filter((r) => !CHAMP_TYPES.has(r.market_type));
+  const events = [...new Set(raceRows.map((r) => `${r.series}|${r.event}`))];
+  const priced = raceRows.filter((r) => r.model_prob !== null).length;
   const title = series ? `Racing — ${SERIES_LABEL[series] ?? series.toUpperCase()}` : "Racing";
+
+  function renderTable(tableRows: RacingMarketRow[], entityHeader: string) {
+    return (
+      <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+        <table className="w-full text-sm">
+          <thead className="bg-[var(--color-surface)] text-[var(--color-text-dim)] text-xs">
+            <tr>
+              {!series && <th className="text-left px-3 py-2">Series</th>}
+              <th className="text-left px-3 py-2">Market</th>
+              <th className="text-left px-3 py-2">{entityHeader}</th>
+              <th className="text-right px-3 py-2">Market %</th>
+              <th className="text-right px-3 py-2">Model %</th>
+              <th className="text-right px-3 py-2">Edge</th>
+              <th className="text-right px-3 py-2">Stake</th>
+              <th className="text-right px-3 py-2">Volume</th>
+              <th className="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--color-border)]">
+            {tableRows.map((r) => (
+              <tr key={`${r.event}-${r.market_type}-${r.line}-${r.driver}`} className="hover:bg-[var(--color-surface)]">
+                {!series && <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">{SERIES_LABEL[r.series] ?? r.series}</td>}
+                <td className="px-3 py-2 whitespace-nowrap">{marketLabel(r)}</td>
+                <td className="px-3 py-2 whitespace-nowrap font-medium">{r.driver}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-mono">{pct(r.implied_prob)}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)]" title={r.model_note ?? ""}>
+                  {pct(r.model_prob)}
+                  {r.model_prob !== null && (
+                    <span className="ml-1 text-[9px] rounded-sm border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)] px-1">approx</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right"><EdgeBadge edge={r.edge} /></td>
+                <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)] whitespace-nowrap">
+                  {r.suggested_stake_units != null ? `${r.suggested_stake_units.toFixed(1)}u` : r.suggested_stake_dollars != null ? `$${r.suggested_stake_dollars}` : "—"}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)]">{r.volume ? Math.round(r.volume).toLocaleString() : "—"}</td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center justify-end gap-1.5">
+                    {r.model_prob != null && (
+                      <button
+                        onClick={() => setReasoning(r)}
+                        className="p-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]"
+                        title="Why this number? (model explanation)"
+                      >
+                        <Info size={13} />
+                      </button>
+                    )}
+                    {r.suggested_stake_dollars != null && (
+                      <button
+                        onClick={() => place(r)}
+                        disabled={placedIds.has(r.id)}
+                        className={placedIds.has(r.id)
+                          ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-good)]/40 text-[var(--color-good)] whitespace-nowrap"
+                          : "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"}
+                      >
+                        {placedIds.has(r.id) ? "Placed ✓" : "Mark placed"}
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
 
   return (
     <PageShell title={title}>
@@ -69,79 +145,18 @@ export function Racing() {
           up in the CLV Tracker. Still <span className="text-[var(--color-text)]">model_validated: false</span>
           {" "}(unbacktested — CLV is the judge), so treat the stakes as paper. Pre-qualifying prices use driver
           + constructor (no grid yet) and sharpen closer to the race.{" "}
-          {priced} of {rows.length} markets priced across {events.length} events.
+          {priced} of {raceRows.length} markets priced across {events.length} events.
         </div>
       </div>
 
       {query.isLoading ? (
         <TableSkeleton cols={6} />
-      ) : rows.length === 0 ? (
+      ) : raceRows.length === 0 ? (
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-6 text-sm text-[var(--color-text-dim)]">
           No open racing markets right now.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
-          <table className="w-full text-sm">
-            <thead className="bg-[var(--color-surface)] text-[var(--color-text-dim)] text-xs">
-              <tr>
-                {!series && <th className="text-left px-3 py-2">Series</th>}
-                <th className="text-left px-3 py-2">Market</th>
-                <th className="text-left px-3 py-2">Driver</th>
-                <th className="text-right px-3 py-2">Market %</th>
-                <th className="text-right px-3 py-2">Model %</th>
-                <th className="text-right px-3 py-2">Edge</th>
-                <th className="text-right px-3 py-2">Stake</th>
-                <th className="text-right px-3 py-2">Volume</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--color-border)]">
-              {rows.map((r) => (
-                <tr key={`${r.event}-${r.market_type}-${r.line}-${r.driver}`} className="hover:bg-[var(--color-surface)]">
-                  {!series && <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">{SERIES_LABEL[r.series] ?? r.series}</td>}
-                  <td className="px-3 py-2 whitespace-nowrap">{marketLabel(r)}</td>
-                  <td className="px-3 py-2 whitespace-nowrap font-medium">{r.driver}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-mono">{pct(r.implied_prob)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)]" title={r.model_note ?? ""}>
-                    {pct(r.model_prob)}
-                    {r.model_prob !== null && (
-                      <span className="ml-1 text-[9px] rounded-sm border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)] px-1">approx</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right"><EdgeBadge edge={r.edge} /></td>
-                  <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)] whitespace-nowrap">
-                    {r.suggested_stake_units != null ? `${r.suggested_stake_units.toFixed(1)}u` : r.suggested_stake_dollars != null ? `$${r.suggested_stake_dollars}` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)]">{r.volume ? Math.round(r.volume).toLocaleString() : "—"}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center justify-end gap-1.5">
-                      {r.model_prob != null && (
-                        <button
-                          onClick={() => setReasoning(r)}
-                          className="p-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]"
-                          title="Why this number? (model explanation)"
-                        >
-                          <Info size={13} />
-                        </button>
-                      )}
-                      {r.suggested_stake_dollars != null && (
-                        <button
-                          onClick={() => place(r)}
-                          disabled={placedIds.has(r.id)}
-                          className={placedIds.has(r.id)
-                            ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-good)]/40 text-[var(--color-good)] whitespace-nowrap"
-                            : "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"}
-                        >
-                          {placedIds.has(r.id) ? "Placed ✓" : "Mark placed"}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        renderTable(raceRows, "Driver")
       )}
 
       {reasoning && (

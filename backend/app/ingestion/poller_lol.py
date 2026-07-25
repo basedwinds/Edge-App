@@ -271,3 +271,23 @@ def run_full_refresh_lol():
     refresh_lol_matches()
     refresh_kalshi_lol_markets()
     refresh_polymarket_lol_markets()
+    refresh_lol_results()
+
+
+def refresh_lol_results():
+    """Backfill final winner+maps onto finished LolMatch rows so LoL bets can
+    auto-settle. Fetch happens OUTSIDE the write lock (Leaguepedia can burn 100+s
+    rate-limited -- same reason refresh_lol_matches fetches before locking)."""
+    from app.ingestion.lol_results import fetch_lol_results, apply_lol_results
+    results = fetch_lol_results()
+    if not results:
+        return
+    try:
+        with db_write_lock():
+            session = SessionLocal()
+            try:
+                apply_lol_results(session, results)
+            finally:
+                session.close()
+    except Exception:
+        log.exception("lol results apply failed")

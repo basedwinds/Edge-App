@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageShell } from "../components/layout/PageShell";
 import {
   fetchSettings, updateSettings, perGamePoolLabel,
+  fetchAlertConfig, updateAlertConfig,
 } from "../api/markets";
 
 const NUM = "w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]";
@@ -31,6 +32,55 @@ function SectionCard({ title, sub, children }: { title: string; sub?: string; ch
       {!sub && <div className="mb-4" />}
       {children}
     </div>
+  );
+}
+
+// Discord alert config -- self-contained (own query/state) so it doesn't touch
+// the big settings form. The webhook URL is write-only (backend never echoes it,
+// it's a secret) -- we only show whether one is configured.
+function AlertsSection() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["alert-config"], queryFn: fetchAlertConfig });
+  const [url, setUrl] = useState("");
+  const [minEdge, setMinEdge] = useState("");
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { if (q.data && minEdge === "") setMinEdge(String(Math.round(q.data.min_edge_pp * 100))); }, [q.data]); // eslint-disable-line
+  async function save() {
+    const body: { webhook_url?: string; min_edge_pp?: number } = {};
+    if (url.trim()) body.webhook_url = url.trim();
+    if (minEdge !== "") body.min_edge_pp = Number(minEdge) / 100;
+    await updateAlertConfig(body);
+    setUrl(""); setSaved(true); setTimeout(() => setSaved(false), 2500);
+    qc.invalidateQueries({ queryKey: ["alert-config"] });
+  }
+  return (
+    <SectionCard
+      title="🔔 New-bet alerts (Discord)"
+      sub="Get a Discord message on your phone the moment a NEW bet clears your guidelines — even when the app is closed. In Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy URL, then paste it below. Only genuinely new bets above the edge floor fire (batched, deduped — no spam)."
+    >
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <div className="md:col-span-2">
+          <label className="text-xs text-[var(--color-text-dim)]">
+            Discord webhook URL {q.data?.webhook_configured && <span className="text-[var(--color-good)]">· configured ✓</span>}
+          </label>
+          <input type="password" value={url} onChange={(e) => setUrl(e.target.value)}
+            placeholder={q.data?.webhook_configured ? "•••••• (paste to replace)" : "https://discord.com/api/webhooks/…"}
+            className={`mt-1 ${NUM}`} />
+        </div>
+        <div>
+          <label className="text-xs text-[var(--color-text-dim)]">Alert edge floor (pp)</label>
+          <input type="number" min="0" max="100" step="1" value={minEdge} onChange={(e) => setMinEdge(e.target.value)} className={`mt-1 ${NUM}`} />
+        </div>
+      </div>
+      <div className="mt-4 flex items-center gap-3">
+        <button onClick={save} className="text-sm font-medium px-3 py-1.5 rounded-md border border-[var(--color-accent)] text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10">Save alerts</button>
+        {saved && <span className="text-xs text-[var(--color-good)]">Saved ✓</span>}
+        {q.data?.webhook_configured && (
+          <button onClick={async () => { await updateAlertConfig({ webhook_url: "" }); qc.invalidateQueries({ queryKey: ["alert-config"] }); }}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-critical)]">disable</button>
+        )}
+      </div>
+    </SectionCard>
   );
 }
 
@@ -244,6 +294,7 @@ export function Settings() {
         <div className="text-sm text-[var(--color-text-dim)]">Loading…</div>
       ) : (
         <div className="max-w-3xl space-y-4">
+          <AlertsSection />
           {/* 1 — Bankroll */}
           <SectionCard title="Bankroll">
             <div className="grid grid-cols-2 gap-3">

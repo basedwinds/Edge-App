@@ -84,15 +84,17 @@ def run_paper_log():
     """Self-HTTP the live prices and persist newly-qualified edges as paper bets
     (sport derived from the Market row so racing's per-series sport is correct).
     Only logs; never raises out to the scheduler."""
-    from app.api.routers.settings import get_staking_params
+    from app.api.routers.settings import get_staking_params, get_alert_config
 
     rows = _fetch_priced()
     if not rows:
         return
+    new_alerts: list[dict] = []  # newly-qualified bets worth pushing to Discord
     with db_write_lock():
         session = SessionLocal()
         try:
             _, _, min_edge = get_staking_params(session)
+            alert_cfg = get_alert_config(session)
             open_ids = {
                 b.market_id
                 for b in session.query(PlacedBet)
@@ -132,9 +134,52 @@ def run_paper_log():
                 session.add(bet)
                 open_ids.add(mid)
                 added += 1
+                # A newly-logged paper bet == a market that JUST cleared the
+                # recommendation gate for the first time -> alert-worthy if its
+                # edge clears the (higher) alert floor.
+                if (row.get("edge") or 0) >= alert_cfg["min_edge"]:
+                    new_alerts.append({
+                        "sport": m.sport or "nfl", "market_type": m.market_type,
+                        "team": m.team, "line": m.line, "side": m.side, "source": m.source,
+                        "edge": row.get("edge"), "model": row.get("model_prob"),
+                        "market": row.get("implied_prob"), "stake": row.get("suggested_stake_dollars"),
+                    })
             session.commit()
             log.info("paper logger: added %d new paper bets (%d already open)", added, len(open_ids) - added)
         except Exception:
             log.exception("paper log write failed")
         finally:
             session.close()
+
+    # Push new-recommendation alerts OUTSIDE the write lock (network I/O). No-op
+    # unless a Discord webhook is configured + there are new alert-worthy bets.
+    if new_alerts and alert_cfg.get("webhook_url"):
+        try:
+            _send_recommendation_alert(alert_cfg["webhook_url"], new_alerts)
+        except Exception:
+            log.exception("recommendation alert send failed")
+
+
+def _fmt_pct(v) -> str:
+    return "—" if v is None else f"{v * 100:.0f}%"
+
+
+def _send_recommendation_alert(webhook_url: str, alerts: list[dict]) -> None:
+    from app.clients.discord_notify import send_discord
+
+    alerts = sorted(alerts, key=lambda a: -(a.get("edge") or 0))
+    header = f"🔔 {len(alerts)} new recommended bet{'s' if len(alerts) != 1 else ''}"
+    lines = [header]
+    for a in alerts[:15]:  # cap the message; more are in the app
+        who = a.get("team") or a.get("market_type")
+        edge = a.get("edge")
+        edge_s = f"+{edge * 100:.1f}pp" if edge is not None else "?"
+        stake = a.get("stake")
+        stake_s = f" · ${stake:.0f}" if stake else ""
+        lines.append(
+            f"• [{a['sport'].upper()}] {who} — {a['market_type']} "
+            f"(model {_fmt_pct(a.get('model'))} vs mkt {_fmt_pct(a.get('market'))}, {edge_s}){stake_s} · {a.get('source', '')}"
+        )
+    if len(alerts) > 15:
+        lines.append(f"…and {len(alerts) - 15} more in the app.")
+    send_discord(webhook_url, "\n".join(lines))
