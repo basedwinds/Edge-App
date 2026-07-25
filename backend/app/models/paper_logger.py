@@ -51,6 +51,7 @@ _SEASON_TABLES = {
     "mlb": ("MlbGame", "gameday"),
     "soccer": ("SoccerMatch", "match_date"),
 }
+_MAX_ALERTS_PER_SPORT = 6  # cap Discord pings per sport per run (a slate-open lists hundreds at once)
 _ENDPOINTS = [
     "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
     "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets",
@@ -187,6 +188,25 @@ def _within_alert_window(session, bet, season_active=None) -> bool:
     return start <= datetime.utcnow() + timedelta(days=_ALERT_MAX_DAYS_TO_EVENT)
 
 
+def _cap_alerts_per_sport(alerts: list[dict], per_sport: int = _MAX_ALERTS_PER_SPORT) -> list[dict]:
+    """Keep only the top-N-by-edge alerts PER SPORT. A market refresh (a whole new
+    day's slate listing at once) can newly-qualify dozens of staked bets in a
+    single run; without this the Discord message balloons (real case: 360 in one
+    ping). The un-alerted ones are still logged for CLV and visible in the app --
+    only the ping is trimmed to the best few per sport."""
+    from collections import defaultdict
+
+    by_sport: dict[str, list[dict]] = defaultdict(list)
+    for a in alerts:
+        by_sport[a.get("sport") or "?"].append(a)
+    capped: list[dict] = []
+    for lst in by_sport.values():
+        lst.sort(key=lambda a: -(a.get("edge") or 0))
+        capped.extend(lst[:per_sport])
+    capped.sort(key=lambda a: -(a.get("edge") or 0))
+    return capped
+
+
 def run_paper_log():
     """Self-HTTP the live prices and persist newly-qualified edges as paper bets
     (sport derived from the Market row so racing's per-series sport is correct).
@@ -251,10 +271,15 @@ def run_paper_log():
                 added += 1
                 # A newly-logged paper bet == a market that JUST cleared the
                 # recommendation gate for the first time -> alert-worthy if its
-                # edge clears the (higher) alert floor.
+                # edge clears the alert floor AND the app actually sized a real
+                # stake for it. The stake requirement is what keeps alerts honest:
+                # ~2/3 of edge>=3% markets are thin/barely-traded and get NO stake
+                # (a phantom edge vs a near-empty book) -- those are logged for CLV
+                # but must not ping. Matches what the Recommended view shows.
                 akey = _cross_platform_key(m)
                 if (
                     (row.get("edge") or 0) >= alert_cfg["min_edge"]
+                    and row.get("suggested_stake_dollars")
                     and akey not in alerted_keys
                     and _within_alert_window(session, bet, season_active)
                 ):
@@ -274,6 +299,8 @@ def run_paper_log():
 
     # Push new-recommendation alerts OUTSIDE the write lock (network I/O). No-op
     # unless a Discord webhook is configured + there are new alert-worthy bets.
+    # Cap per sport so a slate-open refresh can't spam a 300-line ping.
+    new_alerts = _cap_alerts_per_sport(new_alerts)
     if new_alerts and alert_cfg.get("webhook_url"):
         try:
             _send_recommendation_alert(alert_cfg["webhook_url"], new_alerts)
