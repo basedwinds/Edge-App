@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpDown, CircleCheck, Hourglass, Info, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, type RecommendedBetRow } from "../../api/markets";
+import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, fetchReadiness, isRowNotReady, type RecommendedBetRow } from "../../api/markets";
 
 // Shared across every Recommended page: market ids already placed (any pool),
 // so a row you've marked still reads "Placed" after you navigate away and back.
@@ -504,7 +504,11 @@ export function RecommendedBetsTable({
   const fetchedPlaced = usePlacedMarketIds(placedMarketIds === undefined);
   const effectivePlaced = placedMarketIds ?? fetchedPlaced;
   const navigate = useNavigate();
-  const data = useMemo(() => rows, [rows]);
+  // Hide "not ready yet" rows: far-future games + season-sport futures whose
+  // season isn't active/near (same rule as the Discord alerts). Fails open
+  // (shows everything) until readiness loads, so nothing flickers away wrongly.
+  const readiness = useQuery({ queryKey: ["readiness"], queryFn: fetchReadiness }).data;
+  const data = useMemo(() => rows.filter((r) => !isRowNotReady(r, readiness)), [rows, readiness]);
 
   async function handleMark(row: RecommendedBetRow) {
     setMarkingKeys((prev) => new Set(prev).add(row.key));

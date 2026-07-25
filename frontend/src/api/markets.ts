@@ -1,6 +1,47 @@
 import { apiGet, apiPost, apiPut, apiDelete } from "./client";
 import type { Cs2MarketRow, FuturesMarketRow, GameMarketRow, LolMarketRow, MarketRow, MlbMarketRow, MmaMarketRow, NbaMarketRow, SoccerMarketRow, TennisMarketRow, ValorantMarketRow, WnbaMarketRow } from "../types/market";
 
+/** Season-readiness config from the backend (same rule the Discord alerts use).
+ * Lets the Recommended + Futures views hide "not ready yet" markets: a
+ * far-future game, or a season-sport future whose season isn't active/near. */
+export interface Readiness {
+  game_window_days: number;
+  futures_window_days: number;
+  season_sports: string[];
+  season_active: Record<string, boolean>;
+}
+
+export async function fetchReadiness(): Promise<Readiness> {
+  return apiGet<Readiness>("/markets/readiness");
+}
+
+/** True if a Recommended row should be HIDDEN as "not ready yet": a game whose
+ * kickoff is beyond the game window, or a SEASON-sport future whose season
+ * isn't active/near. Fails OPEN (returns false = keep showing) when readiness
+ * is unknown, so a real bet is never silently hidden. */
+export function isRowNotReady(
+  row: { gameday: string | null; sport: string },
+  r: Readiness | undefined,
+): boolean {
+  if (!r) return false;
+  if (row.gameday) {
+    const days = (new Date(row.gameday + "T00:00:00").getTime() - Date.now()) / 86_400_000;
+    return days > r.game_window_days;
+  }
+  // Futures (no single game date): only season sports are gated; event-based
+  // sports (tennis/mma/esports/racing) list futures only when they're near.
+  if (r.season_sports.includes(row.sport)) return r.season_active[row.sport] !== true;
+  return false;
+}
+
+/** Futures-page variant: every row on a page shares one sport, so gate the
+ * whole page on that sport's season readiness. */
+export function isFuturesSportNotReady(sport: string | undefined, r: Readiness | undefined): boolean {
+  if (!r || !sport) return false;
+  if (r.season_sports.includes(sport)) return r.season_active[sport] !== true;
+  return false;
+}
+
 export async function fetchMarkets(): Promise<MarketRow[]> {
   return apiGet<MarketRow[]>("/markets");
 }

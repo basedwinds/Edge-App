@@ -60,6 +60,30 @@ from app.api.schemas import FuturesMarketOut, MarketOut, ReasoningFactorOut, Rea
 router = APIRouter(prefix="/markets", tags=["markets"])
 
 
+@router.get("/readiness")
+def get_readiness(session: Session = Depends(get_session)):
+    """Whether each SEASON sport's season is active/near, so the frontend can
+    hide (or badge) 'not ready' futures + far-future games in the Recommended
+    and Futures views -- the same rule the Discord alerts already use
+    (paper_logger). Season sports gate their futures on `season_active`;
+    game-tied rows are gated by the frontend against `game_window_days` using
+    the gameday it already has. Event-based sports (tennis/mma/esports/racing)
+    aren't season-gated (their futures are tournament-scoped + near-term)."""
+    from app.models.paper_logger import (
+        _ALERT_MAX_DAYS_TO_EVENT,
+        _READINESS_WINDOW_DAYS,
+        _SEASON_TABLES,
+        _sport_season_active,
+    )
+
+    return {
+        "game_window_days": _ALERT_MAX_DAYS_TO_EVENT,
+        "futures_window_days": _READINESS_WINDOW_DAYS,
+        "season_sports": list(_SEASON_TABLES.keys()),
+        "season_active": {sp: _sport_season_active(session, sp) for sp in _SEASON_TABLES},
+    }
+
+
 class DivergenceOut(BaseModel):
     model_config = {"protected_namespaces": ()}
     sport: str

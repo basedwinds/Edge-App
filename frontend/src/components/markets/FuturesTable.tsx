@@ -7,8 +7,10 @@ import {
   useReactTable,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowUpDown, Info } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowUpDown, Hourglass, Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
+import { fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import { BetReasoningModal } from "./BetReasoningModal";
@@ -195,6 +197,7 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
   ]);
   const [reasoningRow, setReasoningRow] = useState<FuturesMarketRow | null>(null);
   const data = useMemo(() => rows, [rows]);
+  const readiness = useQuery({ queryKey: ["readiness"], queryFn: fetchReadiness }).data;
 
   // Actions column: a "why" (reasoning) button when a sport is provided, and a
   // "Mark placed" button when the page wires a handler. Built here (not at
@@ -240,6 +243,18 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
+
+  // Season sports hide their futures until the season is active/near (same rule
+  // as the Discord alerts + Recommended list): show a "not ready yet" notice
+  // instead of prematurely-priced rows (rosters aren't set, so the price is noise).
+  if (isFuturesSportNotReady(sport, readiness)) {
+    return (
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-10 text-center text-sm text-[var(--color-text-dim)] flex flex-col items-center gap-2">
+        <Hourglass size={20} className="text-[var(--color-text-muted)]" />
+        <div>Futures aren't ready yet — they open about 3 weeks before the season starts, once rosters settle.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-x-auto">
