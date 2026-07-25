@@ -12,6 +12,36 @@ router = APIRouter(prefix="/placed-bets", tags=["placed-bets"])
 
 VALID_SETTLE_STATUSES = {"won", "lost", "push", "void"}
 
+# Game/match id columns, in the SAME priority order as the frontend's
+# crossPlatformKey (markets.ts): the first non-null wins. Used to decide when
+# two placed bets are really the SAME real-world opportunity offered on both
+# Kalshi and Polymarket.
+_GAME_ID_ATTRS = [
+    "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
+    "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
+    "lol_match_id", "race_event_id",
+]
+
+
+def _cross_platform_key(bet: PlacedBet) -> str:
+    """Mirror of frontend markets.ts crossPlatformKey: two rows sharing this key
+    are the same bet regardless of which platform (Kalshi/Polymarket) priced it.
+    The esports match-id columns are plain auto-increment ints from three
+    separate tables, so they're title-prefixed to avoid a cross-title collision
+    (same reasoning as the frontend)."""
+    gid = None
+    for attr in _GAME_ID_ATTRS:
+        v = getattr(bet, attr, None)
+        if v:
+            gid = f"{attr}:{v}" if attr in ("valorant_match_id", "cs2_match_id", "lol_match_id") else str(v)
+            break
+    mt = bet.market_type or ""
+    if gid:
+        line = "" if bet.line is None else str(bet.line)
+        return f"{gid}|{mt}|{bet.team or ''}|{line}|{bet.side or ''}"
+    # Futures fallback (no single game id): sport-scoped, like the frontend.
+    return f"{bet.sport or ''}|{mt}|{bet.team or bet.label or ''}"
+
 # Calibration buckets group settled bets by their predicted probability at
 # placement time (10-point buckets, 0-100%) so "does 70%-confidence
 # actually win about 70% of the time" is checkable at a glance -- see
@@ -826,6 +856,23 @@ def _resolve_bet_start(session: Session, bet: PlacedBet) -> tuple["datetime.date
 @router.post("", response_model=PlacedBetOut)
 def create_placed_bet(body: PlacedBetIn, session: Session = Depends(get_session)):
     row = PlacedBet(**body.model_dump())
+    # Copycat guard: the same real-world bet is offered on BOTH Kalshi and
+    # Polymarket (same internal game/match id). The Recommended view collapses
+    # them into one row, but which platform it shows can flip over time (it
+    # prefers the higher-volume side), so the "same" bet can re-appear looking
+    # new and get marked placed a second time hours later -- a real copycat seen
+    # live (Ryuki Matsuda moneyline: Polymarket at 16:22, then Kalshi at 20:33,
+    # both real $20 on tennis match 1502). If a REAL, still-pending bet already
+    # covers this cross-platform key, return it instead of creating a duplicate
+    # (idempotent -- the frontend still gets a valid placed bet back).
+    key = _cross_platform_key(row)
+    for existing in (
+        session.query(PlacedBet)
+        .filter(PlacedBet.paper == False, PlacedBet.status == "pending")  # noqa: E712
+        .all()
+    ):
+        if _cross_platform_key(existing) == key:
+            return _to_out(session, existing)
     session.add(row)
     session.flush()
     # Snapshot the game's scheduled start now, so a later reschedule (start moves

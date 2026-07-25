@@ -52,6 +52,26 @@ _GAME_ID_FIELDS = [
 ]
 
 
+def _cross_platform_key(obj) -> str:
+    """Mirror of frontend crossPlatformKey / placed_bets._cross_platform_key:
+    the SAME real-world bet is offered on both Kalshi and Polymarket (same
+    internal game/match id). This collapses those copies so a copycat is
+    announced to Discord only ONCE -- otherwise a user gets pinged twice for one
+    bet (real case: Ryuki Matsuda moneyline on both platforms). Works on either a
+    Market or a PlacedBet (they share these column names)."""
+    gid = None
+    for f in _GAME_ID_FIELDS:
+        v = getattr(obj, f, None)
+        if v:
+            gid = f"{f}:{v}" if f in ("valorant_match_id", "cs2_match_id", "lol_match_id") else str(v)
+            break
+    mt = getattr(obj, "market_type", "") or ""
+    if gid:
+        line = getattr(obj, "line", None)
+        return f"{gid}|{mt}|{getattr(obj, 'team', '') or ''}|{'' if line is None else line}|{getattr(obj, 'side', '') or ''}"
+    return f"{getattr(obj, 'sport', '') or ''}|{mt}|{getattr(obj, 'team', '') or ''}"
+
+
 def _fetch_priced() -> list[dict]:
     out: list[dict] = []
     try:
@@ -95,12 +115,16 @@ def run_paper_log():
         try:
             _, _, min_edge = get_staking_params(session)
             alert_cfg = get_alert_config(session)
-            open_ids = {
-                b.market_id
-                for b in session.query(PlacedBet)
+            open_paper = (
+                session.query(PlacedBet)
                 .filter(PlacedBet.paper == True, PlacedBet.status == "pending")  # noqa: E712
                 .all()
-            }
+            )
+            open_ids = {b.market_id for b in open_paper}
+            # Cross-platform keys already being tracked -> don't re-announce the
+            # OTHER platform's copy of a bet we've already alerted on (dedup holds
+            # across separate runs, not just within one batch).
+            alerted_keys = {_cross_platform_key(b) for b in open_paper}
             added = 0
             for row in rows:
                 if not _qualifies(row, min_edge):
@@ -137,7 +161,9 @@ def run_paper_log():
                 # A newly-logged paper bet == a market that JUST cleared the
                 # recommendation gate for the first time -> alert-worthy if its
                 # edge clears the (higher) alert floor.
-                if (row.get("edge") or 0) >= alert_cfg["min_edge"]:
+                akey = _cross_platform_key(m)
+                if (row.get("edge") or 0) >= alert_cfg["min_edge"] and akey not in alerted_keys:
+                    alerted_keys.add(akey)  # so the sibling platform in this same run is skipped too
                     new_alerts.append({
                         "sport": m.sport or "nfl", "market_type": m.market_type,
                         "team": m.team, "line": m.line, "side": m.side, "source": m.source,

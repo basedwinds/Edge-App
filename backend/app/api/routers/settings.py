@@ -272,7 +272,10 @@ def _set_str(session: Session, key: str, value: str) -> None:
 # ---- new-recommendation alerts (Discord webhook) ----------------------------
 DISCORD_WEBHOOK_KEY = "discord_webhook_url"
 ALERT_MIN_EDGE_KEY = "alert_min_edge_pp"
-DEFAULT_ALERT_MIN_EDGE = 0.05  # only alert for edges >= 5pp (avoid marginal-bet spam)
+DEFAULT_ALERT_MIN_EDGE = 0.03  # match the recommend gate (MIN_EDGE_TO_BET = 0.03): alert on
+# EVERY bet that enters the Recommended section. (Was 0.05 to suppress marginal
+# 3-5pp bets; user wants a ping for all recommended bets, so it's coupled to the
+# same 3pp floor the app uses to recommend in the first place.)
 
 
 def get_alert_config(session: Session) -> dict:
