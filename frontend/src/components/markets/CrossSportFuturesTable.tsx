@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
-import { fetchSettings, fetchOpenBets, fetchSettledBets, markFuturesBetPlaced } from "../../api/markets";
+import { fetchSettings, fetchOpenBets, fetchSettledBets, markFuturesBetPlaced, fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { futuresMarketName, futuresThreshold } from "../../utils/futuresLabel";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
@@ -33,8 +33,12 @@ const EMPTY_KEYS: Set<string> = new Set(); // stable ref while placed bets load
 // sport's edge-qualified futures in one screen, with Mark placed (falls back to
 // 1 unit when the model didn't size one -- many futures are approx/tracking-only)
 // and the reasoning modal. Placed futures land in the tracker's Futures section.
-export function CrossSportFuturesTable({ rows }: { rows: CrossSportFuturesRow[] }) {
+export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFuturesRow[] }) {
   const queryClient = useQueryClient();
+  // Hide not-ready season-sport futures (e.g. NFL before the season) -- same
+  // readiness rule as the alerts + the per-sport Futures pages.
+  const readiness = useQuery({ queryKey: ["readiness"], queryFn: fetchReadiness }).data;
+  const rows = useMemo(() => allRows.filter((r) => !isFuturesSportNotReady(r.sport, readiness)), [allRows, readiness]);
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
   const [reasoning, setReasoning] = useState<CrossSportFuturesRow | null>(null);
   const [placedIds, setPlacedIds] = useState<Set<number>>(new Set());
