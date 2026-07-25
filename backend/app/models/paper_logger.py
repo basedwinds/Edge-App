@@ -27,6 +27,7 @@ Design choices:
     (no single close), so they're skipped for now.
 """
 import logging
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -37,6 +38,7 @@ from app.ingestion.poller_lock import db_write_lock
 log = logging.getLogger("paper_logger")
 
 _BASE = "http://127.0.0.1:8756"
+_ALERT_MAX_DAYS_TO_EVENT = 14  # don't Discord-alert on games/matches more than ~2 weeks out
 _ENDPOINTS = [
     "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
     "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets",
@@ -98,6 +100,40 @@ def _qualifies(row: dict, min_edge: float) -> bool:
         return True
     edge = row.get("edge")
     return edge is not None and edge >= min_edge and row.get("implied_prob") is not None
+
+
+def _within_alert_window(session, bet) -> bool:
+    """Only PING for bets whose game/match is within ~2 weeks. A liquid market
+    weeks out paired with a big model edge is almost always model noise, not a
+    real edge -- real case: NFL Week 1 moneyline (MIA @ LV, Sept 13) pinged ~7
+    weeks early with a fake +22pp, a Kalshi market carrying thousands in volume
+    that the preseason Elo simply disagreed with. In-season games are always
+    days out, so this only filters far-future / preseason markets. Fails OPEN
+    (returns True) when the start time is unknown or it's a futures market with
+    no single event, so a real alert is never silently dropped. Paper bets are
+    still LOGGED for CLV -- only the Discord ping is gated."""
+    from app.models.clv import _game_kickoff_dt, _get_game
+
+    try:
+        game = _get_game(session, bet)
+        if game is None:
+            return True
+        start = _game_kickoff_dt(game)
+        if start is None:
+            # Kickoff time not announced yet (e.g. NFL gametime "00:00" on
+            # flex-scheduled games): fall back to the DATE so a far-future game
+            # is still filtered. Day precision is enough for a 2-week window.
+            gd = getattr(game, "gameday", None)
+            if gd:
+                try:
+                    start = datetime.strptime(gd, "%Y-%m-%d")
+                except ValueError:
+                    start = None
+    except Exception:
+        return True
+    if start is None:
+        return True
+    return start <= datetime.utcnow() + timedelta(days=_ALERT_MAX_DAYS_TO_EVENT)
 
 
 def run_paper_log():
@@ -162,7 +198,11 @@ def run_paper_log():
                 # recommendation gate for the first time -> alert-worthy if its
                 # edge clears the (higher) alert floor.
                 akey = _cross_platform_key(m)
-                if (row.get("edge") or 0) >= alert_cfg["min_edge"] and akey not in alerted_keys:
+                if (
+                    (row.get("edge") or 0) >= alert_cfg["min_edge"]
+                    and akey not in alerted_keys
+                    and _within_alert_window(session, bet)
+                ):
                     alerted_keys.add(akey)  # so the sibling platform in this same run is skipped too
                     new_alerts.append({
                         "sport": m.sport or "nfl", "market_type": m.market_type,
