@@ -3,7 +3,7 @@ backend/__pycache__/
 backend/**/__pycache__/
 frontend/node_modules/
 frontend/dist/
-data/
+/data/
 *.db
 .env
 *.db-shm
