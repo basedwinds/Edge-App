@@ -127,8 +127,22 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
     out.push(r);
   }
   out.sort((a, b) => b.edge! - a.edge!);
-  return out.slice(0, 40);
+  // Per-SPORT cap so a sport deep in its season (MLB/soccer, lots of high-edge
+  // futures) can't crowd the shortlist and bury a sport just entering its
+  // season -- each sport gets up to its own top-N slots. Guarantees every ready
+  // sport with futures gets airtime, whenever its season happens to start.
+  const perSport = new Map<string, number>();
+  const capped: CrossSportFuturesRow[] = [];
+  for (const r of out) {
+    const n = perSport.get(r.sport) ?? 0;
+    if (n >= MAX_FUTURES_PER_SPORT) continue;
+    perSport.set(r.sport, n + 1);
+    capped.push(r);
+  }
+  return capped;
 }
+
+const MAX_FUTURES_PER_SPORT = 8; // futures shortlist: top-N per sport (fairness across sports)
 
 const EMPTY_IDS: Set<number> = new Set(); // stable ref for the loading state
 
