@@ -39,6 +39,18 @@ log = logging.getLogger("paper_logger")
 
 _BASE = "http://127.0.0.1:8756"
 _ALERT_MAX_DAYS_TO_EVENT = 14  # don't Discord-alert on games/matches more than ~2 weeks out
+_READINESS_WINDOW_DAYS = 21    # a season-sport's futures are "ready" once its season is within ~3 weeks
+# Season-based sports where a futures bet is only worth surfacing once the real
+# season is active/near. Event-based sports (tennis/mma/esports/racing) are
+# omitted on purpose: their "futures" are tournament-scoped and only listed once
+# the event is imminent, so there's no premature-futures problem to gate.
+_SEASON_TABLES = {
+    "nfl": ("NflGame", "gameday"),
+    "nba": ("NbaGame", "gameday"),
+    "wnba": ("WnbaGame", "gameday"),
+    "mlb": ("MlbGame", "gameday"),
+    "soccer": ("SoccerMatch", "match_date"),
+}
 _ENDPOINTS = [
     "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
     "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets",
@@ -102,22 +114,61 @@ def _qualifies(row: dict, min_edge: float) -> bool:
     return edge is not None and edge >= min_edge and row.get("implied_prob") is not None
 
 
-def _within_alert_window(session, bet) -> bool:
-    """Only PING for bets whose game/match is within ~2 weeks. A liquid market
-    weeks out paired with a big model edge is almost always model noise, not a
-    real edge -- real case: NFL Week 1 moneyline (MIA @ LV, Sept 13) pinged ~7
-    weeks early with a fake +22pp, a Kalshi market carrying thousands in volume
-    that the preseason Elo simply disagreed with. In-season games are always
-    days out, so this only filters far-future / preseason markets. Fails OPEN
-    (returns True) when the start time is unknown or it's a futures market with
-    no single event, so a real alert is never silently dropped. Paper bets are
-    still LOGGED for CLV -- only the Discord ping is gated."""
+def _sport_season_active(session, sport) -> bool:
+    """True if a SEASON-based sport's real season is active or within ~3 weeks --
+    i.e. its season-long futures are finally worth surfacing. Excludes
+    exhibition/preseason games (NFL 'PRE' etc.): NFL preseason starts ~5 weeks
+    before the games that actually decide season futures, so it must NOT open the
+    window (a naive "next game" check would be fooled by it). Returns True (fails
+    OPEN) for unconfigured sports or on any error, so a real alert is never
+    silently dropped."""
+    cfg = _SEASON_TABLES.get(sport)
+    if cfg is None:
+        return True
+    from app.db import models as _m
+
+    Model = getattr(_m, cfg[0], None)
+    if Model is None:
+        return True
+    try:
+        col = getattr(Model, cfg[1])
+        today = datetime.utcnow().date()
+        lo = (today - timedelta(days=3)).isoformat()          # "active" = a game in the last few days
+        hi = (today + timedelta(days=_READINESS_WINDOW_DAYS)).isoformat()
+        q = session.query(Model).filter(col >= lo, col <= hi)
+        if hasattr(Model, "game_type"):
+            q = q.filter(Model.game_type != "PRE")            # exhibition/preseason doesn't count
+        return bool(session.query(q.exists()).scalar())
+    except Exception:
+        return True
+
+
+def _within_alert_window(session, bet, season_active=None) -> bool:
+    """Gate a Discord PING (never the CLV paper-log itself). Two cases:
+      * a bet tied to a real game/match -> only ping if kickoff is within ~2
+        weeks. A liquid market weeks out with a big model edge is almost always
+        model noise, not an edge -- real case: NFL Week 1 moneyline (MIA @ LV,
+        Sept 13) pinged ~7 weeks early with a fake +22pp.
+      * a futures/season-long bet (no single game) -> for SEASON sports, only
+        ping once the real season is active/near (_sport_season_active);
+        event-based sports (tennis/mma/esports/racing) are never gated here.
+    Fails OPEN whenever the timing can't be determined, so a real alert is never
+    silently dropped. `season_active`, when provided, is a precomputed set of
+    ready season-sports (avoids re-querying per futures bet in one run)."""
     from app.models.clv import _game_kickoff_dt, _get_game
 
     try:
         game = _get_game(session, bet)
-        if game is None:
-            return True
+    except Exception:
+        return True
+    if game is None:
+        # Futures / season-long: gate season sports on season readiness.
+        if bet.sport in _SEASON_TABLES:
+            if season_active is not None:
+                return bet.sport in season_active
+            return _sport_season_active(session, bet.sport)
+        return True
+    try:
         start = _game_kickoff_dt(game)
         if start is None:
             # Kickoff time not announced yet (e.g. NFL gametime "00:00" on
@@ -161,6 +212,10 @@ def run_paper_log():
             # OTHER platform's copy of a bet we've already alerted on (dedup holds
             # across separate runs, not just within one batch).
             alerted_keys = {_cross_platform_key(b) for b in open_paper}
+            # Which season-sports are "ready" (season active/near) -> gates their
+            # futures alerts. Computed ONCE per run (5 quick queries) rather than
+            # per futures bet.
+            season_active = {sp for sp in _SEASON_TABLES if _sport_season_active(session, sp)}
             added = 0
             for row in rows:
                 if not _qualifies(row, min_edge):
@@ -201,7 +256,7 @@ def run_paper_log():
                 if (
                     (row.get("edge") or 0) >= alert_cfg["min_edge"]
                     and akey not in alerted_keys
-                    and _within_alert_window(session, bet)
+                    and _within_alert_window(session, bet, season_active)
                 ):
                     alerted_keys.add(akey)  # so the sibling platform in this same run is skipped too
                     new_alerts.append({

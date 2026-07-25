@@ -281,15 +281,18 @@ def start():
         replace_existing=True,
     )
     # Auto paper-trading logger (see paper_logger.py) -- snapshots the current
-    # recommendations as paper bets so forward CLV accrues. Every 3h is plenty:
-    # it dedupes per market and only needs to catch a market once before its
-    # game. Staggered well after startup so pricing + Elo are warm first. Not
-    # serialized() here -- it takes db_write_lock() itself only around its quick
-    # write, after the (network) self-HTTP, same pattern as the pollers.
+    # recommendations as paper bets so forward CLV accrues, AND fires the Discord
+    # new-bet alerts. Every 30min so alerts are timely (markets themselves
+    # refresh every 5min; a new recommendation shouldn't sit up to 3h before it
+    # pings). Still cheap: it dedupes per market (open_ids) so a market is only
+    # ever logged once no matter how often this runs -- more frequent runs just
+    # catch new ones sooner. Staggered well after startup so pricing + Elo are
+    # warm first. Not serialized() here -- it takes db_write_lock() itself only
+    # around its quick write, after the (network) self-HTTP, same as the pollers.
     scheduler.add_job(
         run_paper_log_job,
         "interval",
-        hours=3,
+        minutes=30,
         id="paper_log",
         next_run_time=base_tick + timedelta(seconds=13 * JOB_STAGGER_SECONDS),
         replace_existing=True,
