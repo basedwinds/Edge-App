@@ -166,6 +166,11 @@ _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
     "valorant": _prefix_matcher("KXVALORANT"),
     "cs2": _prefix_matcher("KXCS2"),
     "lol": _prefix_matcher("KXLOL", "KXLEAGUEWORLDS"),
+    # CFB added 2026-08-02 when college football was integrated. Without this,
+    # every KXNCAAF* series classified as "other" via the catch-all -- which is
+    # how 45 of them (including six the app now actively prices) ended up bulk-
+    # dismissed as not_relevant in a sweep of untracked sports.
+    "cfb": _prefix_matcher("KXNCAAF"),
 }
 
 
@@ -176,6 +181,13 @@ def _fetch_kalshi_series_for_sport(sport: str) -> list[dict]:
         for s in _fetch_kalshi_sports_series()
         if s.get("ticker") and match(s.get("ticker", ""), s.get("title") or "")
     ]
+
+
+def fetch_kalshi_cfb_series() -> list[dict]:
+    """Every KXNCAAF* series. Note this deliberately catches the whole family --
+    spread and total series list nothing today but will appear here the moment
+    they do, which is the point."""
+    return _fetch_kalshi_series_for_sport("cfb")
 
 
 def fetch_kalshi_nfl_series() -> list[dict]:
@@ -655,6 +667,10 @@ _SPORT_FETCHERS: dict[str, list[tuple[str, callable]]] = {
     "valorant": [("kalshi", fetch_kalshi_valorant_series), ("polymarket", fetch_polymarket_valorant_events)],
     "cs2": [("kalshi", fetch_kalshi_cs2_series), ("polymarket", fetch_polymarket_cs2_events)],
     "lol": [("kalshi", fetch_kalshi_lol_series), ("polymarket", fetch_polymarket_lol_events)],
+    # Kalshi only -- Polymarket lists no college football. MUST sit ABOVE the
+    # catch-all so KXNCAAF* series classify as "cfb"; the catch-all is defined as
+    # the complement of the named sports and would otherwise swallow them.
+    "cfb": [("kalshi", fetch_kalshi_cfb_series)],
     OTHER_SPORT: [("kalshi", fetch_kalshi_other_series),
                   ("polymarket", fetch_polymarket_other_events)],
 }
