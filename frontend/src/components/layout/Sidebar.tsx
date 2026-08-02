@@ -195,6 +195,7 @@ export function Sidebar() {
   const pathname = useLocation().pathname;
   const isNbaPath = pathname.startsWith("/nba");
   const isWnbaPath = pathname.startsWith("/wnba");
+  const isCfbPath = pathname.startsWith("/cfb");
   const isMlbPath = pathname.startsWith("/mlb");
   const isMmaPath = pathname.startsWith("/mma");
   const isTennisPath = pathname.startsWith("/tennis");
@@ -212,7 +213,7 @@ export function Sidebar() {
   // NFL the moment you left another sport for one of these pages -- reported
   // 2026-07-17 ("when i go to backtests it takes me back to NFL tab").
   // Remembering the last NON-shared sport instead keeps the scope stable.
-  const currentSport: string = isRacingPath ? (racingSeries as string) : isMlbPath ? "mlb" : isWnbaPath ? "wnba" : isNbaPath ? "nba" : isMmaPath ? "mma" : isTennisPath ? "tennis" : isSoccerPath ? "soccer" : isValorantPath ? "valorant" : isCs2Path ? "cs2" : isLolPath ? "lol" : "nfl";
+  const currentSport: string = isRacingPath ? (racingSeries as string) : isMlbPath ? "mlb" : isWnbaPath ? "wnba" : isCfbPath ? "cfb" : isNbaPath ? "nba" : isMmaPath ? "mma" : isTennisPath ? "tennis" : isSoccerPath ? "soccer" : isValorantPath ? "valorant" : isCs2Path ? "cs2" : isLolPath ? "lol" : "nfl";
   const [lastSport, setLastSport] = useState<string>(currentSport);
   useEffect(() => {
     if (!isSharedPath) {
