@@ -282,17 +282,28 @@ def start():
     )
     # Auto paper-trading logger (see paper_logger.py) -- snapshots the current
     # recommendations as paper bets so forward CLV accrues, AND fires the Discord
-    # new-bet alerts. Every 30min so alerts are timely (markets themselves
-    # refresh every 5min; a new recommendation shouldn't sit up to 3h before it
-    # pings). Still cheap: it dedupes per market (open_ids) so a market is only
-    # ever logged once no matter how often this runs -- more frequent runs just
-    # catch new ones sooner. Staggered well after startup so pricing + Elo are
-    # warm first. Not serialized() here -- it takes db_write_lock() itself only
-    # around its quick write, after the (network) self-HTTP, same as the pollers.
+    # new-bet alerts.
+    #
+    # Every 5min, matched to the price pollers above. This was 30min, which meant
+    # a qualifying bet could sit up to half an hour before pinging -- reported
+    # live: bets settle, replacements surface with their event starting soon, and
+    # the alert arrived too late to act on. 5min is the useful FLOOR, not a
+    # throttle: the underlying markets only refresh every 5min, so alerting more
+    # often than that cannot surface anything newer.
+    #
+    # Safe to run this often because the dedupe is by persisted state, not by
+    # timing: open_ids skips any market already logged and alerted_keys skips any
+    # cross-platform sibling already announced, both rebuilt from open paper bets
+    # every run, so they survive restarts. More frequent runs therefore catch new
+    # bets SOONER and never re-announce one.
+    #
+    # Staggered well after startup so pricing + Elo are warm first. Not
+    # serialized() -- it takes db_write_lock() itself only around its quick
+    # write, after the (network) self-HTTP, same as the pollers.
     scheduler.add_job(
         run_paper_log_job,
         "interval",
-        minutes=30,
+        minutes=5,
         id="paper_log",
         next_run_time=base_tick + timedelta(seconds=13 * JOB_STAGGER_SECONDS),
         replace_existing=True,
