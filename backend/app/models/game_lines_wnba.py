@@ -130,3 +130,72 @@ def prob_over(line: float, home_scoring: dict | None, away_scoring: dict | None)
     """P(combined score exceeds `line`)."""
     mu, std = expected_total(home_scoring, away_scoring)
     return 1.0 - _norm_cdf(line, mu, std)
+
+
+# --- Halves ------------------------------------------------------------------
+# Kalshi runs six live WNBA half series (1H/2H winner, spread and total) with
+# real settled history -- 528/528/176/282/698/658 settled markets as of
+# 2026-08-02, so this is proven inventory, not a speculative build.
+#
+# Constants MEASURED from ESPN quarter linescores over 227 finished 2026 games
+# (1H = Q1+Q2, 2H = Q3+Q4):
+#
+#            margin mean   margin std   total mean   share of game
+#     1H         +1.80        10.39        86.16        0.4931
+#     2H         -0.11         9.48        87.43        0.5004
+#     full       +1.76        14.21       174.71        1.0
+#
+# Two things that matter came out of that table:
+#
+# 1. HOME ADVANTAGE IS ALMOST ENTIRELY A FIRST-HALF EFFECT. 1H home margin is
+#    +1.80 while 2H is -0.11 -- i.e. the whole +1.76 full-game edge accrues
+#    before the break and the second half is essentially neutral. So the second
+#    half must NOT carry the same home-court term; applying the full-game Elo
+#    edge to it would bias every 2H line toward the home side.
+# 2. The two shares sum to 0.9935, not 1.0. The gap is overtime, which belongs
+#    to neither half -- so a 2H line must be modelled on regulation scoring, and
+#    the shares are deliberately left un-normalised rather than forced to 1.
+#
+# The measurement also independently reproduced the shipped full-game constants
+# (total 174.71 vs 174.1, margin std 14.21 vs 14.27), which is a useful check
+# that the linescore source agrees with the scoreboard source already in use.
+HALF_MARGIN_STD = {1: 10.39, 2: 9.48}
+HALF_TOTAL_SHARE = {1: 0.4931, 2: 0.5004}
+HALF_TOTAL_STD = {1: 13.43, 2: 13.41}
+
+# Derived the same way MARGIN_SLOPE is (see the module docstring), from each
+# half's own margin spread. NOT fitted -- the same caution applies, and forward
+# CLV is the judge.
+HALF_MARGIN_SLOPE = {
+    1: math.log(10) / 1600.0 * HALF_MARGIN_STD[1] * math.sqrt(2 * math.pi),  # 0.0375
+    2: math.log(10) / 1600.0 * HALF_MARGIN_STD[2] * math.sqrt(2 * math.pi),  # 0.0342
+}
+
+# Fraction of the Elo-implied edge that shows up in each half. The measurement
+# above says the first half carries it all, so the second half gets none rather
+# than a scaled-down share -- an invented middle value would be worse than the
+# number actually measured.
+HALF_EDGE_SHARE = {1: 1.0, 2: 0.0}
+
+
+def prob_team_covers_half(team_is_home: bool, line: float, elo_diff: float, half: int) -> float:
+    """P(team wins `half` by more than `line`). `elo_diff` is home-minus-away and
+    already includes home-court (see the router), so HALF_EDGE_SHARE is what
+    stops that edge being applied to a second half that does not exhibit it."""
+    mu = HALF_MARGIN_SLOPE[half] * elo_diff * HALF_EDGE_SHARE[half]
+    if not team_is_home:
+        mu = -mu
+    return 1.0 - _norm_cdf(line, mu, HALF_MARGIN_STD[half])
+
+
+def prob_over_half(line: float, home_scoring: dict | None, away_scoring: dict | None, half: int) -> float:
+    """P(combined score in `half` exceeds `line`)."""
+    full_mu, _ = expected_total(home_scoring, away_scoring)
+    mu = full_mu * HALF_TOTAL_SHARE[half]
+    return 1.0 - _norm_cdf(line, mu, HALF_TOTAL_STD[half])
+
+
+def prob_team_wins_half(team_is_home: bool, elo_diff: float, half: int) -> float:
+    """P(team outscores the opponent in `half`) -- the half-winner markets. Just
+    the spread model at a line of 0."""
+    return prob_team_covers_half(team_is_home, 0.0, elo_diff, half)
