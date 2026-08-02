@@ -28,9 +28,13 @@ market's own title text (KXCS2TOTALMAPS, which has no per-team yes_sub_title
 since it's a single game-level market, not per-team) -- same "trust the
 market's own real label" discipline as kalshi_mma_client.py.
 """
+import logging
 import re
 
 from app.clients.base import get_json, paginate
+from app.clients.kalshi_client import get_open_markets_for_series
+
+log = logging.getLogger("kalshi_cs2_client")
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
@@ -66,6 +70,27 @@ def _to_float(v):
         return None
 
 
+
+def _event_market_pairs(series_ticker: str):
+    """(event, market) pairs for a series using ONE bulk markets call instead of
+    one call per event -- see kalshi_client.get_open_markets_for_series for the
+    measured reason (cs2's ~300 per-event calls hit Kalshi 429s and stalled the
+    whole sport's price refresh). Semantics are preserved: only markets whose
+    event_ticker is in this series' OPEN events list are yielded, exactly as the
+    old get_open_events() -> get_markets_for_event() loop did."""
+    events = get_open_events(series_ticker)
+    by_event: dict[str, list[dict]] = {}
+    try:
+        for m in get_open_markets_for_series(series_ticker):
+            by_event.setdefault(m.get("event_ticker"), []).append(m)
+    except Exception:
+        log.exception("bulk market fetch failed for %s", series_ticker)
+        return
+    for ev in events:
+        for m in by_event.get(ev["event_ticker"], []):
+            yield ev, m
+
+
 def _base_row(event_ticker: str, event_title: str, m: dict, **extra) -> dict:
     row = {
         "event_ticker": event_ticker,
@@ -87,12 +112,8 @@ def get_series_winner_markets() -> list[dict]:
     team name from yes_sub_title, same convention as every fighter-name
     market in kalshi_mma_client.py."""
     rows = []
-    for ev in get_open_events(SERIES_WINNER_SERIES):
-        try:
-            markets = get_markets_for_event(ev["event_ticker"])
-        except Exception:
-            continue
-        for m in markets:
+    for ev, m in _event_market_pairs(SERIES_WINNER_SERIES):
+        if True:
             rows.append(_base_row(
                 ev["event_ticker"], ev.get("title", ""), m,
                 team_name=m.get("yes_sub_title", ""),
@@ -107,17 +128,13 @@ def get_map_winner_markets() -> list[dict]:
     event_ticker segment" shape kalshi_valorant_client.py's KXVALORANTMAP
     already uses."""
     rows = []
-    for ev in get_open_events(MAP_WINNER_SERIES):
+    for ev, m in _event_market_pairs(MAP_WINNER_SERIES):
         m_num = re.search(r"-(\d+)$", ev["event_ticker"])
         if not m_num:
             continue
         match_code = ev["event_ticker"][: m_num.start()]
         map_number = int(m_num.group(1))
-        try:
-            markets = get_markets_for_event(ev["event_ticker"])
-        except Exception:
-            continue
-        for m in markets:
+        if True:
             rows.append(_base_row(
                 ev["event_ticker"], ev.get("title", ""), m,
                 match_code=match_code, map_number=map_number,
@@ -131,12 +148,8 @@ def get_total_maps_markets() -> list[dict]:
     and the real over-line parsed from the market's own title text (no
     yes_sub_title carries a team name here, confirmed live)."""
     rows = []
-    for ev in get_open_events(TOTAL_MAPS_SERIES):
-        try:
-            markets = get_markets_for_event(ev["event_ticker"])
-        except Exception:
-            continue
-        for m in markets:
+    for ev, m in _event_market_pairs(TOTAL_MAPS_SERIES):
+        if True:
             title_match = _TOTAL_MAPS_TITLE_RE.search(m.get("title", ""))
             if not title_match:
                 continue
@@ -153,12 +166,8 @@ def get_tournament_winner_markets() -> list[dict]:
     inventory (checked 2026-07-19), kept for when a real tournament-winner
     contract opens."""
     rows = []
-    for ev in get_open_events(TOURNAMENT_WINNER_SERIES):
-        try:
-            markets = get_markets_for_event(ev["event_ticker"])
-        except Exception:
-            continue
-        for m in markets:
+    for ev, m in _event_market_pairs(TOURNAMENT_WINNER_SERIES):
+        if True:
             rows.append(_base_row(
                 ev["event_ticker"], ev.get("title", ""), m,
                 group_label=ev.get("title", ""),

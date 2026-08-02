@@ -101,6 +101,26 @@ def get_markets_for_event(event_ticker: str) -> list[dict]:
     return d.get("markets", [])
 
 
+def get_open_markets_for_series(series_ticker: str) -> list[dict]:
+    """Every open market in a series in ONE paginated call, instead of the
+    get_open_events() + get_markets_for_event()-per-event N+1 pattern.
+
+    Why it exists (measured live 2026-08-02): CS2 had 66 open KXCS2GAME events
+    and 129 KXCS2MAP events, so its refresh made ~300 sequential per-event calls
+    and Kalshi started returning 429s -- the whole cs2 price refresh stopped
+    completing, leaving 782 markets ~8 days stale. The same series fetched in
+    bulk returns all 132 KXCS2GAME markets across all 66 events in 2.3s. Each
+    market carries its own `event_ticker`, so callers can regroup by event and
+    join event titles from the (cheap, single-call) events list."""
+    def url_builder(cursor):
+        url = f"{BASE}/markets?series_ticker={series_ticker}&status=open&limit=1000"
+        if cursor:
+            url += f"&cursor={cursor}"
+        return url
+
+    return paginate(url_builder, list_key="markets", cursor_style="cursor")
+
+
 def get_moneyline_markets() -> list[dict]:
     """Returns a flat list of dicts, one per team-side market, each tagged
     with its parent event metadata (title/sub_title/event_ticker)."""

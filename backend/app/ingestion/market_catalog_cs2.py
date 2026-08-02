@@ -39,8 +39,25 @@ def find_or_create_upcoming_match(
         return session.get(Cs2Match, found["id"])
 
     resolved_date = match_date or datetime.date.today().isoformat()
+    source_match_id = f"live:{team_a_name}:{team_b_name}:{resolved_date}"
+    # REAL BUG this fixes (surfaced live 2026-08-02, once the cs2 refresh was fast
+    # enough to actually reach this code): the existence check above reads
+    # _load_upcoming_matches(), a snapshot taken ONCE at the start of the run, so a
+    # fallback row created earlier in the SAME run is invisible to it -- the second
+    # insert then dies on "UNIQUE constraint failed: cs2_matches.source,
+    # cs2_matches.source_match_id" and takes the whole refresh down with it. Real
+    # trigger: Kalshi markets whose team name doesn't resolve share the placeholder
+    # "???", so several genuinely different matches collapse onto one key/date.
+    # Re-check against the DB (not the stale snapshot) before inserting.
+    existing = (
+        session.query(Cs2Match)
+        .filter_by(source="live", source_match_id=source_match_id)
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
     match = Cs2Match(
-        source="live", source_match_id=f"live:{team_a_name}:{team_b_name}:{resolved_date}",
+        source="live", source_match_id=source_match_id,
         event_name=event_name or "", match_date=resolved_date,
         team_a=team_a_name, team_b=team_b_name,
     )
