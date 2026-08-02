@@ -36,6 +36,17 @@ KALSHI_TO_ESPN_ABBR = {
     # ESPN schedule, because the historical cache and the current schedule spell
     # it differently.
     "NCST": "NCSU",
+    # These five surfaced only on the KXNCAAFWINS ladders, where the
+    # display-name fallback CANNOT help: yes_sub_title there is "9+ wins", not a
+    # team name, so abbreviation resolution is the only route. Confirmed against
+    # ESPN's own /teams endpoint rather than guessed. Any future series that
+    # labels markets by threshold instead of team will depend on this table
+    # being complete for the teams it lists.
+    "BSU": "BOIS",    # Boise State
+    "IND": "IU",      # Indiana
+    "NW": "NU",       # Northwestern
+    "SCAR": "SC",     # South Carolina
+    "TXAM": "TA&M",   # Texas A&M
 }
 
 _MONTHS = {

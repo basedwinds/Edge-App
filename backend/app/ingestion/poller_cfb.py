@@ -20,6 +20,7 @@ from app.ingestion.market_matcher_cfb import (
     parse_kalshi_event_ticker,
     resolve_team,
 )
+from app.models import season_sim_cfb
 from app.models.baseline import elo_service_cfb
 
 log = logging.getLogger("poller_cfb")
@@ -126,6 +127,40 @@ def _opponent_for(event_ticker: str, rows: list[dict], name_index: dict,
     return None
 
 
+def refresh_cfb_season_sim():
+    """Season win-total Monte Carlo. Runs AFTER ratings (it reads them) and off
+    the request path -- its own season-wide schedule fetch is ~100 ESPN calls,
+    far too slow to run inside a request. Self-caches on a 1h TTL."""
+    season_sim_cfb.warm()
+
+
+def refresh_kalshi_cfb_win_totals():
+    """KXNCAAFWINS ladders. Team resolution is abbreviation-ONLY here: these
+    markets label themselves "9+ wins" rather than by team, so the matcher's
+    display-name fallback has nothing to work with."""
+    dist, trials = season_sim_cfb.get()
+    rows = kalshi_cfb_client.get_win_total_markets()
+    if not rows:
+        return
+    known = set(dist)
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            resolved = unresolved = 0
+            for row in rows:
+                team = resolve_team(row["team_abbr_kalshi"], None, {}, known)
+                if team is None:
+                    unresolved += 1
+                    continue
+                resolved += 1
+                market_catalog_cfb.upsert_kalshi_cfb_win_total_market(session, row, team)
+            session.commit()
+            log.info("kalshi cfb win totals: %d rows, %d resolved, %d unresolved",
+                     len(rows), resolved, unresolved)
+        finally:
+            session.close()
+
+
 def settle_placed_bets_cfb():
     """Placeholder to keep the cycle shape identical to the other sports.
     Settlement needs finished games with scores, which only exist once the season
@@ -134,7 +169,8 @@ def settle_placed_bets_cfb():
 
 
 def run_full_refresh_cfb():
-    for step in (refresh_cfb_games, refresh_cfb_ratings, refresh_kalshi_cfb_moneyline):
+    for step in (refresh_cfb_games, refresh_cfb_ratings, refresh_cfb_season_sim,
+                 refresh_kalshi_cfb_moneyline, refresh_kalshi_cfb_win_totals):
         try:
             step()
         except Exception:

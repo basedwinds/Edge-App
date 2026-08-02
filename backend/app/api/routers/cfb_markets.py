@@ -24,6 +24,7 @@ from app.api.schemas import ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import CfbGame, Market
 from app.models import calibration_temp
+from app.models import season_sim_cfb
 from app.models.baseline import elo_service_cfb
 from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
 from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
@@ -31,6 +32,10 @@ from app.models.staking import has_real_trading, kelly_fraction, size_stake_doll
 router = APIRouter(prefix="/cfb", tags=["cfb"])
 
 GAME_MARKET_TYPES = {"moneyline"}
+# Season-long ladders -- no cfb_game_id, priced from the season Monte Carlo
+# rather than a single game's Elo.
+SEASON_MARKET_TYPES = {"win_total"}
+ALL_MARKET_TYPES = GAME_MARKET_TYPES | SEASON_MARKET_TYPES
 
 
 class CfbMarketOut(BaseModel):
@@ -41,6 +46,7 @@ class CfbMarketOut(BaseModel):
     source: str
     team: str | None
     game_label: str | None
+    line: float | None
     cfb_game_id: str | None
     gameday: str | None
     gametime: str | None
@@ -83,8 +89,9 @@ def _moneyline_model_prob(m: Market, game: CfbGame) -> float | None:
 @router.get("/markets", response_model=list[CfbMarketOut])
 def list_cfb_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(
-        Market.sport == "cfb", Market.market_type.in_(GAME_MARKET_TYPES)
+        Market.sport == "cfb", Market.market_type.in_(ALL_MARKET_TYPES)
     ).all()
+    win_dist, sim_trials = season_sim_cfb.get()
     game_ids = {m.cfb_game_id for m in markets if m.cfb_game_id}
     games_by_id = {
         g.id: g for g in session.query(CfbGame).filter(CfbGame.id.in_(game_ids)).all()
@@ -111,7 +118,14 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             return False
         return now_utc >= kickoff
 
-    markets = [m for m in markets if not _already_final(m) and not _already_started(m)]
+    # Season ladders have no game to be final or started, so the per-game guards
+    # only apply to game markets -- filtering season rows through them would drop
+    # every one of them (m.cfb_game_id is always None there).
+    markets = [
+        m for m in markets
+        if m.market_type in SEASON_MARKET_TYPES
+        or (not _already_final(m) and not _already_started(m))
+    ]
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     pool = get_cfb_pool_dollars(session)
     unit_dollars = get_unit_dollars(session)
@@ -127,7 +141,16 @@ def list_cfb_markets(session: Session = Depends(get_session)):
 
         model_prob = None
         no_baseline_reason = None
-        if game is None:
+        if m.market_type in SEASON_MARKET_TYPES:
+            if not win_dist:
+                no_baseline_reason = "Season simulation not warm yet."
+            elif m.line is None or m.team not in win_dist:
+                no_baseline_reason = "No season projection for this team."
+            else:
+                model_prob = season_sim_cfb.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
+                if model_prob is not None:
+                    model_prob = round(model_prob, 4)
+        elif game is None:
             no_baseline_reason = "Not linked to a scheduled game yet."
         else:
             model_prob = _moneyline_model_prob(m, game)
@@ -146,7 +169,9 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             market_type=m.market_type,
             source=m.source,
             team=m.team,
-            game_label=f"{game.away_team} @ {game.home_team}" if game else None,
+            line=m.line,
+            game_label=(f"{game.away_team} @ {game.home_team}" if game
+                        else (f"{m.team} season wins" if m.market_type == "win_total" else None)),
             cfb_game_id=m.cfb_game_id,
             gameday=game.gameday if game else None,
             gametime=game.gametime if game else None,

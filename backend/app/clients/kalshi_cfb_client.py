@@ -12,6 +12,7 @@ caused the Kalshi 429s that stalled CS2 for 189 hours; one call returns every
 open market in the series.
 """
 import logging
+import re
 
 from app.clients.base import get_json
 
@@ -19,8 +20,10 @@ log = logging.getLogger("kalshi_cfb_client")
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
-MONEYLINE_SERIES = "KXNCAAFGAME"
-# Present but empty as of 2026-08-02 -- see module docstring.
+MONEYLINE_SERIES = "KXNCAAFGAME"      # per-game moneyline (30 open 2026-08-02)
+WIN_TOTAL_SERIES = "KXNCAAFWINS"      # season win ladders (583 open, 69 teams)
+# These two exist as series but list NOTHING yet -- they populate closer to
+# kickoff. Declared so enabling them is a one-line change.
 SPREAD_SERIES = "KXNCAAFSPREAD"
 TOTAL_SERIES = "KXNCAAFTOTAL"
 
@@ -53,6 +56,47 @@ def get_moneyline_markets() -> list[dict]:
             "team_abbr_kalshi": ticker.rsplit("-", 1)[-1] if "-" in ticker else None,
             "display_name": m.get("yes_sub_title"),
             "close_time": m.get("close_time") or m.get("expiration_time"),
+            "status": m.get("status") or "active",
+            "last_price": _to_float(m.get("last_price")),
+            "yes_bid": _to_float(m.get("yes_bid")),
+            "yes_ask": _to_float(m.get("yes_ask")),
+            "volume": _to_float(m.get("volume")),
+        })
+    return out
+
+
+def get_win_total_markets() -> list[dict]:
+    """One row per (team, win threshold) for the KXNCAAFWINS ladders.
+
+    NOTE the label shape differs from the game markets and it matters:
+    yes_sub_title here is "9+ wins", NOT a team name, so the matcher's
+    display-name fallback cannot resolve these. The team comes only from the
+    EVENT ticker suffix ("KXNCAAFWINS-26UCF" -> "UCF", after stripping the
+    two-digit season), which is why market_matcher_cfb's alias table has to be
+    complete for every team listed here.
+
+    The threshold is floor_strike, and unlike the soccer points ladders it is an
+    INTEGER (9 means 9+), not N-0.5."""
+    try:
+        data = get_json(f"{KALSHI_BASE}/markets?series_ticker={WIN_TOTAL_SERIES}&status=open&limit=1000")
+    except Exception:
+        log.exception("kalshi cfb win-total fetch failed")
+        return []
+    out = []
+    for m in data.get("markets", []):
+        ev = m.get("event_ticker") or ""
+        floor = m.get("floor_strike")
+        if not ev or not m.get("ticker") or floor is None:
+            continue
+        suffix = ev.rsplit("-", 1)[-1]
+        abbr = re.sub(r"^\d+", "", suffix)  # "26UCF" -> "UCF"
+        if not abbr:
+            continue
+        out.append({
+            "ticker": m["ticker"],
+            "event_ticker": ev,
+            "team_abbr_kalshi": abbr,
+            "line": float(floor),
             "status": m.get("status") or "active",
             "last_price": _to_float(m.get("last_price")),
             "yes_bid": _to_float(m.get("yes_bid")),
