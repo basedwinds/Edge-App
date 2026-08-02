@@ -31,7 +31,14 @@ _MONTHS = {
 # those tickers failed to parse and its markets landed unlinked -- unpriceable and
 # unsettleable. Season-long tickers like "KXWNBAWINS-27-ATL" still don't match,
 # since they have no 3-letter month segment.
-_EVENT_TICKER_RE = re.compile(r"^KXWNBA[A-Z]*-(\d{2})([A-Z]{3})(\d{2})([A-Z]+)$")
+# The series segment allows DIGITS as well as letters. This was [A-Z]* and that
+# silently broke the half markets the moment they were ingested: KXWNBA1HSPREAD
+# and KXWNBA2HTOTAL contain a digit, so all 51 half rows parsed to None, linked
+# to no game, and would have sat unpriceable and unsettleable -- the exact
+# failure this regex was ALREADY widened once to prevent (from KXWNBAGAME, when
+# spread/total were added). Widening it to [A-Z0-9]* covers the quarter series
+# (KXWNBA1QSPREAD etc) too, if those are ever built.
+_EVENT_TICKER_RE = re.compile(r"^KXWNBA[A-Z0-9]*-(\d{2})([A-Z]{3})(\d{2})([A-Z]+)$")
 
 
 def to_espn_abbr(kalshi_abbr: str) -> str:

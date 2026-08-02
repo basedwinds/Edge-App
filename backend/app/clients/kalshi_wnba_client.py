@@ -17,6 +17,14 @@ BASE = "https://api.elections.kalshi.com/trade-api/v2"
 MONEYLINE_SERIES = "KXWNBAGAME"
 SPREAD_SERIES = "KXWNBASPREAD"
 TOTAL_SERIES = "KXWNBATOTAL"
+# Half markets. All six are live with real settled history (528/528/176/282/
+# 698/658 settled 2026-08-02), priced by game_lines_wnba's measured half
+# constants. The winner series carry no floor_strike (they are "which team wins
+# the half", not a threshold), so they use the moneyline fetch shape rather than
+# the ladder one.
+HALF_WINNER_SERIES = {1: "KXWNBA1HWINNER", 2: "KXWNBA2HWINNER"}
+HALF_SPREAD_SERIES = {1: "KXWNBA1HSPREAD", 2: "KXWNBA2HSPREAD"}
+HALF_TOTAL_SERIES = {1: "KXWNBA1HTOTAL", 2: "KXWNBA2HTOTAL"}
 
 # Spread market tickers glue the team code to a rung index with no separator
 # (confirmed live 2026-08-02: "KXWNBASPREAD-26AUG03PHXCHI-PHX7" = Phoenix, and
@@ -123,3 +131,19 @@ def get_spread_markets() -> list[dict]:
 def get_total_markets() -> list[dict]:
     """Game-level ladder: "Over X.5 points scored" (no team side)."""
     return _ladder_rows(TOTAL_SERIES, with_team=False)
+
+
+def get_half_winner_markets(half: int) -> list[dict]:
+    """Per-TEAM: "which team wins the Nth half". Same shape as the game
+    moneyline, so it reuses that fetch."""
+    return get_moneyline_markets(HALF_WINNER_SERIES[half])
+
+
+def get_half_spread_markets(half: int) -> list[dict]:
+    """Per-TEAM ladder: "<Team> wins the Nth half by over X.5 points?"."""
+    return _ladder_rows(HALF_SPREAD_SERIES[half], with_team=True)
+
+
+def get_half_total_markets(half: int) -> list[dict]:
+    """Game-level ladder: "Over X.5 points in the Nth half"."""
+    return _ladder_rows(HALF_TOTAL_SERIES[half], with_team=False)

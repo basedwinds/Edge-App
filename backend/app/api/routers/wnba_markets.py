@@ -31,7 +31,19 @@ from app.models.staking import has_real_trading, is_weekly_market_type, kelly_fr
 
 router = APIRouter(prefix="/wnba", tags=["wnba"])
 
-GAME_MARKET_TYPES = {"moneyline", "spread", "total"}
+GAME_MARKET_TYPES = {
+    "moneyline", "spread", "total",
+    # Halves are namespaced by half rather than sharing the game types: a 1H
+    # spread is a different distribution from a game spread (margin std 10.39 vs
+    # 14.21), and the CLV gate + calibration report both bucket by market_type,
+    # so lumping them would average two things that measurably differ.
+    "first_half_winner", "first_half_spread", "first_half_total",
+    "second_half_winner", "second_half_spread", "second_half_total",
+}
+_HALF_OF = {"first": 1, "second": 2}
+# Kalshi outcome labels that are NOT a team. A half can end level, so the winner
+# markets carry a TIE leg -- see _half_model_prob for the bug this prevents.
+_NON_TEAM_OUTCOMES = {"TIE", "DRAW"}
 # Totals became priceable once scoring_ratings_wnba supplied real per-team points
 # scored/allowed -- the old objection (a league-average model returns the same
 # number for every game) no longer applies. That module was validated
@@ -116,6 +128,49 @@ def _total_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
     return round(p, 4)
 
 
+def _half_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
+    """1H/2H winner, spread and total. The half constants are MEASURED (see
+    game_lines_wnba) -- in particular the second half carries NO home-court
+    edge, which the game model cannot express and which scaling the game model
+    by a share would have got wrong in the home team's favour."""
+    prefix, kind = m.market_type.split("_half_")
+    half = _HALF_OF[prefix]
+    if kind == "total":
+        if m.line is None:
+            return None
+        p = game_lines_wnba.prob_over_half(m.line, scoring.get(game.home_team),
+                                           scoring.get(game.away_team), half)
+        if (m.side or "over").lower() == "under":
+            p = 1.0 - p
+        return round(p, 4)
+    if m.team is None:
+        return None
+    # A HALF CAN END TIED, and Kalshi lists TIE as its own outcome on the winner
+    # markets. Left unhandled this was a real, money-losing bug: "TIE" is not the
+    # home team, so it fell through to the AWAY side's win probability -- 20.1%
+    # against a market at 3.5%, a fake +16.5pp edge that staked a full unit.
+    # The margin model is continuous and has no point mass at exactly zero, so it
+    # genuinely cannot price a tie; these are left unpriced rather than
+    # approximated.
+    if m.team.upper() in _NON_TEAM_OUTCOMES:
+        return None
+    p_home = elo_service_wnba.get_home_win_prob(game.home_team, game.away_team, game.location)
+    if p_home is None:
+        return None
+    p_home = calibration_temp.apply("wnba", p_home)
+    elo_diff = implied_elo_diff(p_home)
+    is_home = m.team == game.home_team
+    # Guard against any other non-team label reaching here: a row whose team
+    # matches NEITHER side must not be silently priced as the away team.
+    if not is_home and m.team != game.away_team:
+        return None
+    if kind == "winner":
+        return round(game_lines_wnba.prob_team_wins_half(is_home, elo_diff, half), 4)
+    if kind == "spread" and m.line is not None:
+        return round(game_lines_wnba.prob_team_covers_half(is_home, m.line, elo_diff, half), 4)
+    return None
+
+
 @router.get("/markets", response_model=list[WnbaMarketOut])
 def list_wnba_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport == "wnba", Market.market_type.in_(GAME_MARKET_TYPES)).all()
@@ -173,6 +228,8 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 model_prob = _spread_model_prob(m, game)
             elif no_baseline_reason is None and m.market_type == "total":
                 model_prob = _total_model_prob(m, game, scoring)
+            elif no_baseline_reason is None and "_half_" in m.market_type:
+                model_prob = _half_model_prob(m, game, scoring)
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)

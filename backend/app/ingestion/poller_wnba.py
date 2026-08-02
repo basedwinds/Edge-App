@@ -101,6 +101,31 @@ def refresh_kalshi_wnba_spread_total():
             session.close()
 
 
+def refresh_kalshi_wnba_halves():
+    """1H/2H winner, spread and total (six live Kalshi series). Priced by
+    game_lines_wnba's MEASURED half constants -- notably a second half that
+    carries no home-court edge, which the data showed and the game model cannot
+    express."""
+    game_index = _load_game_index_readonly()
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            matched = unmatched = 0
+            for half in (1, 2):
+                for kind, fetch in (("winner", kalshi_wnba_client.get_half_winner_markets),
+                                    ("spread", kalshi_wnba_client.get_half_spread_markets),
+                                    ("total", kalshi_wnba_client.get_half_total_markets)):
+                    for row in fetch(half):
+                        gid = match_kalshi_event_ticker(row["event_ticker"], game_index)
+                        matched += gid is not None
+                        unmatched += gid is None
+                        market_catalog_wnba.upsert_kalshi_wnba_half_market(session, row, gid, half, kind)
+            session.commit()
+            log.info("kalshi wnba halves: %d matched, %d unmatched", matched, unmatched)
+        finally:
+            session.close()
+
+
 def settle_placed_bets_wnba():
     from app.models.bet_settlement import settle_finished_games
     with db_write_lock():
@@ -116,4 +141,5 @@ def run_full_refresh_wnba():
     refresh_wnba_ratings()
     refresh_kalshi_wnba_moneyline()
     refresh_kalshi_wnba_spread_total()
+    refresh_kalshi_wnba_halves()
     settle_placed_bets_wnba()

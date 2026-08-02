@@ -115,3 +115,41 @@ def upsert_kalshi_wnba_total_market(session: Session, row: dict, wnba_game_id: s
         )
     )
     return market
+
+
+def upsert_kalshi_wnba_half_market(session: Session, row: dict, wnba_game_id: str | None,
+                                   half: int, kind: str) -> Market:
+    """Half markets. market_type is namespaced by half ("first_half_spread",
+    "second_half_total", ...) rather than reusing the game types with a `half`
+    column: the CLV-selection gate and the calibration report both bucket by
+    market_type, and a 1H spread is a genuinely different question from a game
+    spread -- lumping them would average two distributions that the measurement
+    showed differ (1H margin std 10.39 vs the game's 14.21).
+
+    `kind` is "winner" | "spread" | "total"; only spread/total carry a line, and
+    only winner/spread carry a team."""
+    prefix = "first_half" if half == 1 else "second_half"
+    market_type = f"{prefix}_{kind}"
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type=market_type, sport="wnba",
+        )
+        session.add(market)
+    market.wnba_game_id = wnba_game_id
+    if kind in ("winner", "spread"):
+        market.team = to_espn_abbr(row["team_abbr_kalshi"])
+    market.line = row.get("line")
+    if kind == "total":
+        market.side = "over"   # Kalshi lists half totals as over-only ladders
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(
+        MarketSnapshot(
+            market_id=market.id, ts=datetime.datetime.utcnow(),
+            yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
+            last_price=row.get("last_price"), volume=row.get("volume"),
+        )
+    )
+    return market
