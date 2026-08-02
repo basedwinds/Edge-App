@@ -40,6 +40,20 @@ SEASON_MARKET_TYPES = {
 }
 # Kalshi's short conference codes -> the ESPN conference names playoff_sim_cfb
 # keys on. "OTHER" is everything else and is computed as the remainder.
+# Priced and shown, but NEVER staked. These rest on a PROXY for the selection
+# committee (see playoff_sim_cfb), and a four-round bracket compounds elo_cfb's
+# wide rating spread -- the top team came out at a 40.5% title probability where
+# books top out near 15-20%. Same posture as the F1 championship and esports
+# tournament sims. The other CFB types (moneyline, win_total, conference
+# champion/qualifier/regtop) rest on the schedule and standings, not on guessing
+# a committee, so they stake normally.
+TRACKING_ONLY_MARKET_TYPES = {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"}
+
+# Season-long types draw from the futures sub-pool; moneyline from the weekly one.
+FUTURES_MARKET_TYPES = {
+    "win_total", "conference_champion", "conference_qualifier", "conference_regtop",
+}
+
 _KALSHI_CONF_CODE = {
     "SEC": "Southeastern Conference",
     "B12": "Big 12 Conference",
@@ -70,6 +84,8 @@ class CfbMarketOut(BaseModel):
     updated_at: str | None
     model_prob: float | None
     model_validated: bool
+    # True where the model rests on a proxy (committee seeding) -- shown, not staked.
+    model_approximate: bool
     edge: float | None
     kelly_fraction: float | None
     suggested_stake_dollars: float | None
@@ -141,7 +157,7 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         or (not _already_final(m) and not _already_started(m))
     ]
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
-    pool = get_cfb_pool_dollars(session)
+    weekly_pool, futures_pool = get_cfb_pool_dollars(session)
     unit_dollars = get_unit_dollars(session)
     fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)
     staking_mode, flat_marginal, flat_full = get_flat_params(session)
@@ -214,6 +230,10 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)
         if kelly is not None and not is_bucket_enabled(clv_stats, "cfb", m.market_type):
             kelly = None
+        # Approximate models are shown with an edge but never sized.
+        if m.market_type in TRACKING_ONLY_MARKET_TYPES:
+            kelly = None
+        pool = futures_pool if m.market_type in FUTURES_MARKET_TYPES else weekly_pool
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full)
 
@@ -243,7 +263,9 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             kelly_fraction=kelly,
             suggested_stake_dollars=stake_dollars,
             suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
-            stake_pool="weekly" if kelly is not None else None,
+            stake_pool=(("futures" if m.market_type in FUTURES_MARKET_TYPES else "weekly")
+                        if kelly is not None else None),
+            model_approximate=m.market_type in TRACKING_ONLY_MARKET_TYPES,
         ))
     out.sort(key=lambda m: (m.gameday or "9999", m.game_label or ""))
     return out
