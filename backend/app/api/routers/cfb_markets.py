@@ -40,18 +40,29 @@ SEASON_MARKET_TYPES = {
 }
 # Kalshi's short conference codes -> the ESPN conference names playoff_sim_cfb
 # keys on. "OTHER" is everything else and is computed as the remainder.
-# Priced and shown, but NEVER staked. These rest on a PROXY for the selection
-# committee (see playoff_sim_cfb), and a four-round bracket compounds elo_cfb's
-# wide rating spread -- the top team came out at a 40.5% title probability where
-# books top out near 15-20%. Same posture as the F1 championship and esports
-# tournament sims. The other CFB types (moneyline, win_total, conference
-# champion/qualifier/regtop) rest on the schedule and standings, not on guessing
-# a committee, so they stake normally.
-TRACKING_ONLY_MARKET_TYPES = {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"}
+# Types whose model rests on a PROXY rather than on schedule/standings: the
+# playoff markets seed off a stand-in for the selection committee, and a
+# four-round bracket compounds elo_cfb's wide rating spread (the top team came
+# out at 40.5% to win the title where books top out near 15-20%).
+#
+# These are BADGED, NOT SUPPRESSED -- and that reversal is deliberate. Making
+# them tracking-only looked prudent, but the paper logger only records rows the
+# app actually staked (paper_logger gates on suggested_stake_dollars, and
+# recommended.py's pass 1 is "rows the app actually staked"). So suppressing them
+# meant they would never become paper bets, never accrue forward CLV, and never
+# be evaluated -- guaranteeing we could never learn whether the approximation
+# works. That directly contradicts this app's whole premise, which is that no
+# model is trusted on theory and only forward CLV decides.
+#
+# The honest design is: stake them like anything else, flag them clearly in the
+# UI, and let the CLV-selection gate retire them if the data says so. That gate
+# exists precisely for this.
+APPROXIMATE_MARKET_TYPES = {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"}
 
 # Season-long types draw from the futures sub-pool; moneyline from the weekly one.
 FUTURES_MARKET_TYPES = {
     "win_total", "conference_champion", "conference_qualifier", "conference_regtop",
+    "cfb_playoff", "cfb_quarterfinal", "cfb_title_conference",
 }
 
 _KALSHI_CONF_CODE = {
@@ -230,9 +241,6 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)
         if kelly is not None and not is_bucket_enabled(clv_stats, "cfb", m.market_type):
             kelly = None
-        # Approximate models are shown with an edge but never sized.
-        if m.market_type in TRACKING_ONLY_MARKET_TYPES:
-            kelly = None
         pool = futures_pool if m.market_type in FUTURES_MARKET_TYPES else weekly_pool
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full)
@@ -265,7 +273,7 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
             stake_pool=(("futures" if m.market_type in FUTURES_MARKET_TYPES else "weekly")
                         if kelly is not None else None),
-            model_approximate=m.market_type in TRACKING_ONLY_MARKET_TYPES,
+            model_approximate=m.market_type in APPROXIMATE_MARKET_TYPES,
         ))
     out.sort(key=lambda m: (m.gameday or "9999", m.game_label or ""))
     return out
