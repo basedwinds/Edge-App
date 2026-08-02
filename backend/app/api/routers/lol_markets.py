@@ -18,6 +18,7 @@ data now exists too (scripts/backtest_lol_market_odds.py, Map 1 only,
 every sport in this app has found.
 """
 import datetime
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -97,11 +98,37 @@ def _game_model_prob(m: Market, match: LolMatch | None) -> float | None:
     return None
 
 
+# Kalshi files a lot of things under LoL "tournament_winner" that are not team
+# brackets at all. Measured 2026-08-02 across 605 active rows:
+#
+#     207  "Player to Penta"        -- a PLAYER prop, not a team outcome
+#      70  "Solo Q Challenge"       -- a solo-queue ladder, not team play
+#      56  "Team to Qualify for Worlds" -- season-long qualification, not a bracket
+#      40  "TFT Set 17 ..."         -- Teamfight Tactics, a DIFFERENT GAME
+#      25  "Global Power Rankings"  -- a published ranking, not a result
+#
+# Showing all 605 on the Futures page buried the ~86 rows that are genuinely
+# split/season winners, and made LoL look like it had far more futures coverage
+# than it does. This filters the VIEW only -- market_type is left alone on
+# purpose, since rewriting it would move rows between CLV buckets and change what
+# settlement expects, for no gain here.
+_NON_BRACKET_FUTURES = re.compile(
+    r"penta|solo\s*q|soloq|tft|tacticians|power\s*rank|qualify|qualifi|shortest",
+    re.IGNORECASE,
+)
+
+
+def _is_bracket_future(m: Market) -> bool:
+    blob = f"{m.group_label or ''} {m.team or ''}"
+    return not _NON_BRACKET_FUTURES.search(blob)
+
+
 @router.get("/futures", response_model=list[FuturesMarketOut])
 def list_lol_futures(session: Session = Depends(get_session)):
     """See cs2_markets.py::list_cs2_futures's own docstring -- same real
     inventory-with-no-model shape, LoL's own version."""
     markets = session.query(Market).filter(Market.sport == "lol", Market.market_type == "tournament_winner", Market.status == "active").all()
+    markets = [m for m in markets if _is_bracket_future(m)]
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
 
     out = []
