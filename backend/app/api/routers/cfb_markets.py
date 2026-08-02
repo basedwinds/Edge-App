@@ -24,7 +24,7 @@ from app.api.schemas import ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import CfbGame, Market
 from app.models import calibration_temp
-from app.models import season_sim_cfb
+from app.models import playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
 from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
 from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
@@ -34,7 +34,18 @@ router = APIRouter(prefix="/cfb", tags=["cfb"])
 GAME_MARKET_TYPES = {"moneyline"}
 # Season-long ladders -- no cfb_game_id, priced from the season Monte Carlo
 # rather than a single game's Elo.
-SEASON_MARKET_TYPES = {"win_total", "conference_champion", "conference_qualifier", "conference_regtop"}
+SEASON_MARKET_TYPES = {
+    "win_total", "conference_champion", "conference_qualifier", "conference_regtop",
+    "cfb_playoff", "cfb_quarterfinal", "cfb_title_conference",
+}
+# Kalshi's short conference codes -> the ESPN conference names playoff_sim_cfb
+# keys on. "OTHER" is everything else and is computed as the remainder.
+_KALSHI_CONF_CODE = {
+    "SEC": "Southeastern Conference",
+    "B12": "Big 12 Conference",
+    "B10": "Big Ten Conference",
+    "ACC": "Atlantic Coast Conference",
+}
 ALL_MARKET_TYPES = GAME_MARKET_TYPES | SEASON_MARKET_TYPES
 
 
@@ -94,6 +105,7 @@ def list_cfb_markets(session: Session = Depends(get_session)):
     win_dist, sim_trials = season_sim_cfb.get()
     from app.ingestion.poller_cfb import _CONF_SIM
     conf_sim = _CONF_SIM.get("data") or {}
+    po_sim = playoff_sim_cfb.get() or {}
     game_ids = {m.cfb_game_id for m in markets if m.cfb_game_id}
     games_by_id = {
         g.id: g for g in session.query(CfbGame).filter(CfbGame.id.in_(game_ids)).all()
@@ -152,6 +164,28 @@ def list_cfb_markets(session: Session = Depends(get_session)):
                 model_prob = season_sim_cfb.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
                 if model_prob is not None:
                     model_prob = round(model_prob, 4)
+        elif m.market_type in ("cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"):
+            if not po_sim:
+                no_baseline_reason = "Playoff simulation not warm yet."
+            elif m.market_type == "cfb_title_conference":
+                tbc = po_sim.get("title_by_conference") or {}
+                name = _KALSHI_CONF_CODE.get((m.team or "").upper())
+                if name is not None:
+                    model_prob = round(tbc.get(name, 0.0), 4)
+                elif (m.team or "").upper() == "OTHER":
+                    # Everything outside the four named conferences, including
+                    # independents -- the remainder, so the five markets sum to 1.
+                    named = sum(tbc.get(v, 0.0) for v in _KALSHI_CONF_CODE.values())
+                    model_prob = round(max(0.0, 1.0 - named), 4)
+                else:
+                    no_baseline_reason = "Unmapped conference code."
+            else:
+                key = "playoff" if m.market_type == "cfb_playoff" else "quarterfinal"
+                src = po_sim.get(key) or {}
+                if m.team in src:
+                    model_prob = round(src[m.team], 4)
+                else:
+                    no_baseline_reason = "No playoff projection for this team."
         elif m.market_type in SEASON_MARKET_TYPES:
             if not conf_sim:
                 no_baseline_reason = "Conference simulation not warm yet."

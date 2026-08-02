@@ -30,6 +30,11 @@ WIN_TOTAL_SERIES = "KXNCAAFWINS"      # season win ladders (583 open, 69 teams)
 CONF_CHAMPION_SERIES = ["KXNCAAFACC", "KXNCAAFB12", "KXNCAAFMAC", "KXNCAAFPAC12"]
 CONF_QUALIFIER_SERIES = ["KXNCAAFSECQ", "KXNCAAFB12QUAL", "KXNCAAFMACQUAL", "KXNCAAFMWCQUAL"]
 CONF_REGTOP_SERIES = ["KXNCAAFACCREGTOP", "KXNCAAFSECREGTOP", "KXNCAAFB12REGTOP"]
+# Playoff futures. Priced by playoff_sim_cfb, which models a COMMITTEE decision
+# via a record+Elo proxy -- see that module before trusting these.
+PLAYOFF_SERIES = "KXNCAAFPLAYOFF"
+QUARTERFINAL_SERIES = "KXNCAAFQF"
+TITLE_CONFERENCE_SERIES = "KXNCAAFCONF"
 
 SPREAD_SERIES = "KXNCAAFSPREAD"
 TOTAL_SERIES = "KXNCAAFTOTAL"
@@ -164,3 +169,18 @@ def get_conference_qualifier_markets():
 
 def get_conference_regtop_markets():
     return _conf_rows(CONF_REGTOP_SERIES, "conference_regtop")
+
+
+def get_playoff_markets():
+    return _conf_rows([PLAYOFF_SERIES], "cfb_playoff")
+
+
+def get_quarterfinal_markets():
+    return _conf_rows([QUARTERFINAL_SERIES], "cfb_quarterfinal")
+
+
+def get_title_conference_markets():
+    """Which CONFERENCE wins the national title. Labelled by conference name
+    ("SEC", "Big Ten"), not by team, so the team-name matcher does not apply --
+    the router maps these via playoff_sim_cfb's conference keys."""
+    return _conf_rows([TITLE_CONFERENCE_SERIES], "cfb_title_conference")

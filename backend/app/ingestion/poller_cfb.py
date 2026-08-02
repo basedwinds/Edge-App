@@ -20,7 +20,7 @@ from app.ingestion.market_matcher_cfb import (
     parse_kalshi_event_ticker,
     resolve_team,
 )
-from app.models import season_sim_cfb
+from app.models import playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
 
 log = logging.getLogger("poller_cfb")
@@ -203,6 +203,47 @@ def refresh_kalshi_cfb_conference_futures():
             session.close()
 
 
+def refresh_cfb_playoff_sim():
+    """12-team CFP bracket Monte Carlo. Off the request path; reuses the season
+    schedule. See playoff_sim_cfb -- its seeding is a committee PROXY."""
+    playoff_sim_cfb.warm()
+
+
+def refresh_kalshi_cfb_playoff_futures():
+    """Playoff qualification, quarterfinal qualification, and title-by-
+    conference."""
+    sim = playoff_sim_cfb.get() or {}
+    known = set(sim.get("playoff") or {})
+    name_index = _NAME_INDEX_CACHE.get("index") or {}
+    fetchers = (
+        (kalshi_cfb_client.get_playoff_markets, "cfb_playoff", True),
+        (kalshi_cfb_client.get_quarterfinal_markets, "cfb_quarterfinal", True),
+        # Conference-labelled, not team-labelled -- store the Kalshi code as-is
+        # and let the router map it to a conference name.
+        (kalshi_cfb_client.get_title_conference_markets, "cfb_title_conference", False),
+    )
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            total = resolved = 0
+            for fetch, mtype, by_team in fetchers:
+                for row in fetch():
+                    total += 1
+                    if by_team:
+                        team = resolve_team(row.get("team_abbr_kalshi"), row.get("display_name"),
+                                            name_index, known)
+                        if team is None:
+                            continue
+                    else:
+                        team = row.get("team_abbr_kalshi")
+                    resolved += 1
+                    market_catalog_cfb.upsert_kalshi_cfb_conference_market(session, row, team, mtype)
+            session.commit()
+            log.info("kalshi cfb playoff futures: %d rows, %d resolved", total, resolved)
+        finally:
+            session.close()
+
+
 def settle_placed_bets_cfb():
     """Placeholder to keep the cycle shape identical to the other sports.
     Settlement needs finished games with scores, which only exist once the season
@@ -213,7 +254,8 @@ def settle_placed_bets_cfb():
 def run_full_refresh_cfb():
     for step in (refresh_cfb_games, refresh_cfb_ratings, refresh_cfb_season_sim,
                  refresh_cfb_conference_sim, refresh_kalshi_cfb_moneyline,
-                 refresh_kalshi_cfb_win_totals, refresh_kalshi_cfb_conference_futures):
+                 refresh_kalshi_cfb_win_totals, refresh_kalshi_cfb_conference_futures,
+                 refresh_cfb_playoff_sim, refresh_kalshi_cfb_playoff_futures):
         try:
             step()
         except Exception:
