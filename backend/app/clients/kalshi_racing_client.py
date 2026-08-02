@@ -29,6 +29,10 @@ SERIES_MAP = {
     "KXINDYCARRACE": ("irl", "race_winner", None),
     "KXINDYCARTOP3": ("irl", "top_n", 3),   # IndyCar podium
     "KXINDYCARTOP10": ("irl", "top_n", 10),
+    # IndyCar drivers' title. Priced by the standings-aware season sim, NOT the
+    # per-race model -- see racing_championship. Kalshi lists no IndyCar
+    # constructors'/entrant title, so there is no constructors_champion here.
+    "KXINDYCARSERIES": ("irl", "drivers_champion", None),
     "KXNASCARRACE": ("nascar", "race_winner", None),  # NASCAR race winner (headline market)
     "KXNASCARTOP3": ("nascar", "top_n", 3),
     "KXNASCARTOP5": ("nascar", "top_n", 5),

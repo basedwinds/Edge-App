@@ -23,6 +23,36 @@ import numpy as np
 
 F1_POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]  # P1..P10
 
+# IndyCar pays far deeper than F1: P1..P25 below, and EVERY classified finisher
+# past P25 still scores 5 (INDYCAR_TAIL_POINTS). That flat tail is why the table
+# can't just be truncated like F1's -- with a 33-car field, ~8 drivers sit on the
+# tail every race, and dropping it would understate the whole midfield's points.
+# Bonus points (pole, laps led, most laps led -- 1/1/2) are NOT modelled: they're
+# worth a couple of points against a 50-point win and we have no per-race
+# laps-led model, so inventing them would add noise, not accuracy.
+# The Indy 500's double points are likewise not special-cased -- it runs in May,
+# so it is never among the REMAINING races this sim projects over.
+INDYCAR_POINTS = [
+    50, 40, 35, 32, 30, 28, 26, 24, 22, 20,     # P1..P10
+    19, 18, 17, 16, 15, 14, 13, 12, 11, 10,     # P11..P20
+    9, 8, 7, 6, 5,                              # P21..P25
+]
+INDYCAR_TAIL_POINTS = 5.0
+
+SERIES_POINTS = {
+    "f1": (F1_POINTS, 0.0),
+    "irl": (INDYCAR_POINTS, INDYCAR_TAIL_POINTS),
+}
+
+
+def _position_points(d: int, points_table: list[float], tail: float) -> np.ndarray:
+    """Points awarded for each finishing position in a d-car field: the table for
+    as far as it goes, then `tail` for everyone behind it."""
+    pos = np.full(d, float(tail))
+    n = min(len(points_table), d)
+    pos[:n] = points_table[:n]
+    return pos
+
 
 def simulate_driver_championship(
     driver_ids: list[str],
@@ -30,6 +60,8 @@ def simulate_driver_championship(
     strengths: dict[str, float],
     remaining_races: int,
     trials: int = 4000,
+    points_table: list[float] | None = None,
+    tail_points: float = 0.0,
 ) -> dict[str, float]:
     """{driver_id: P(wins the drivers' championship)}. `strengths` are Elo-like
     ratings (higher = faster); converted to Plackett-Luce weights the same way
@@ -44,8 +76,7 @@ def simulate_driver_championship(
 
     logw = np.array([strengths[i] / 400.0 * np.log(10) for i in driver_ids])  # PL log-weights
     base = np.array([current_points.get(i, 0.0) for i in driver_ids])
-    pos_points = np.zeros(d)
-    pos_points[: min(10, d)] = F1_POINTS[: min(10, d)]
+    pos_points = _position_points(d, points_table or F1_POINTS, tail_points)
 
     champ_counts = np.zeros(d)
     done = 0
@@ -56,9 +87,13 @@ def simulate_driver_championship(
         # Gumbel-max: argsort of (logw + Gumbel noise) descending == a PL order sample.
         noise = rng.gumbel(size=(n, remaining_races, d))
         order = np.argsort(-(logw[None, None, :] + noise), axis=2)  # (n, races, d) driver idx by finish pos
-        race_points = np.zeros((n, remaining_races, d))
-        for p in range(min(10, d)):  # only top-10 positions score
-            np.put_along_axis(race_points, order[:, :, p : p + 1], pos_points[p], axis=2)
+        # argsort of a permutation is its inverse: rank[...,i] = the position
+        # driver i finished in. Indexing pos_points by that scores EVERY position
+        # at once -- the old per-position loop only ran over the top 10, which is
+        # right for F1 (nothing else scores) but would silently drop IndyCar's
+        # P11-P25 table and its 5-point tail.
+        rank = np.argsort(order, axis=2)
+        race_points = pos_points[rank]
         season = base[None, :] + race_points.sum(axis=1)  # (n, d) final points per season
         champs = np.argmax(season, axis=1)
         for c in champs:

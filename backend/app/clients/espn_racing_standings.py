@@ -11,8 +11,13 @@ from app.clients.base import get_json
 log = logging.getLogger("espn_racing_standings")
 
 _STANDINGS_URL = (
-    "https://sports.core.api.espn.com/v2/sports/racing/leagues/f1/seasons/{year}/types/2/standings/0"
+    "https://sports.core.api.espn.com/v2/sports/racing/leagues/{league}/seasons/{year}/types/2/standings/0"
 )
+
+# ESPN's racing league slugs. IndyCar is "irl" on ESPN (its own historic name for
+# the series) -- "indycar" returns HTTP 400. Verified live 2026-08-02: the irl
+# endpoint returns 33 entries with real championshipPts (Palou 457, Malukas 374).
+_LEAGUE_SLUG = {"f1": "f1", "irl": "irl"}
 
 
 def _points(entry: dict) -> float | None:
@@ -27,15 +32,18 @@ def _points(entry: dict) -> float | None:
     return None
 
 
-def fetch_f1_driver_standings(year: int | None = None) -> dict[str, float]:
+def fetch_driver_standings(series: str = "f1", year: int | None = None) -> dict[str, float]:
     """{driver_display_name: current championship points}. Empty on any failure
     (the sim then treats it as a fresh season, which is the safe fallback)."""
+    league = _LEAGUE_SLUG.get(series)
+    if not league:
+        return {}
     year = year or datetime.date.today().year
     out: dict[str, float] = {}
     try:
-        data = get_json(_STANDINGS_URL.format(year=year))
+        data = get_json(_STANDINGS_URL.format(league=league, year=year))
     except Exception:
-        log.exception("f1 standings fetch failed")
+        log.exception("%s standings fetch failed", series)
         return out
     for entry in data.get("standings", []):
         pts = _points(entry)
@@ -51,3 +59,8 @@ def fetch_f1_driver_standings(year: int | None = None) -> dict[str, float]:
         if name:
             out[name] = pts
     return out
+
+
+def fetch_f1_driver_standings(year: int | None = None) -> dict[str, float]:
+    """Back-compat alias for the original F1-only entry point."""
+    return fetch_driver_standings("f1", year)

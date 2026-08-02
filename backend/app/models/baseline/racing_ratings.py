@@ -22,6 +22,7 @@ retention), so CLV is the ONLY real judge.
 """
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 BASE = 1500.0
@@ -44,7 +45,20 @@ _cache: dict = {}
 
 
 def _norm(name: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+    """Fold a driver name to a match key.
+
+    NFKD-decompose first so accented letters fold to their base letter instead of
+    being DELETED by the [^a-z0-9] strip. REAL BUG (found 2026-08-02 wiring up the
+    IndyCar title market): ESPN spells the championship leader "Alex Palou" with
+    an accent, Kalshi spells him "Alex" plain. Without the fold those normalise to
+    "lexpalou" vs "alexpalou" -- so the one driver holding ~99% of the title
+    probability resolved to None and his market went unpriced. Same trap waits on
+    Perez/Hulkenberg/Norris-style spellings across F1 and every other racing
+    market type, which is why this is fixed in the shared normaliser rather than
+    at the championship lookup."""
+    decomposed = unicodedata.normalize("NFKD", name or "")
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]", "", stripped.lower())
 
 
 def _logistic(d: float) -> float:

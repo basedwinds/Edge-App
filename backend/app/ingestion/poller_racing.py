@@ -24,7 +24,8 @@ def refresh_racing_ratings():
     # Warm the season-championship cache off the request path (the compute does
     # ~22 sequential ESPN name fetches; TTL-guarded so it's cheap most cycles).
     try:
-        racing_championship.warm("f1")
+        for _series in racing_championship.PRICED_SERIES:
+            racing_championship.warm(_series)
     except Exception:
         log.exception("racing championship warm failed")
 
