@@ -10,3 +10,6 @@ frontend/dist/
 *.db-wal
 .DS_Store
 backtest_results.json
+
+# Nested clone of this same repo, created by a desktop Git client. Never track it.
+/Edge App/
