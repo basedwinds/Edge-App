@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPut, apiDelete } from "./client";
-import type { Cs2MarketRow, FuturesMarketRow, GameMarketRow, LolMarketRow, MarketRow, MlbMarketRow, MmaMarketRow, NbaMarketRow, SoccerMarketRow, TennisMarketRow, ValorantMarketRow, WnbaMarketRow } from "../types/market";
+import type { CfbMarketRow, Cs2MarketRow, FuturesMarketRow, GameMarketRow, LolMarketRow, MarketRow, MlbMarketRow, MmaMarketRow, NbaMarketRow, SoccerMarketRow, TennisMarketRow, ValorantMarketRow, WnbaMarketRow } from "../types/market";
 
 /** Season-readiness config from the backend (same rule the Discord alerts use).
  * Lets the Recommended + Futures views hide "not ready yet" markets: a
@@ -60,6 +60,10 @@ export async function fetchNbaFutures(): Promise<FuturesMarketRow[]> {
 
 export async function fetchWnbaMarkets(): Promise<WnbaMarketRow[]> {
   return apiGet<WnbaMarketRow[]>("/wnba/markets");
+}
+
+export async function fetchCfbMarkets(): Promise<CfbMarketRow[]> {
+  return apiGet<CfbMarketRow[]>("/cfb/markets");
 }
 
 export async function fetchMlbMarkets(): Promise<MlbMarketRow[]> {

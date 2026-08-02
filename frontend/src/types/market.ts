@@ -247,6 +247,45 @@ export interface NbaMarketRow {
   stake_pool: "weekly" | "futures" | null;
 }
 
+export interface CfbMarketRow {
+  id: number;
+  // moneyline is game-tied; every other type is season-long (944 of 974 markets).
+  market_type:
+    | "moneyline"
+    | "win_total"
+    | "conference_champion"
+    | "conference_qualifier"
+    | "conference_regtop"
+    | "cfb_playoff"
+    | "cfb_quarterfinal"
+    | "cfb_title_conference";
+  source: "kalshi" | "polymarket";
+  team: string | null;
+  line: number | null;
+  game_label: string | null;
+  cfb_game_id: string | null;
+  gameday: string | null;
+  gametime: string | null;
+  game_type: string | null;
+  neutral: boolean;
+  no_baseline_reason: string | null;
+  implied_prob: number | null;
+  last_price: number | null;
+  volume: number | null;
+  updated_at: string | null;
+  model_prob: number | null;
+  model_validated: boolean;
+  // True where the model rests on a proxy (the CFP selection committee). These
+  // ARE staked -- suppressing them would stop CLV accruing and make the
+  // approximation unfalsifiable -- so the UI must badge them instead.
+  model_approximate: boolean;
+  edge: number | null;
+  kelly_fraction: number | null;
+  suggested_stake_dollars: number | null;
+  suggested_stake_units: number | null;
+  stake_pool: "weekly" | "futures" | null;
+}
+
 export interface WnbaMarketRow {
   id: number;
   market_type: "moneyline" | "spread" | "total";

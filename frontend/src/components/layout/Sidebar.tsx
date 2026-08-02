@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { fetchNewCatalogEntries } from "../../api/markets";
 
-type Sport = "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
+type Sport = "nfl" | "nba" | "wnba" | "cfb" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
 
 // Sport scope pills, grouped into labeled categories instead of one flat wrap
 // of 10 -- `to` is each sport's landing route (NFL is the root dashboard; WNBA
@@ -20,6 +20,7 @@ const SPORT_GROUPS: { label: string; sports: { key: string; label: string; to: s
       { key: "nfl", label: "NFL", to: "/" },
       { key: "nba", label: "NBA", to: "/nba" },
       { key: "wnba", label: "WNBA", to: "/wnba" },
+      { key: "cfb", label: "College Football", to: "/cfb" },
       { key: "mlb", label: "MLB", to: "/mlb" },
       { key: "soccer", label: "Soccer", to: "/soccer" },
     ],
