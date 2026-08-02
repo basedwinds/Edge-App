@@ -163,6 +163,46 @@ def _build_racing(rows: list[_Row], weekly_pool: float) -> list[_Row]:
     return out
 
 
+def _build_wnba(rows: list[_Row], weekly_pool: float) -> list[_Row]:
+    """Mirror buildWnbaRecommendedBets, which is a LEANER variant of the shared
+    pipeline: it builds candidates with `line` and `side` forced to null (so every
+    rung of a game's ladder collapses into one cross-platform key by construction)
+    and runs ONLY cross-platform collapse -> per-game cap -> budget cap, skipping
+    the ladder-collapse and per-player passes entirely. Keeping the real line here
+    would split rows the frontend merges, so alerts and the app would disagree the
+    moment WNBA has staked markets."""
+    for r in rows:                      # match the builder's null line/side
+        r.line = None
+        r.side = None
+    cands = [r for r in rows if r.stake]
+    xp: dict[str, _Row] = {}
+    for r in cands:
+        k = _cross_platform_key(r)
+        if k not in xp or _prefer(r, xp[k]):
+            xp[k] = r
+    deduped = sorted(xp.values(), key=_edge, reverse=True)
+    game_best: dict[str, _Row] = {}
+    non_game: list[_Row] = []
+    for r in deduped:
+        gid = _game_cap_id(r)           # wnba_game_id is NOT in it -> all pass through
+        if gid is None:
+            non_game.append(r)
+            continue
+        gid = str(gid)
+        if gid not in game_best or _edge(r) > _edge(game_best[gid]):
+            game_best[gid] = r
+    after_game = sorted(non_game + list(game_best.values()), key=_edge, reverse=True)
+    ceiling = max(0.0, (weekly_pool or 0.0) * _CEILING_PCT)
+    cumulative = 0.0
+    shown: list[_Row] = []
+    for r in after_game:
+        if cumulative + (r.stake or 0.0) > ceiling:
+            continue
+        cumulative += r.stake or 0.0
+        shown.append(r)
+    return shown
+
+
 def _build_sport(rows: list[_Row], weekly_pool: float) -> list[_Row]:
     # 1. candidates = staked rows
     cands = [r for r in rows if r.stake]
@@ -214,6 +254,14 @@ def _build_sport(rows: list[_Row], weekly_pool: float) -> list[_Row]:
     return shown
 
 
+def _builder_for(sport: str):
+    """Not every sport uses the shared pipeline -- racing and WNBA have their own
+    leaner frontend builders (see each function). Dispatching in ONE place means
+    the live path and the snapshot/verification path can't drift apart, which they
+    silently did once (the live path kept calling _build_sport for racing)."""
+    return {"racing": _build_racing, "wnba": _build_wnba}.get(sport, _build_sport)
+
+
 def _fetch(client: httpx.Client, ep: str) -> list[dict]:
     try:
         r = client.get(f"{_BASE}{ep}")
@@ -262,14 +310,13 @@ def compute_recommended(settings: dict, snapshot: dict | None = None) -> list[_R
         rd = snapshot.get("readiness") or {}
         for sport, _ep, pool_key in _SPORTS:
             rows = [_Row(sport, d) for d in snapshot.get(sport, [])]
-            builder = _build_racing if sport == "racing" else _build_sport
-            out.extend(builder(rows, settings.get(pool_key) or 0.0))
+            out.extend(_builder_for(sport)(rows, settings.get(pool_key) or 0.0))
     else:
         with httpx.Client(timeout=90.0) as client:
             rd = _fetch_readiness(client)
             for sport, ep, pool_key in _SPORTS:
                 rows = [_Row(sport, d) for d in _fetch(client, ep)]
-                out.extend(_build_sport(rows, settings.get(pool_key) or 0.0))
+                out.extend(_builder_for(sport)(rows, settings.get(pool_key) or 0.0))
     out = [r for r in out if not _not_ready(r, rd)]  # readiness runs at display, after budget cap
     out.sort(key=lambda r: -(r.stake or 0.0))
     return out
