@@ -249,9 +249,14 @@ export interface NbaMarketRow {
 
 export interface WnbaMarketRow {
   id: number;
-  market_type: "moneyline";
+  market_type: "moneyline" | "spread";
   source: "kalshi" | "polymarket";
   team: string | null;
+  // Threshold for spread rows (null on moneyline). WnbaMarketOut gained this
+  // when spread pricing shipped but this type didn't, so the whole frontend was
+  // structurally blind to it and every spread bet rendered with no number --
+  // unactionable, since "DAL" without "-3.5" isn't a placeable bet.
+  line: number | null;
   game_label: string | null;
   wnba_game_id: string | null;
   gameday: string | null;

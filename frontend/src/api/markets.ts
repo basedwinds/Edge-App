@@ -1183,10 +1183,15 @@ export function buildNbaRecommendedBets(
   };
 }
 
-/** WNBA equivalent of buildNbaRecommendedBets, moneyline-only (no futures,
- * no ladder, no news layer -- see wnba_markets.py). Same collapse/game-cap/
- * portfolio-cap passes; sets sport:"wnba" and wnbaGameId so crossPlatformKey
- * and markBetPlaced route to the right game-id field. */
+/** WNBA equivalent of buildNbaRecommendedBets: moneyline + spread (no futures,
+ * no news layer -- see wnba_markets.py). Same collapse/game-cap/portfolio-cap
+ * passes; sets sport:"wnba" and wnbaGameId so crossPlatformKey and markBetPlaced
+ * route to the right game-id field.
+ *
+ * No ladder-collapse pass, unlike NBA. That is safe only because the per-game
+ * cap runs below and already reduces a game's several spread lines to one row;
+ * if that cap is ever removed here, the ladder pass has to come back or the same
+ * game will surface at multiple thresholds. */
 export function buildWnbaRecommendedBets(
   markets: WnbaMarketRow[],
   weeklyPoolDollars: number,
@@ -1202,8 +1207,12 @@ export function buildWnbaRecommendedBets(
       label,
       marketType: m.market_type,
       team: m.team,
-      line: null,
-      side: null,
+      // Carry the spread threshold through. Was hardcoded null from the
+      // moneyline-only days: spread rows reached the UI as a bare team name with
+      // no number, and crossPlatformKey (which keys on line) then treated two
+      // DIFFERENT spread lines as the same bet.
+      line: m.line,
+      side: null,  // WNBA spread is priced as "this team covers"; there is no over/under side
       gameday: m.gameday,
       gametime: m.gametime,
       estimatedStartTime: null,
