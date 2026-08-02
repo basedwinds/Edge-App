@@ -101,6 +101,40 @@ class WnbaGame(Base):
     arena = Column(String, nullable=True)
 
 
+class CfbGame(Base):
+    """One FBS college-football game from ESPN's public scoreboard (parallel to
+    WnbaGame). Backs elo_service_cfb's moneyline model.
+
+    Teams are keyed by ESPN ABBREVIATION (e.g. "ND", "UGA", "MIZ"), matching
+    data/cfb_game_cache.json which the Elo constants were derived from, and
+    matching what market_matcher_cfb resolves Kalshi tickers to.
+
+    `season` follows the cache's convention: a January game (bowls, playoff
+    final) belongs to the PREVIOUS calendar year's season, so the 2026-01-19
+    title game is season 2025. market_matcher_cfb._season_for encodes the same
+    rule -- they must agree or January markets link to nothing.
+
+    `neutral` matters here in a way it doesn't for most sports: bowls, kickoff
+    classics and conference championships are played at neutral sites where the
+    home designation is a bracket artifact, and elo_cfb zeroes home-field
+    advantage for them.
+    """
+
+    __tablename__ = "cfb_games"
+
+    id = Column(String, primary_key=True)  # ESPN event id
+    season = Column(Integer, nullable=False)  # see docstring: Jan games -> prior year
+    game_type = Column(String, nullable=False)  # REG | POST
+    gameday = Column(String, nullable=False)  # ISO date
+    gametime = Column(String)  # "HH:MM" UTC kickoff, may be blank far out
+    away_team = Column(String, nullable=False)  # ESPN abbreviation
+    home_team = Column(String, nullable=False)  # ESPN abbreviation
+    away_score = Column(Integer, nullable=True)
+    home_score = Column(Integer, nullable=True)
+    neutral = Column(Integer, nullable=False, default=0)  # 1 = neutral site
+    venue = Column(String, nullable=True)
+
+
 class MlbGame(Base):
     __tablename__ = "mlb_games"
 

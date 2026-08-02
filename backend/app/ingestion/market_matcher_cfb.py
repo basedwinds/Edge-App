@@ -31,6 +31,11 @@ from datetime import date
 KALSHI_TO_ESPN_ABBR = {
     "MIZZ": "MIZ",
     "OKLA": "OU",
+    # NC State: found by the end-to-end link test, not by the abbreviation
+    # comparison -- it only surfaced once markets were matched against the LIVE
+    # ESPN schedule, because the historical cache and the current schedule spell
+    # it differently.
+    "NCST": "NCSU",
 }
 
 _MONTHS = {
@@ -97,18 +102,48 @@ def build_game_index(cfb_games: list[dict]) -> dict:
 
 def build_name_index(cfb_games: list[dict]) -> dict:
     """Normalised display name -> ESPN abbreviation, for resolving a team whose
-    Kalshi abbreviation isn't in the alias table."""
+    Kalshi abbreviation isn't in the alias table.
+
+    Feed this the LIVE schedule rows from espn_cfb_client.parse_event, which
+    carry `home_name`/`away_name`. Do NOT feed it data/cfb_game_cache.json: that
+    file's "home"/"away" fields are numeric ESPN team IDs, not names, so an index
+    built from it maps "158" -> "NEB" and the fallback silently never fires.
+    Found exactly that way -- the fallback looked like it was working because
+    every test case happened to resolve on abbreviation alone."""
     out: dict[str, str] = {}
     for g in cfb_games:
-        for name_key, abbr_key in (("home", "home_abbr"), ("away", "away_abbr")):
-            name = g.get(name_key)
-            if isinstance(name, str) and name:
-                out.setdefault(_norm_name(name), g[abbr_key])
+        for name_key, abbr_key in (("home_name", "home_team"), ("away_name", "away_team"),
+                                   ("home_short", "home_team"), ("away_short", "away_team"),
+                                   ("home_name", "home_abbr"), ("away_name", "away_abbr"),
+                                   ("home_short", "home_abbr"), ("away_short", "away_abbr")):
+            name, abbr = g.get(name_key), g.get(abbr_key)
+            if isinstance(name, str) and name and isinstance(abbr, str) and abbr:
+                for variant in _name_variants(name):
+                    out.setdefault(variant, abbr)
     return out
 
 
 def _norm_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _name_variants(name: str) -> set[str]:
+    """Every normalised spelling a college name might arrive as.
+
+    The St./State split is endemic to college sports and bit this immediately:
+    Kalshi writes "Michigan St." while ESPN writes "Michigan State", which
+    normalise to "michiganst" vs "michiganstate" and never match. Only a TRAILING
+    "st" is expanded -- "St. John's" and "St. Bonaventure" carry it as a prefix
+    meaning Saint, and rewriting those would map different schools together."""
+    base = _norm_name(name)
+    if not base:
+        return set()
+    out = {base}
+    if base.endswith("state"):
+        out.add(base[: -len("state")] + "st")
+    elif base.endswith("st"):
+        out.add(base[: -len("st")] + "state")
+    return out
 
 
 def resolve_team(kalshi_abbr: str | None, display_name: str | None, name_index: dict,
@@ -120,9 +155,10 @@ def resolve_team(kalshi_abbr: str | None, display_name: str | None, name_index: 
     if abbr and abbr in known_abbrs:
         return abbr
     if display_name:
-        hit = name_index.get(_norm_name(display_name))
-        if hit:
-            return hit
+        for variant in _name_variants(display_name):
+            hit = name_index.get(variant)
+            if hit:
+                return hit
     return None
 
 
