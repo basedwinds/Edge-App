@@ -10,7 +10,7 @@ import datetime
 import logging
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.database import get_session
@@ -35,6 +35,10 @@ _LINK_FIELDS = [
     "lol_match_id", "race_event_id",
 ]
 _RACING = {"f1", "nascar", "irl"}
+# A sport must have at least this share of its active markets carrying a real
+# quote before "prices are stale" means a stalled poller (see the stale_poller
+# check). Measured: cs2 100% = real stall, nascar 9% = just-not-quoted-yet.
+_STALL_MIN_PRICED_FRACTION = 0.25
 
 
 def _issue(issues, severity, category, sport, detail):
@@ -67,10 +71,30 @@ def health_check(session: Session = Depends(get_session)):
         .group_by(Market.sport)
         .all()
     )
+    # Distinguish a STALLED poller from inventory the exchange simply hasn't
+    # started quoting. A stalled poller leaves markets that WERE being quoted and
+    # stopped updating, so nearly all of them still carry a price; unquoted
+    # inventory has only a sliver priced (typically leftovers from past events).
+    # Measured 2026-08-02: CS2 = 1237/1237 priced (100%) and 189h stale -> a REAL
+    # stall, correctly flagged and since fixed. NASCAR = 39/426 priced (9%) and
+    # "190h stale" -> NOT a stall; Kalshi doesn't quote race markets until near
+    # race day, and the no_market_price INFO below already says so, so the ERROR
+    # was pure noise that would never clear. Hence a proportional gate, not a
+    # zero-check (a zero-check would not have caught NASCAR's 9%).
+    priced_counts = dict(
+        session.query(Market.sport, func.count(func.distinct(Market.id)))
+        .join(MarketSnapshot, MarketSnapshot.market_id == Market.id)
+        .filter(Market.status == "active",
+                or_(MarketSnapshot.last_price.isnot(None), MarketSnapshot.yes_bid.isnot(None)))
+        .group_by(Market.sport)
+        .all()
+    )
     for sport, n in active.items():
         ts = latest.get(sport)
         if not ts:
             continue
+        if priced_counts.get(sport, 0) < _STALL_MIN_PRICED_FRACTION * n:
+            continue  # mostly unquoted inventory -> see the no_market_price INFO instead
         age_h = (now - ts).total_seconds() / 3600
         if age_h > 6:
             _issue(issues, "error" if age_h > 24 else "warning", "stale_poller", sport,
