@@ -126,6 +126,10 @@ def list_lol_futures(session: Session = Depends(get_session)):
                 model_prob=None,
                 model_validated=False,
                 edge=None,
+                # Genuinely unstaked because model_prob is None -- LoL tournament
+                # winners have NO model (unlike CS2/Valorant, which have the
+                # bracket sim). Nothing is being suppressed here; there is simply
+                # nothing to price, so there is no CLV to lose either.
                 kelly_fraction=None,
                 suggested_stake_dollars=None,
                 suggested_stake_units=None,

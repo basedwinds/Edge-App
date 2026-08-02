@@ -126,6 +126,20 @@ def list_valorant_futures(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport == "valorant", Market.market_type == "tournament_winner", Market.status == "active").all()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     priced = price_tournament_winners(markets, elo_service_valorant)
+    # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
+    # kelly_fraction=None on the reasoning that the bracket is an approximation.
+    # That reasoning was inverted: the paper logger only records rows the app
+    # actually staked, so suppressing them meant they never became paper bets,
+    # never accrued forward CLV, and could never be evaluated -- guaranteeing the
+    # approximation could never be proven right OR wrong. Since forward CLV is
+    # the only thing this app trusts, an approximate model is the one that most
+    # needs measuring. They are badged approximate in the UI instead, and the
+    # CLV-selection gate can retire them once the data speaks.
+    _weekly, _futures_pool = get_valorant_pool_dollars(session)
+    _unit = get_unit_dollars(session)
+    _fk, _msf, _mineg = get_staking_params(session)
+    _mode, _fm, _ff = get_flat_params(session)
+    _clv = bucket_clv_stats(session)
 
     out = []
     for m in markets:
@@ -133,6 +147,12 @@ def list_valorant_futures(session: Session = Depends(get_session)):
         implied = _implied_prob(snap)
         model_prob = priced.get(m.id)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
+        _traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
+        _kelly = gate_kelly(
+            kelly_fraction(model_prob, implied, _fk, _msf, _mineg, _traded),
+            _clv, "valorant", m.market_type,
+        )
+        _stake = size_stake_dollars(_mode, _kelly, _futures_pool, model_prob, implied, _unit, _fm, _ff)
         out.append(
             FuturesMarketOut(
                 id=m.id,
@@ -151,9 +171,9 @@ def list_valorant_futures(session: Session = Depends(get_session)):
                 model_prob=model_prob,
                 model_validated=False,
                 edge=edge,
-                kelly_fraction=None,
-                suggested_stake_dollars=None,
-                suggested_stake_units=None,
+                kelly_fraction=_kelly,
+                suggested_stake_dollars=_stake,
+                suggested_stake_units=round(_stake / _unit, 3) if (_stake is not None and _unit > 0) else None,
                 stake_pool="futures",
                 line_move_pp=None,
                 model_note=TOURNAMENT_SIM_NOTE if model_prob is not None else None,
