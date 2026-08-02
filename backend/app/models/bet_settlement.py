@@ -282,12 +282,26 @@ def _grade_tennis_moneyline(bet: PlacedBet, match: TennisMatch) -> "str | None":
 
 
 def _parse_sets(score: "str | None") -> "list[tuple[int, int]]":
-    """'6-4 6-3' -> [(6,4),(6,3)] in the match's player_a/player_b order."""
+    """'6-4 6-3' -> [(6,4),(6,3)] in the match's player_a/player_b order.
+
+    REAL BUG fixed 2026-08-02: the scrapers write a tiebreak set by appending the
+    loser's tiebreak points to their game count -- '7-65' means 7-6 (tiebreak 7-5),
+    NOT 7 games to 65. The old int() parse took it literally, so a single tiebreak
+    set inflated a match's game total from ~10 to ~75 and inverted per-set winner
+    comparisons (7 > 65 is False). 43 real settled tennis bets had such a score.
+    A game count above 20 is impossible in any real set, so that's the detector;
+    the leading digit is the true game count (6 or 7)."""
     out = []
     for s in (score or "").split():
         p = s.split("-")
-        if len(p) == 2 and p[0].isdigit() and p[1].isdigit():
-            out.append((int(p[0]), int(p[1])))
+        if len(p) != 2 or not p[0].isdigit() or not p[1].isdigit():
+            continue  # retirements ("ret."), walkovers, junk -> skip the token
+        a, b = int(p[0]), int(p[1])
+        if a > 20:
+            a = int(p[0][0])
+        if b > 20:
+            b = int(p[1][0])
+        out.append((a, b))
     return out
 
 
@@ -297,6 +311,46 @@ def _tennis_side(bet: PlacedBet, match: TennisMatch) -> "str | None":
     if bet.team == match.player_b_name:
         return "b"
     return None
+
+
+def _grade_tennis_game_spread(bet: PlacedBet, match: TennisMatch) -> "str | None":
+    """Games-differential handicap. Convention is pinned by the ingestion layer
+    (market_catalog_tennis.upsert_kalshi_tennis_game_spread_market /
+    upsert_polymarket_tennis_set_handicap_row) and the model
+    (game_lines_tennis.prob_game_spread_cover): `bet.team` is the player the YES
+    side favors and `bet.line` is a "wins by MORE than this many games" threshold
+    -- so a positive line means team must win by more than it, and a negative line
+    means team must not lose by more than |line|. Polymarket names its version
+    "Set Handicap" but it was confirmed live to resolve on the same games
+    differential, so both sources grade identically here.
+
+    Left ungraded (returns None) rather than guessed whenever anything is
+    uncertain -- an unparseable/incomplete score, an unknown player side, or a
+    parsed score that DISAGREES with the recorded winner (which would mean the
+    parse is wrong). Misgrading real P/L is worse than leaving a bet pending."""
+    if bet.line is None:
+        return None
+    side = _tennis_side(bet, match)
+    if side is None:
+        return None
+    sets = _parse_sets(match.score)
+    if not sets:
+        return None
+    # Sanity gate: the parsed sets must agree with the recorded match winner.
+    sets_a = sum(1 for a, b in sets if a > b)
+    sets_b = sum(1 for a, b in sets if b > a)
+    winner = _tennis_winner_name(match)
+    if winner is None or sets_a == sets_b:
+        return None
+    parsed_winner = match.player_a_name if sets_a > sets_b else match.player_b_name
+    if not _names_eq(parsed_winner, winner):
+        return None  # parse disagrees with the real result -> don't guess
+    games_a = sum(a for a, _ in sets)
+    games_b = sum(b for _, b in sets)
+    diff = (games_a - games_b) if side == "a" else (games_b - games_a)
+    if diff == bet.line:
+        return "push"  # lines are .5 in practice, but don't silently mis-call an exact tie
+    return "won" if diff > bet.line else "lost"
 
 
 def _grade_tennis_game_total(bet: PlacedBet, match: TennisMatch) -> "str | None":
@@ -445,9 +499,14 @@ _TENNIS_GRADERS = {
     "total_sets": _grade_tennis_total_sets,
     "set_winner": _grade_tennis_set_winner,
     "exact_score": _grade_tennis_exact_score,
-    # game_spread + set_total deliberately absent: their sign/side semantics are
-    # ambiguous in how they're stored, and misgrading real P/L is worse than
-    # leaving them pending. Revisit if their storage convention is pinned down.
+    # game_spread added 2026-08-02: the storage convention IS now pinned down
+    # (see _grade_tennis_game_spread) -- team = the favored player, line = "wins
+    # by more than this many games", identical for Kalshi and Polymarket. The
+    # grader still refuses to guess (returns None) when the score can't be
+    # parsed or disagrees with the recorded winner.
+    "game_spread": _grade_tennis_game_spread,
+    # set_total still deliberately absent: its side semantics remain ambiguous,
+    # and misgrading real P/L is worse than leaving it pending.
 }
 
 
