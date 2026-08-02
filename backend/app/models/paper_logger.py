@@ -27,6 +27,8 @@ Design choices:
     (no single close), so they're skipped for now.
 """
 import logging
+
+from app import sports as app_sports
 from datetime import datetime, timedelta
 
 import httpx
@@ -44,26 +46,13 @@ _READINESS_WINDOW_DAYS = 21    # a season-sport's futures are "ready" once its s
 # season is active/near. Event-based sports (tennis/mma/esports/racing) are
 # omitted on purpose: their "futures" are tournament-scoped and only listed once
 # the event is imminent, so there's no premature-futures problem to gate.
-_SEASON_TABLES = {
-    "nfl": ("NflGame", "gameday"),
-    "nba": ("NbaGame", "gameday"),
-    "wnba": ("WnbaGame", "gameday"),
-    "mlb": ("MlbGame", "gameday"),
-    "soccer": ("SoccerMatch", "match_date"),
-    # CFB registered 2026-08-02. Its futures are the strongest case for this gate
-    # in the whole app: 944 of its 974 markets are season-long, and preseason they
-    # are priced off ratings carried from LAST season with ZERO current-season
-    # information -- against a sport with enormous roster turnover (transfer
-    # portal, NFL draft). The 21-day window ties them to the real season instead
-    # of an arbitrary date.
-    "cfb": ("CfbGame", "gameday"),
-}
+# DERIVED from app.sports (a sport declares its own season_table there).
+_SEASON_TABLES = dict(app_sports.SEASON_TABLES)
 _MAX_ALERTS_PER_SPORT = 6  # cap Discord pings per sport per run (a slate-open lists hundreds at once)
-_ENDPOINTS = [
-    "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
-    "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets",
-    "/lol/markets", "/racing/markets", "/cfb/markets",
-]
+# DERIVED from app.sports, not retyped. This list is what the alerts and the
+# paper logger read, and CFB was once missing from it -- the sport simply never
+# alerted and never accrued CLV, with nothing to indicate a problem.
+_ENDPOINTS = list(app_sports.MARKETS_PATHS)
 # Copied straight across from the Market row -- PlacedBet uses the identical
 # column names, so a game/race-tied bet stays CLV-computable (compute_bet_clv
 # looks these up to find the closing snapshot at kickoff).

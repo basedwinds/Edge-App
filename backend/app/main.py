@@ -1,4 +1,5 @@
 import logging
+import logging
 import threading
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,7 @@ from app.db.database import get_session, init_db
 from app.db.models import Setting
 from app.ingestion.poller import LAST_REFRESH_KEY, run_full_refresh
 from app.ingestion.poller_nba import run_full_refresh_nba
+from app import sports as app_sports
 from app.ingestion.poller_wnba import run_full_refresh_wnba
 from app.ingestion.poller_cfb import run_full_refresh_cfb
 from app.ingestion.poller_mlb import run_full_refresh_mlb
@@ -66,6 +68,14 @@ async def lifespan(app: FastAPI):
     # own network I/O never blocks another sport's, and DB writes still
     # can't collide since every sport's own write step takes the same
     # shared lock internally.
+    # A half-added sport used to be silent: CFB was once missing from the alert
+    # endpoints, the per-game cap and the sidebar, each with a different symptom
+    # and none raising. This makes it loud at startup instead.
+    _reg_problems = app_sports.check_registry_consistency()
+    if _reg_problems:
+        for _p in _reg_problems:
+            logging.getLogger("sports").error("SPORT REGISTRY: %s", _p)
+
     pollers = [
         run_full_refresh, run_full_refresh_nba, run_full_refresh_wnba, run_full_refresh_mlb, run_full_refresh_mma,
         run_full_refresh_tennis, run_full_refresh_soccer, run_full_refresh_valorant,

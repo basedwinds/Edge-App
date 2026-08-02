@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from app import sports as app_sports
 from app.db.database import SessionLocal
 from app.ingestion.catalog_scan import scan_catalog
 from app.ingestion.poller import run_full_refresh
@@ -52,9 +53,9 @@ def run_surface_backfill():
 
 
 _WARM_PATHS = [
-    "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
-    "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets", "/lol/markets",
-    "/racing/markets", "/cfb/markets",
+    # Every sport's markets endpoint, DERIVED from app.sports rather than listed
+    # by hand -- this list and paper_logger's drifted apart once already.
+    *app_sports.MARKETS_PATHS,
     "/markets/cross-platform-divergences",
     # Futures endpoints that run a real model (tennis draw sim, esports
     # tournament Monte Carlo, team-sport season sims) -- warmed too so a

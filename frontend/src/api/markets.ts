@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiPut, apiDelete } from "./client";
+import { gameIdForRow } from "../lib/sports";
 import type { CfbMarketRow, Cs2MarketRow, FuturesMarketRow, GameMarketRow, LolMarketRow, MarketRow, MlbMarketRow, MmaMarketRow, NbaMarketRow, SoccerMarketRow, TennisMarketRow, ValorantMarketRow, WnbaMarketRow } from "../types/market";
 
 /** Season-readiness config from the backend (same rule the Discord alerts use).
@@ -846,17 +847,13 @@ export function rowGameId(row: {
   soccerMatchId?: number | null; valorantMatchId?: number | null; cs2MatchId?: number | null;
   lolMatchId?: number | null;
 }): string | null {
-  const gameId =
-    row.nflGameId || row.nbaGameId || row.mlbGameId ||
-    // CFB ids are ESPN event ids, the same shape as NBA/WNBA's, so they are
-    // prefixed to avoid colliding across sports -- the same reason the esports
-    // ids below are prefixed.
-    (row.cfbGameId ? `cfb:${row.cfbGameId}` : null) ||
-    row.mmaFightId || row.tennisMatchId || row.soccerMatchId ||
-    (row.valorantMatchId ? `valorant:${row.valorantMatchId}` : null) ||
-    (row.cs2MatchId ? `cs2:${row.cs2MatchId}` : null) ||
-    (row.lolMatchId ? `lol:${row.lolMatchId}` : null);
-  return gameId ? String(gameId) : null;
+  // DERIVED from the sport registry (src/lib/sports.ts) rather than a hand-kept
+  // chain. The chain form is what silently dropped CFB: a sport missing from it
+  // skipped the per-game cap entirely, so one game could surface several
+  // correlated bets as if they were independent. Registering a sport now covers
+  // this automatically, and gameIdField is typed against GameIdFields so a typo
+  // is a build error rather than another silent miss.
+  return gameIdForRow(row);
 }
 
 function capToOneRowPerGame(rows: RecommendedBetRow[]): RecommendedBetRow[] {

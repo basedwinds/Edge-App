@@ -4,6 +4,7 @@ import { LayoutDashboard, Settings, History, Trophy, Target, ClipboardList, Gaug
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { fetchNewCatalogEntries } from "../../api/markets";
+import { sportFromPath } from "../../lib/sports";
 
 type Sport = "nfl" | "nba" | "wnba" | "cfb" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
 
@@ -193,16 +194,6 @@ export function Sidebar() {
   // Futures/Recommended/etc. (every page except /nba and /mlb), not just
   // "/" itself.
   const pathname = useLocation().pathname;
-  const isNbaPath = pathname.startsWith("/nba");
-  const isWnbaPath = pathname.startsWith("/wnba");
-  const isCfbPath = pathname.startsWith("/cfb");
-  const isMlbPath = pathname.startsWith("/mlb");
-  const isMmaPath = pathname.startsWith("/mma");
-  const isTennisPath = pathname.startsWith("/tennis");
-  const isSoccerPath = pathname.startsWith("/soccer");
-  const isValorantPath = pathname.startsWith("/valorant");
-  const isCs2Path = pathname.startsWith("/cs2");
-  const isLolPath = pathname.startsWith("/lol");
   const isRacingPath = pathname.startsWith("/racing");
   const racingSeries = isRacingPath ? (pathname.split("/")[2] || "f1") : null;  // /racing/f1 -> "f1"
   const isSharedPath = pathname === "/backtests" || pathname === "/settings" || pathname === "/divergences" || pathname === "/clv-buckets" || pathname === "/all" || pathname === "/tracker" || pathname === "/new-markets" || pathname === "/health";
@@ -213,7 +204,15 @@ export function Sidebar() {
   // NFL the moment you left another sport for one of these pages -- reported
   // 2026-07-17 ("when i go to backtests it takes me back to NFL tab").
   // Remembering the last NON-shared sport instead keeps the scope stable.
-  const currentSport: string = isRacingPath ? (racingSeries as string) : isMlbPath ? "mlb" : isWnbaPath ? "wnba" : isCfbPath ? "cfb" : isNbaPath ? "nba" : isMmaPath ? "mma" : isTennisPath ? "tennis" : isSoccerPath ? "soccer" : isValorantPath ? "valorant" : isCs2Path ? "cs2" : isLolPath ? "lol" : "nfl";
+  // DERIVED from the sport registry (src/lib/sports.ts). This used to be a
+  // hand-written startsWith chain ending in a bare "nfl" fallback, which is
+  // exactly why a missing sport was invisible: /cfb fell through and the sidebar
+  // confidently showed NFL's sub-nav on College Football pages rather than
+  // erroring. Registering a sport now covers this; racing keeps its own branch
+  // because its routes are /racing/<series>, not one prefix per sport.
+  const currentSport: string = isRacingPath
+    ? (racingSeries as string)
+    : (sportFromPath(pathname) ?? "nfl");
   const [lastSport, setLastSport] = useState<string>(currentSport);
   useEffect(() => {
     if (!isSharedPath) {
