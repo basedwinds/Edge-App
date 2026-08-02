@@ -79,3 +79,51 @@ def fetch_race_result(series: str, espn_event_id: str) -> "dict | None":
         return None
     finishers.sort(key=lambda t: t[0])
     return {"order": [aid for _o, aid in finishers], "pole": pole}
+
+
+def fetch_race_grid(series: str, espn_event_id: str) -> "dict[str, int] | None":
+    """{espn_driver_id: starting position} for a race whose grid is set, or None.
+
+    Separate from fetch_race_result on purpose: that one deliberately returns None
+    until a race is FINISHED (it requires a winner flag), which is right for
+    settlement but useless for PRICING -- the grid is known from qualifying, hours
+    before the race, and it's the strongest feature the racing model has (F1
+    grid_pts=130; adding grid took winner-hit 45%->62% in backtest). Live pricing
+    was passing grid=None permanently because nothing could supply it pre-race.
+
+    Measured 2026-08-02: a FINISHED nascar event returns 39 competitors with
+    startOrder on all 39, while an event a week out returns 0 competitors -- so
+    this returns None until ESPN publishes the field, and callers must treat None
+    as "no grid yet" and price off driver+constructor (which is exactly what
+    racing_ratings.strength(grid=None) already does)."""
+    slug = _SLUG.get(series)
+    if not slug:
+        return None
+    core = _CORE.format(slug=slug)
+    try:
+        ce = get_json(f"{core}/events/{espn_event_id}")
+    except Exception:
+        return None
+    best: dict[str, int] = {}
+    for cp in ce.get("competitions", []):
+        grid: dict[str, int] = {}
+        for comp in cp.get("competitors", []):
+            start = comp.get("startOrder")
+            if start is None:
+                continue
+            ath = comp.get("athlete") or {}
+            aid = str(ath.get("id")) if ath.get("id") else None
+            if not aid:
+                ref = ath.get("$ref")
+                if ref:
+                    try:
+                        aid = str(get_json(ref).get("id"))
+                    except Exception:
+                        aid = None
+            if aid:
+                grid[aid] = int(start)
+        # a race weekend can carry several competitions (practice/qualifying/race);
+        # keep the one with the fullest grid, same "largest field" rule as results
+        if len(grid) > len(best):
+            best = grid
+    return best or None

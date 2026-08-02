@@ -5,10 +5,12 @@ paper-log -> CLV -> recommendations machinery as every other sport.
 
 Field per race = the drivers with markets under that race_event (Kalshi supplies
 it). Prices: race_winner/top_n via racing_sim Monte Carlo (driver + constructor
-Elo), pole via qualifying Elo. Grid isn't wired yet (ESPN publishes it only at
-the race weekend) so race-finish prices are driver+constructor for now, sharper
-later. model_validated=False; forward CLV is the judge (racing can't be
-historically backtested -- thin retention).
+Elo), pole via qualifying Elo. Grid IS wired (2026-08-02): the starting grid is
+read from the cache poller_racing.refresh_racing_grids() fills once ESPN
+publishes the field at the race weekend, so race-finish prices sharpen
+automatically after qualifying and fall back to driver+constructor before it.
+model_validated=False; forward CLV is the judge (racing can't be historically
+backtested -- thin retention).
 """
 import re
 from collections import defaultdict
@@ -64,8 +66,29 @@ def _h2h_model_prob(series: str, label: str, cc: dict) -> "float | None":
     return racing_sim.h2h_prob(sa, sb)
 
 
+
+def _load_grid_cache() -> dict:
+    """{race_event_id: {espn_driver_id: start_pos}} from the grid cache written by
+    poller_racing.refresh_racing_grids(). Read from disk (not the network) so
+    pricing stays fast; missing/unreadable cache just means no grid, which prices
+    exactly as before."""
+    try:
+        import json
+        from pathlib import Path
+        from app.config import settings
+        from app.ingestion.poller_racing import RACING_GRID_CACHE
+        path = Path(settings.data_dir) / RACING_GRID_CACHE
+        if not path.exists():
+            return {}
+        raw = json.loads(path.read_text())
+        return {int(k): v for k, v in raw.items()}
+    except Exception:
+        return {}
+
+
 def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, float | None],
-                 race_start_by_event: dict | None = None) -> list[RacingMarketOut]:
+                 race_start_by_event: dict | None = None,
+                 grid_by_event: dict | None = None) -> list[RacingMarketOut]:
     st = racing_ratings._series_state(series)
     cc = st.get("current_constructor", {})
 
@@ -77,7 +100,15 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         if m.market_type in ("race_winner", "top_n"):
             d = did(m.team or "")
             if d and d not in race_field:
-                s = racing_ratings.strength(series, d, cc.get(d), None)
+                # Grid was hardcoded None here, so every race priced in
+                # pre-qualifying mode FOREVER and never sharpened once the grid
+                # was known -- even though grid is the model's strongest input
+                # (f1 grid_pts=130; winner-hit 45%->62% in backtest). Now read
+                # from the cache poller_racing.refresh_racing_grids() fills after
+                # qualifying; still None (and so still pre-quali pricing) until
+                # ESPN publishes the field.
+                g = (grid_by_event or {}).get(m.race_event_id) or {}
+                s = racing_ratings.strength(series, d, cc.get(d), g.get(d))
                 if s is not None:
                     race_field[d] = s
     sim = racing_sim.simulate(race_field, trials=20000) if len(race_field) >= 2 else {}
@@ -175,6 +206,7 @@ def list_racing_markets(session: Session = Depends(get_session)):
 
     # Real race start per RaceEvent -> becomes each row's close_time (see
     # _price_event) so racing bets show a DATE instead of reading "Season-long".
+    grid_by_event = _load_grid_cache()
     event_ids = {m.race_event_id for m in markets if m.race_event_id is not None}
     race_start_by_event = {
         e.id: e.start_time
@@ -183,7 +215,7 @@ def list_racing_markets(session: Session = Depends(get_session)):
 
     out: list[RacingMarketOut] = []
     for (series, _event), evmarkets in by_event.items():
-        for row in _price_event(series, evmarkets, implied_by_id, race_start_by_event):
+        for row in _price_event(series, evmarkets, implied_by_id, race_start_by_event, grid_by_event):
             row.volume = vol_by_id.get(row.id)
             snap = snaps.get(row.id)
             has_traded = has_real_trading(src_by_id.get(row.id), snap.volume if snap else None, snap.last_price if snap else None)

@@ -96,6 +96,69 @@ def _match_espn_event(scoreboard: list, edate: str) -> "str | None":
     return None
 
 
+
+RACING_GRID_CACHE = "racing_grid_cache.json"
+
+
+def refresh_racing_grids():
+    """Cache the starting grid for races that are SOON but not yet run, so live
+    pricing can use it. The grid is set at qualifying (hours before the race) and
+    is the strongest feature the racing model has -- but live pricing had no way
+    to get it, so it passed grid=None forever and never sharpened after quali.
+
+    Cached to a JSON file (same pattern as the other data/racing_*.json caches)
+    rather than a new DB column, and deliberately NOT written to
+    RaceEvent.result_json: settlement treats a non-null result_json as "this race
+    finished", so putting a grid there would settle races that haven't run.
+
+    Fetches only races starting within the next few days; ESPN publishes no field
+    at all a week out (measured), so anything further is a wasted call."""
+    import datetime
+    import json
+    from pathlib import Path
+    from app.clients.espn_racing_results import _event_ids_for_season, fetch_race_grid
+    from app.config import settings
+    from app.db.models import RaceEvent
+    try:
+        session = SessionLocal()
+        try:
+            now = datetime.datetime.utcnow()
+            soon = now + datetime.timedelta(days=4)
+            want = [
+                (e.id, e.series, e.start_time.year, e.start_time.date().isoformat())
+                for e in session.query(RaceEvent).filter(RaceEvent.result_json.is_(None)).all()
+                if e.start_time and now - datetime.timedelta(hours=6) <= e.start_time <= soon
+            ]
+        finally:
+            session.close()
+        if not want:
+            return
+        scoreboards: dict = {}
+        grids: dict[str, dict] = {}
+        for rid, series, season, edate in want:
+            key = (series, season)
+            if key not in scoreboards:
+                scoreboards[key] = _event_ids_for_season(series, season)
+            eid = _match_espn_event(scoreboards[key], edate)
+            if not eid:
+                continue
+            g = fetch_race_grid(series, eid)
+            if g:
+                grids[str(rid)] = g
+        path = Path(settings.data_dir) / RACING_GRID_CACHE
+        existing = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except Exception:
+                existing = {}
+        existing.update(grids)
+        path.write_text(json.dumps(existing))
+        log.info("racing grids: cached %d race grids (%d events checked)", len(grids), len(want))
+    except Exception:
+        log.exception("racing grid refresh failed")
+
+
 def refresh_racing_results():
     """Backfill final finishing order onto finished RaceEvents so race bets can
     auto-settle. ESPN fetch happens BEFORE the write lock."""
@@ -148,4 +211,5 @@ def refresh_racing_results():
 def run_full_refresh_racing():
     refresh_racing_ratings()
     refresh_racing_markets()
+    refresh_racing_grids()
     refresh_racing_results()
