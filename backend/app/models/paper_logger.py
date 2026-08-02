@@ -216,6 +216,21 @@ def run_paper_log():
     rows = _fetch_priced()
     if not rows:
         return
+    # The EXACT set the Recommended tab shows (verified byte-identical to the
+    # frontend builders on frozen snapshots -- see models/recommended.py). Alerts
+    # fire only for markets in this set, so a ping always corresponds to a row the
+    # user can actually find in the app. Falls back to an empty set on failure,
+    # which just means "no alerts this run" (paper logging still proceeds).
+    try:
+        from app.api.routers.settings import _read_all  # settings dict for pool sizes
+        from app.models.recommended import compute_recommended
+
+        with SessionLocal() as _s:
+            _settings = _read_all(_s).model_dump()
+        recommended_ids = {r.id for r in compute_recommended(_settings)}
+    except Exception:
+        log.exception("recommended-set computation failed; skipping alerts this run")
+        recommended_ids = set()
     new_alerts: list[dict] = []  # newly-qualified bets worth pushing to Discord
     with db_write_lock():
         session = SessionLocal()
@@ -278,10 +293,8 @@ def run_paper_log():
                 # but must not ping. Matches what the Recommended view shows.
                 akey = _cross_platform_key(m)
                 if (
-                    (row.get("edge") or 0) >= alert_cfg["min_edge"]
-                    and row.get("suggested_stake_dollars")
-                    and akey not in alerted_keys
-                    and _within_alert_window(session, bet, season_active)
+                    m.id in recommended_ids          # in the Recommended tab, exactly
+                    and akey not in alerted_keys     # not already announced (either book)
                 ):
                     alerted_keys.add(akey)  # so the sibling platform in this same run is skipped too
                     new_alerts.append({

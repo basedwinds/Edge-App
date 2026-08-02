@@ -32,6 +32,9 @@ _LADDER = {"win_total", "wins_any", "division_wins", "season_pass_yds", "season_
 _GAME_LADDER = {"spread", "total", "team_total", "spread_1h", "spread_2h", "total_1h", "total_2h"}
 _PLAYER_STAT = {"season_pass_yds", "season_rush_yds", "season_rec_yds", "season_rush_tds",
                 "season_rec_tds", "season_rec"}
+# Season champion futures belong on the Futures page, not the cross-sport games
+# view -- buildRacingRecommendedBets filters them out (CHAMP).
+_RACING_CHAMP = {"drivers_champion", "constructors_champion"}
 
 # (sport, /markets endpoint, weekly-pool settings field). Games view = weekly pool
 # only (Combined passes futures=[]), so no futures pool needed. Order + fields
@@ -63,7 +66,7 @@ class _Row:
     key functions (_cross_platform_key etc.) read."""
 
     __slots__ = ("id", "sport", "market_type", "source", "team", "line", "side",
-                 "label", "edge", "volume", "stake", "stake_pool", "gameday",
+                 "label", "edge", "volume", "stake", "stake_pool", "gameday", "event", "model_prob",
                  "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
                  "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
                  "lol_match_id", "race_event_id")
@@ -78,10 +81,20 @@ class _Row:
         self.side = d.get("side")
         self.label = d.get("game_label") or d.get("group_label") or self.market_type
         self.edge = d.get("edge")
+        self.model_prob = d.get("model_prob")
         self.volume = d.get("volume")
         self.stake = d.get("suggested_stake_dollars")
         self.stake_pool = d.get("stake_pool")
         self.gameday = d.get("gameday")
+        if sport == "racing":
+            # buildRacingRecommendedBets uses its OWN row shape: team=driver,
+            # sport=series (f1/nascar/irl), gameday=close_time date, and it never
+            # touches the shared ladder/cross-platform/game-cap passes.
+            self.team = d.get("driver")
+            self.sport = d.get("series") or "f1"
+            ct = d.get("close_time")
+            self.gameday = ct[:10] if ct else None
+            self.event = d.get("race_event_id") if d.get("race_event_id") is not None else (d.get("event") or "")
         for a in ("nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
                   "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
                   "lol_match_id", "race_event_id"):
@@ -115,6 +128,39 @@ def _game_cap_id(r: _Row):
             or (f"valorant:{r.valorant_match_id}" if r.valorant_match_id else None)
             or (f"cs2:{r.cs2_match_id}" if r.cs2_match_id else None)
             or (f"lol:{r.lol_match_id}" if r.lol_match_id else None))
+
+
+def _build_racing(rows: list[_Row], weekly_pool: float) -> list[_Row]:
+    """Mirror buildRacingRecommendedBets, which does NOT use the shared pipeline:
+    staked rows -> ONE bet per race event (best stake wins, ties by first) ->
+    budget cap that always keeps the first row (`&& rows.length > 0`)."""
+    # JS filter: PER-RACE markets only -- season champion futures belong on the
+    # Futures page -- and both model_prob + edge must be real.
+    staked = [r for r in rows
+              if r.market_type not in _RACING_CHAMP and (r.stake or 0) > 0
+              and r.model_prob is not None and r.edge is not None]
+    # JS: [...staked].sort(byStake) -- Array.sort is STABLE, so rows tied on stake
+    # keep their original /racing order; the first such row wins the event. Python's
+    # sort is stable too, so sorting the rows in their original order matches.
+    staked = sorted(staked, key=lambda r: -(r.stake or 0.0))
+    best: dict[str, _Row] = {}
+    for r in staked:
+        k = f"{r.sport}|{r.event if r.event is not None else ''}"
+        if k not in best:
+            best[k] = r
+    # JS: deduped.sort(byStake) on the Map's insertion order (= the order events
+    # were first seen above), then the cap walks that order.
+    deduped = sorted(best.values(), key=lambda r: -(r.stake or 0.0))
+    ceiling = max(0.0, (weekly_pool or 0.0) * _CEILING_PCT)
+    out: list[_Row] = []
+    running = 0.0
+    for r in deduped:
+        stake = r.stake or 0.0
+        if running + stake > ceiling and out:              # JS keeps the first row regardless
+            continue
+        running += stake
+        out.append(r)
+    return out
 
 
 def _build_sport(rows: list[_Row], weekly_pool: float) -> list[_Row]:
@@ -203,16 +249,27 @@ def _not_ready(r: _Row, rd: dict) -> bool:
     return False
 
 
-def compute_recommended(settings: dict) -> list[_Row]:
+def compute_recommended(settings: dict, snapshot: dict | None = None) -> list[_Row]:
     """The full cross-sport Recommended GAMES set (the 'All Recommended Bets'
     tab), as a flat list sorted by stake desc -- identical to loadCombined +
-    RecommendedBetsTable's readiness filter."""
+    RecommendedBetsTable's readiness filter.
+
+    `snapshot` (verification only): {sport: [market rows], "readiness": {...}} to
+    compute from FROZEN data instead of live endpoints, so a diff against the
+    frontend measures logic differences rather than 5-min price drift."""
     out: list[_Row] = []
-    with httpx.Client(timeout=90.0) as client:
-        rd = _fetch_readiness(client)
-        for sport, ep, pool_key in _SPORTS:
-            rows = [_Row(sport, d) for d in _fetch(client, ep)]
-            out.extend(_build_sport(rows, settings.get(pool_key) or 0.0))
+    if snapshot is not None:
+        rd = snapshot.get("readiness") or {}
+        for sport, _ep, pool_key in _SPORTS:
+            rows = [_Row(sport, d) for d in snapshot.get(sport, [])]
+            builder = _build_racing if sport == "racing" else _build_sport
+            out.extend(builder(rows, settings.get(pool_key) or 0.0))
+    else:
+        with httpx.Client(timeout=90.0) as client:
+            rd = _fetch_readiness(client)
+            for sport, ep, pool_key in _SPORTS:
+                rows = [_Row(sport, d) for d in _fetch(client, ep)]
+                out.extend(_build_sport(rows, settings.get(pool_key) or 0.0))
     out = [r for r in out if not _not_ready(r, rd)]  # readiness runs at display, after budget cap
     out.sort(key=lambda r: -(r.stake or 0.0))
     return out
