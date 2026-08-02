@@ -593,7 +593,11 @@ class CatalogEntry(Base):
     platform = Column(String, nullable=False)  # kalshi | polymarket
     identifier = Column(String, nullable=False)  # Kalshi series ticker | Polymarket event slug
     title = Column(String, nullable=False)
-    sport = Column(String, nullable=False, default="nfl")  # nfl | nba | mlb | mma -- added 2026-07-18 when catalog_scan.py grew beyond NFL-only
+    # nfl | nba | mlb | mma | tennis | soccer | valorant | cs2 | lol -- added
+    # 2026-07-18 when catalog_scan.py grew beyond NFL-only -- plus "other",
+    # the 2026-08-02 catch-all for live Kalshi Sports series belonging to no
+    # tracked sport (see catalog_scan.py::fetch_kalshi_other_series).
+    sport = Column(String, nullable=False, default="nfl")
     first_seen = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
     last_seen = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
     dismissed = Column(Integer, nullable=False, default=0)  # 0/1, sqlite has no bool

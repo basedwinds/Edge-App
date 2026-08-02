@@ -9,6 +9,9 @@ import { SourceBadge } from "../components/markets/SourceBadge";
 const SPORT_LABELS: Record<string, string> = {
   nfl: "NFL", nba: "NBA", wnba: "WNBA", mlb: "MLB", mma: "MMA",
   tennis: "Tennis", soccer: "Soccer", valorant: "Valorant", cs2: "CS2", lol: "LoL",
+  // Catch-all bucket from the backend scan (catalog_scan.py's fetch_kalshi_other_series):
+  // a live Kalshi Sports series belonging to no sport this app tracks or ingests.
+  other: "Untracked sport",
 };
 
 // Auto-triage tag (backend catalog_classify.py). Colors: green = the one

@@ -21,7 +21,7 @@ import datetime
 import re
 
 from app.clients.base import paginate
-from app.clients.polymarket_client import extract_market_prices
+from app.clients.polymarket_client import extract_market_prices, handicap_lines_in_outcome_order
 
 GAMMA = "https://gamma-api.polymarket.com"
 LOL_TAG_SLUG = "league-of-legends"
@@ -156,15 +156,18 @@ def get_map_handicap_markets() -> list[dict]:
                 continue
             if _is_stale(_normalize_start_time(m.get("gameStartTime"))):
                 continue
-            team_1, line_1, team_2, line_2 = hm.groups()
             prices = extract_market_prices(m)
             if len(prices["outcomes"]) != 2 or len(prices["outcome_prices"]) != 2:
                 continue
-            lines_by_team = {team_1: float(line_1), team_2: float(line_2)}
-            for team_name, price in zip(prices["outcomes"], prices["outcome_prices"]):
-                line = lines_by_team.get(team_name)
-                if line is None:
-                    continue
+            # REAL BUG fixed 2026-08-02: same abbreviated-title-vs-full-outcome
+            # mismatch as Valorant's own handicap loop ("AL" vs "Anyone's
+            # Legend", "BAN" vs "The Bandits") -- silently dropped 97 of 103
+            # real open LoL handicap markets (94%). See
+            # polymarket_client.handicap_lines_in_outcome_order.
+            lines = handicap_lines_in_outcome_order(hm, prices["outcomes"])
+            if lines is None:
+                continue
+            for team_name, price, line in zip(prices["outcomes"], prices["outcome_prices"], lines):
                 rows.append(_base_row(event, m, prices, team_name=team_name, line=line, last_price=price))
     return rows
 

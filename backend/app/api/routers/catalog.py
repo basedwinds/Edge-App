@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import get_session
@@ -7,6 +8,19 @@ from app.db.models import CatalogEntry
 from app.ingestion.catalog_classify import classify, is_auto_priceable
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
+
+# Newest batch first, then alphabetical WITHIN a day -- not raw first_seen desc.
+# first_seen is microsecond-precise, so a scan that adds many rows at once
+# orders them by insertion, and insertion follows Kalshi's /series response,
+# which comes back in arbitrary order (confirmed live 2026-08-02, NOT sorted).
+# That scattered a single scan's near-identical series all over the list: the
+# 24 Brasileiro series, the 8 WBC boxing title series and the ~40 WNBA prop
+# series each landed in 558 unrelated places, so triaging one market type
+# meant finding its siblings by eye. Truncating the sort key to the DAY keeps
+# "newest first" meaningful for the steady-state trickle (a handful of rows,
+# and days apart) while making a bulk backlog skimmable, since one decision
+# then covers a contiguous run of rows.
+_CATALOG_ORDER = (func.date(CatalogEntry.first_seen).desc(), CatalogEntry.identifier.asc())
 
 
 class CatalogEntryOut(BaseModel):
@@ -57,7 +71,7 @@ def list_new_entries(session: Session = Depends(get_session)):
     rows = (
         session.query(CatalogEntry)
         .filter_by(dismissed=0)
-        .order_by(CatalogEntry.first_seen.desc())
+        .order_by(*_CATALOG_ORDER)
         .all()
     )
     return [_to_out(r) for r in rows]
@@ -72,7 +86,7 @@ def list_flagged_entries(session: Session = Depends(get_session)):
     rows = (
         session.query(CatalogEntry)
         .filter_by(disposition="flagged")
-        .order_by(CatalogEntry.first_seen.desc())
+        .order_by(*_CATALOG_ORDER)
         .all()
     )
     return [_to_out(r) for r in rows]

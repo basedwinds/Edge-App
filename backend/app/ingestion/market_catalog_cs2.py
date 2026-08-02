@@ -9,10 +9,27 @@ sparse-field-reuse discipline as every other sport):
   - "series_winner": team = favored team, no line.
   - "series_total": team = None, line = total-maps threshold, side = "over".
   - "map_winner": team = favored team, line = map_number (currently zero
-    real Kalshi inventory, see kalshi_cs2_client.py -- code ready regardless).
+    real Kalshi inventory, see kalshi_cs2_client.py -- code ready regardless;
+    Polymarket DOES carry real inventory here, see below).
+  - "series_handicap": team = that team's own side, line = its map handicap
+    (Polymarket only -- Kalshi lists no CS2 handicap series).
   - "tournament_winner": team = favored team, group_label = tournament name,
     no cs2_match_id (season-long futures; currently zero real Kalshi
-    inventory too, same "ready, not yet populated" status).
+    inventory too, same "ready, not yet populated" status). KALSHI ONLY --
+    Polymarket's CS2 tag carries no team-to-win-a-tournament futures, only
+    props, and mistaking the latter for the former is an active trap
+    documented in polymarket_cs2_client.py.
+
+CORRECTION (2026-08-02): this module previously carried a note, referenced
+from poller_cs2.py and catalog_scan.py, that "Polymarket has no CS2
+match-outcome market type -- an honest inventory gap, not a build gap". That
+was WRONG, and it was wrong because it was derived from the wrong tag: the app
+queried `tag_slug=cs2`, which returns props only (roster changes, Valve
+sticker trade-ups). The real head-to-head CS2 events are tagged
+`counter-strike-2` -- 62 live match events carrying ~$2.7M of liquidity,
+confirmed live. Polymarket CS2 match-outcome ingestion is now built (the four
+upsert_polymarket_cs2_* functions below); see polymarket_cs2_client.py for the
+tag story, the market-type inventory, and the staleness gating it needs.
 """
 import datetime
 
@@ -220,6 +237,87 @@ def upsert_kalshi_cs2_tournament_winner_market(session: Session, row: dict) -> M
     market.status = row.get("status") or "active"
     _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"), yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
     return market
+
+
+def upsert_polymarket_cs2_match_winner_row(session: Session, row: dict, cs2_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['team_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="series_winner", sport="cs2")
+        session.add(market)
+    market.cs2_match_id = cs2_match_id
+    market.team = row["team_name"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    return market
+
+
+def upsert_polymarket_cs2_map_winner_row(session: Session, row: dict, cs2_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['team_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="map_winner", sport="cs2")
+        session.add(market)
+    market.cs2_match_id = cs2_match_id
+    market.team = row["team_name"]
+    market.line = float(row["map_number"])
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    return market
+
+
+def upsert_polymarket_cs2_total_row(session: Session, row: dict, cs2_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-over"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="series_total", sport="cs2")
+        session.add(market)
+    market.cs2_match_id = cs2_match_id
+    market.team = None
+    market.line = row["line"]
+    market.side = "over"
+    market.status = row.get("status") or "active"
+    outcomes, prices = row.get("outcomes", []), row.get("outcome_prices", [])
+    over_price = prices[outcomes.index("Over")] if "Over" in outcomes and len(prices) == len(outcomes) else None
+    _upsert_snapshot(session, market, over_price, row.get("volume"))
+    return market
+
+
+def upsert_polymarket_cs2_handicap_row(session: Session, row: dict, cs2_match_id: int | None) -> Market:
+    source_ticker = f"{row['condition_id']}-{row['team_name']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"], market_type="series_handicap", sport="cs2")
+        session.add(market)
+    market.cs2_match_id = cs2_match_id
+    market.team = row["team_name"]
+    market.line = row["line"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    return market
+
+
+def set_best_of(session: Session, match_id: int, best_of: int | None) -> bool:
+    """Polymarket's CS2 event titles state the series length outright
+    ("... (BO3) - ESEA Advanced Europe"), so unlike this file's two other
+    best_of helpers there is nothing to INFER here -- see
+    polymarket_cs2_client.parse_best_of.
+
+    Same never-overwrite-a-known-value discipline as backfill_best_of and
+    backfill_best_of_from_total_maps_line, so whichever source resolves a
+    match first wins and the other two are no-ops. Worth having as a third
+    path because best_of is a hard gate on CS2 pricing at all (see
+    poller_cs2.py's own coverage-gap note: 24/30 open matches once had no
+    model_prob purely for want of it) and this is the only one of the three
+    that reads it DIRECTLY rather than inferring it from a totals line or
+    from how deep a per-map ladder happens to be listed."""
+    if best_of is None:
+        return False
+    match = session.get(Cs2Match, match_id)
+    if match is None or match.best_of is not None:
+        return False
+    match.best_of = best_of
+    return True
 
 
 # Roster-change cache read/write helpers removed 2026-07-23 along with the

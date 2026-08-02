@@ -5,10 +5,15 @@ import httpx
 _client = httpx.Client(timeout=30.0, headers={"User-Agent": "nfl-edge-app/0.1"})
 
 
-def get_json(url: str, retries: int = 4):
+def get_json(url: str, retries: int = 4, follow_redirects: bool = False):
+    """follow_redirects defaults off (httpx's own default) to keep every
+    existing caller's behavior identical. Kalshi's own catalog endpoints
+    301 on some path shapes -- a bare `/series/` redirects to `/series` --
+    so callers hitting those pass follow_redirects=True rather than
+    silently getting a 301 body with no JSON payload."""
     for attempt in range(retries):
         try:
-            resp = _client.get(url)
+            resp = _client.get(url, follow_redirects=follow_redirects)
             if resp.status_code == 429:
                 time.sleep(2 * (attempt + 1))
                 continue

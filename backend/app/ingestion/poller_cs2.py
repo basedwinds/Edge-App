@@ -4,11 +4,20 @@ Covers series winner + total maps (both real, live Kalshi inventory,
 confirmed 2026-07-19) + map winner + tournament winner futures (both real
 Kalshi SERIES but zero open markets at build time -- kept so they start
 working the moment either populates, see kalshi_cs2_client.py's own
-docstring), plus the team Elo baseline. No Polymarket CS2 client exists --
-checked live, real current Polymarket CS2 inventory is prop/roster-
+docstring), plus the team Elo baseline. Polymarket covers series/match winner
++ map winner + series total + map handicap (see polymarket_cs2_client.py).
+
+CORRECTED 2026-08-02 -- this docstring used to claim "No Polymarket CS2 client
+exists -- checked live, real current Polymarket CS2 inventory is prop/roster-
 change/futures markets only (FaZe tier-1 event, map pool changes, roster
-changes), no standard match-outcome market type at all -- an honest
-inventory gap, not a build gap.
+changes), no standard match-outcome market type at all -- an honest inventory
+gap, not a build gap." That was wrong. The check behind it queried
+`tag_slug=cs2`, which really does return only those props -- but the real
+head-to-head CS2 events are tagged `counter-strike-2`, and there are 62 of
+them live carrying ~$2.7M of liquidity. It was a wrong-tag gap, not an
+inventory gap. Found by catalog_scan.py's own "other" catch-all bucket; see
+polymarket_cs2_client.py for the full story, including why the naive fix
+(just swapping the slug) would have injected ~98 months-dead markets.
 
 REAL COVERAGE GAP found live (2026-07-19, not a matcher bug -- verified by
 checking every unmatched team name against the full raw liquipedia.net
@@ -53,7 +62,7 @@ fallback Tennis/Soccer already rely on.
 import datetime as dt
 import logging
 
-from app.clients import kalshi_cs2_client
+from app.clients import kalshi_cs2_client, polymarket_cs2_client
 from app.db.database import SessionLocal
 from app.ingestion import cs2_data, market_catalog_cs2
 from app.ingestion.poller_lock import db_write_lock
@@ -219,6 +228,111 @@ def refresh_kalshi_cs2_markets():
             session.close()
 
 
+def refresh_polymarket_cs2_markets():
+    """Polymarket CS2 match-outcome ingestion -- see this module's own
+    CORRECTED note above and polymarket_cs2_client.py for why this didn't
+    exist until 2026-08-02.
+
+    Same shape as poller_valorant.py's own Polymarket refresh: every market
+    type for a given real match is bundled under ONE Polymarket event
+    (event_slug), unlike Kalshi's per-map events, so the two real team names
+    are resolved to a cs2_match_id ONCE per event_slug and reused for every
+    other market type from that same event. All network I/O happens up front,
+    before the session opens (poller_lock.py's own "never hold the DB
+    connection across slow network I/O" rule) -- and here it is a SINGLE
+    listing fetch for all four market types rather than four, see
+    polymarket_cs2_client.get_all_markets on why this sport in particular
+    can't afford the sibling clients' fetch-per-getter shape."""
+    markets = polymarket_cs2_client.get_all_markets()
+    winner_rows = markets["match_winner"]
+    map_rows = markets["map_winner"]
+    total_maps_rows = markets["total_maps"]
+    handicap_rows = markets["map_handicap"]
+
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            teams_by_slug: dict[str, set[str]] = {}
+            event_by_slug: dict[str, str] = {}
+            start_time_by_slug: dict[str, str | None] = {}
+            best_of_by_slug: dict[str, int | None] = {}
+            for row in winner_rows:
+                teams_by_slug.setdefault(row["event_slug"], set()).add(row["team_name"])
+                event_by_slug.setdefault(row["event_slug"], row.get("event_title", ""))
+                start_time_by_slug.setdefault(row["event_slug"], row.get("estimated_start_time"))
+                best_of_by_slug.setdefault(row["event_slug"], row.get("best_of"))
+
+            match_id_by_slug: dict[str, int | None] = {}
+            for slug, teams in teams_by_slug.items():
+                if len(teams) != 2:
+                    match_id_by_slug[slug] = None
+                    continue
+                team_a, team_b = tuple(teams)
+                match = market_catalog_cs2.find_or_create_upcoming_match(
+                    session, team_a, team_b,
+                    match_date=_match_date_from_iso(start_time_by_slug.get(slug)),
+                    event_name=event_by_slug.get(slug),
+                )
+                match_id_by_slug[slug] = match.id if match else None
+                if match is None:
+                    continue
+                # Polymarket carries a real gameStartTime on 100% of CS2 match
+                # markets (494/494, confirmed live) -- a stronger signal than
+                # the Kalshi path's, which depends on a liquipedia.net scrape
+                # that lags real trading. This is what cs2_markets.py's
+                # `_match_already_started` router gate reads, so wiring it is
+                # what actually keeps started/finished matches out of
+                # recommendations.
+                start_time = start_time_by_slug.get(slug)
+                if match.winner is None and start_time:
+                    match.estimated_start_time = start_time
+                # Third best_of path, and the only direct one -- Polymarket
+                # states it in the event title ("(BO3)"). Never overwrites a
+                # value Kalshi's two inferred backfills already set.
+                market_catalog_cs2.set_best_of(session, match.id, best_of_by_slug.get(slug))
+
+            matched = sum(1 for v in match_id_by_slug.values() if v is not None)
+
+            for row in winner_rows:
+                market_catalog_cs2.upsert_polymarket_cs2_match_winner_row(
+                    session, row, match_id_by_slug.get(row["event_slug"])
+                )
+            for row in map_rows:
+                market_catalog_cs2.upsert_polymarket_cs2_map_winner_row(
+                    session, row, match_id_by_slug.get(row["event_slug"])
+                )
+            for row in total_maps_rows:
+                market_catalog_cs2.upsert_polymarket_cs2_total_row(
+                    session, row, match_id_by_slug.get(row["event_slug"])
+                )
+            for row in handicap_rows:
+                market_catalog_cs2.upsert_polymarket_cs2_handicap_row(
+                    session, row, match_id_by_slug.get(row["event_slug"])
+                )
+
+            # Same per-map-ladder-depth backfill the Kalshi path runs, for
+            # matches Polymarket lists map markets for but Kalshi doesn't --
+            # idempotent, and a no-op when set_best_of above already resolved
+            # this match from the title.
+            max_map_by_slug: dict[str, int] = {}
+            for row in map_rows:
+                max_map_by_slug[row["event_slug"]] = max(
+                    max_map_by_slug.get(row["event_slug"], 0), row["map_number"]
+                )
+            for slug, match_id in match_id_by_slug.items():
+                if match_id is not None and slug in max_map_by_slug:
+                    market_catalog_cs2.backfill_best_of(session, match_id, max_map_by_slug[slug])
+
+            session.commit()
+            log.info(
+                "polymarket cs2: %d/%d matches matched (%d winner, %d map, %d total, %d handicap rows)",
+                matched, len(match_id_by_slug),
+                len(winner_rows), len(map_rows), len(total_maps_rows), len(handicap_rows),
+            )
+        finally:
+            session.close()
+
+
 def run_full_refresh_cs2():
     """REAL BUG this fixes (found live 2026-08-02 via /health-check: "782 active
     cs2 markets but the newest price snapshot is 189h old"): the Kalshi PRICE
@@ -242,7 +356,15 @@ def run_full_refresh_cs2():
     If cs2 prices are STILL stale after this ships, the next thing to measure is
     where that time actually goes (Kalshi pagination vs the per-event
     find_or_create_upcoming_match work), rather than assuming the scrape."""
-    for step in (refresh_kalshi_cs2_markets, refresh_cs2_matches, refresh_cs2_ratings):
+    # Polymarket runs FIRST, ahead of even the Kalshi price step, by the same
+    # reasoning this docstring already established for prices-before-scrape:
+    # it is a single listing fetch (fast, not Cloudflare-gated), whereas
+    # refresh_kalshi_cs2_markets is measured NOT to finish inside 2 minutes
+    # and refresh_cs2_matches can hang outright rather than raise -- which
+    # try/except cannot survive, so ORDER is the only real protection a step
+    # has. Putting the cheap, reliable step first costs the others nothing.
+    for step in (refresh_polymarket_cs2_markets, refresh_kalshi_cs2_markets,
+                 refresh_cs2_matches, refresh_cs2_ratings):
         try:
             step()
         except Exception:

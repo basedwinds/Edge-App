@@ -354,6 +354,43 @@ def _extract_volume(market: dict) -> float | None:
         return None
 
 
+def handicap_lines_in_outcome_order(handicap_match, outcomes: list[str]) -> list[float] | None:
+    """Maps the two lines parsed out of an esports handicap title
+    ("Map Handicap: A (-1.5) vs B (+1.5)", "Game Handicap: ...") onto that
+    market's own outcome order. Shared by the CS2/Valorant/LoL Polymarket
+    clients -- `handicap_match` is any regex match whose 4 groups are
+    (team_1, line_1, team_2, line_2).
+
+    REAL BUG this fixes (found live 2026-08-02 while building
+    polymarket_cs2_client.py, then confirmed already live in the two older
+    clients): the handicap TITLE names teams by ABBREVIATION while `outcomes`
+    names them in full -- "Map Handicap: FNC (-1.5) vs Lilmix (+1.5)" against
+    outcomes ["fnatic", "Lilmix"]; likewise TS/Spirit, BST/BESTIA,
+    AG/"All Gamers", NS/"Nongshim RedForce", AL/"Anyone's Legend".  Both
+    older clients looked the line up by exact team name and silently
+    `continue`d on a miss, so they returned a small fraction of the real
+    market instead of erroring.  Measured live on real open inventory:
+    CS2 dropped 35/48 handicap markets (73%), Valorant 16/17 (94%), LoL
+    97/103 (94%).
+
+    Falls back to POSITION when names don't resolve, safe for two
+    independently-verified reasons: across all three sports, title order
+    matched outcome order on every market whose names DO resolve (20/20,
+    zero disagreements), and the two lines are always exact negatives on
+    real inventory (157/157 markets: -1.5/+1.5 or -2.5/+2.5).  The negation
+    is enforced as a GUARD rather than assumed -- a pair that isn't an exact
+    negation returns None so the caller skips that market rather than
+    inventing a line for it."""
+    team_1, raw_1, team_2, raw_2 = handicap_match.groups()
+    line_1, line_2 = float(raw_1), float(raw_2)
+    if team_1 in outcomes and team_2 in outcomes and team_1 != team_2:
+        by_team = {team_1: line_1, team_2: line_2}
+        return [by_team[o] for o in outcomes]
+    if line_1 != -line_2:
+        return None
+    return [line_1, line_2]
+
+
 def extract_market_prices(market: dict) -> dict:
     outcomes = json.loads(market.get("outcomes", "[]") or "[]")
     prices = json.loads(market.get("outcomePrices", "[]") or "[]")

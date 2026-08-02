@@ -22,7 +22,7 @@ hardcode" discipline as MLB/Soccer's league_winner detection.
 import re
 
 from app.clients.base import get_json, paginate
-from app.clients.polymarket_client import extract_market_prices
+from app.clients.polymarket_client import extract_market_prices, handicap_lines_in_outcome_order
 
 GAMMA = "https://gamma-api.polymarket.com"
 
@@ -157,15 +157,21 @@ def get_map_handicap_markets() -> list[dict]:
             handicap_match = _HANDICAP_RE.match(title)
             if not handicap_match:
                 continue
-            team_1, line_1, team_2, line_2 = handicap_match.groups()
             prices = extract_market_prices(m)
             if len(prices["outcomes"]) != 2 or len(prices["outcome_prices"]) != 2:
                 continue
-            lines_by_team = {team_1: float(line_1), team_2: float(line_2)}
-            for team_name, price in zip(prices["outcomes"], prices["outcome_prices"]):
-                line = lines_by_team.get(team_name)
-                if line is None:
-                    continue
+            # REAL BUG fixed 2026-08-02: the old code looked each line up by
+            # exact team name, but the handicap TITLE abbreviates ("AG",
+            # "NS", "ZETA") while `outcomes` spells names out ("All Gamers",
+            # "Nongshim RedForce") -- so it silently dropped 16 of 17 real
+            # open Valorant handicap markets (94%). See
+            # polymarket_client.handicap_lines_in_outcome_order's own
+            # docstring for the measurements and the positional-fallback
+            # safety argument.
+            lines = handicap_lines_in_outcome_order(handicap_match, prices["outcomes"])
+            if lines is None:
+                continue
+            for team_name, price, line in zip(prices["outcomes"], prices["outcome_prices"], lines):
                 rows.append(_base_row(event, m, prices, team_name=team_name, line=line, last_price=price))
     return rows
 

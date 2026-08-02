@@ -39,7 +39,13 @@ _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market ty
 
 router = APIRouter(prefix="/cs2", tags=["cs2"])
 
-GAME_MARKET_TYPES = {"map_winner", "series_winner", "series_total"}
+# "series_handicap" added 2026-08-02 alongside CS2's first real handicap
+# inventory. It was absent for an honest reason -- Kalshi lists no CS2 handicap
+# series at all, so until Polymarket ingestion existed there was nothing to
+# price. elo_cs2.SeriesDistribution has carried prob_handicap_cover_a/b the
+# whole time (identical to Valorant's/LoL's), so this needed no model work,
+# only the routing Valorant's own router already had.
+GAME_MARKET_TYPES = {"map_winner", "series_winner", "series_handicap", "series_total"}
 
 NO_BASELINE_REASON = (
     "No baseline yet -- this market's model is still being built and validated against this app's "
@@ -89,6 +95,11 @@ def _game_model_prob(m: Market, match: Cs2Match | None) -> float | None:
         return round(map_p if side == "team_a" else (1.0 - map_p), 4)
     if m.market_type == "series_winner":
         p = dist.prob_series_win_a() if side == "team_a" else dist.prob_series_win_b()
+        return round(p, 4)
+    if m.market_type == "series_handicap":
+        if m.line is None:
+            return None
+        p = dist.prob_handicap_cover_a(m.line) if side == "team_a" else dist.prob_handicap_cover_b(m.line)
         return round(p, 4)
     return None
 
@@ -198,7 +209,22 @@ def list_cs2_markets(session: Session = Depends(get_session)):
 
     def _market_looks_live_by_trading(m: Market) -> bool:
         if m.source != "kalshi":
-            return False  # no real CS2 Polymarket inventory to calibrate against -- see market_catalog_cs2.py
+            # Kalshi-only, but the REASON changed 2026-08-02. This used to read
+            # "no real CS2 Polymarket inventory to calibrate against", which is
+            # no longer true -- CS2 now has real Polymarket match inventory
+            # (see polymarket_cs2_client.py). It stays Kalshi-only because the
+            # thresholds below are Kalshi-VOLUME-scale
+            # (CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA) and Polymarket's
+            # volumes sit on a different scale entirely, so reusing them would
+            # be a guess -- the same reason Tennis deferred its own
+            # Polymarket-scale live detector rather than inventing a number.
+            # Deferring costs little here: this detector exists to catch
+            # matches whose estimated_start_time is missing or lags real
+            # trading, and Polymarket supplies a real gameStartTime on 100% of
+            # CS2 match markets (494/494 confirmed live), so those rows are
+            # already gated by _match_already_started above -- verified live,
+            # 0 Polymarket rows survived on already-started matches.
+            return False
         current = all_snapshots.get(m.id)
         current_price = current.last_price if current else None
         recent = recent_snapshots_by_market.get(m.id, [])

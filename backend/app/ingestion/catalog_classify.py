@@ -42,6 +42,22 @@ _NOTES = {
     REVIEW: "Unclassified — open it and review its resolution rules before doing anything.",
 }
 
+# Buckets from catalog_scan.py's catch-all -- by construction these belong to
+# no sport this app models. A Dota 2 or CFL series reads as a clean head-to-
+# head by keyword ("Dota 2 Map Winner" hits _MATCH_KW's "map winner"), so it
+# would otherwise earn the one auto-priceable verdict while there is no Elo,
+# no ratings, and no ingestion behind it at all. The keyword read is still
+# worth showing -- it says what KIND of market this is -- but match_outcome
+# has to be unreachable here, since that verdict means "an EXISTING model
+# could price this" and no existing model covers these sports.
+UNTRACKED_SPORTS = {"other"}
+
+_UNTRACKED_MATCH_NOTE = (
+    "Looks like a head-to-head match outcome, but it's in a sport this app doesn't "
+    "model at all — there's no Elo or ingestion behind it, so it can't be auto-priced. "
+    "Review it as a new-sport build, not a new market type in an existing one."
+)
+
 # News / media / roster-transaction language -- these are propositions about
 # announcements, not game results.
 _NEWS_KW = (
@@ -86,6 +102,8 @@ def classify(identifier: str, title: str, sport: str) -> tuple[str, str]:
     if any(k in hay for k in _FUTURES_KW):
         return FUTURES, _NOTES[FUTURES]
     if any(k in hay for k in _MATCH_KW):
+        if sport in UNTRACKED_SPORTS:
+            return REVIEW, _UNTRACKED_MATCH_NOTE
         return MATCH_OUTCOME, _NOTES[MATCH_OUTCOME]
     return REVIEW, _NOTES[REVIEW]
 
