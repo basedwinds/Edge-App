@@ -1,4 +1,5 @@
-"""WNBA markets API -- parallel to routers/nba_markets.py, moneyline scope.
+"""WNBA markets API -- parallel to routers/nba_markets.py; moneyline, spread and
+total are all priced.
 Reuses the fully sport-agnostic `_batch_latest_snapshots`/`_implied_prob` from
 routers/markets.py and the shared staking layer. model_validated is always
 False (the WNBA Elo matches, doesn't beat, the market -- see elo_wnba.py).
@@ -7,8 +8,7 @@ Simpler than the NBA router in two real ways: (1) WNBA gametime is stored as a
 UTC clock reading paired with the UTC date (both split from ESPN's single ISO
 instant, see wnba_data.py), so the already-started guard combines them as UTC
 directly -- no per-arena timezone round-trip like the NBA needs; (2) no
-news/spread/total/futures layer is wired (moneyline only), so no ladder-sanity
-or news-blend handling here.
+news/injury or futures layer is wired, so no news-blend handling here.
 """
 import datetime
 
@@ -23,7 +23,7 @@ from app.db.database import get_session
 from app.db.models import Market, WnbaGame
 from app.models import calibration_temp
 from app.models import game_lines_wnba
-from app.models.baseline import elo_service_wnba
+from app.models.baseline import elo_service_wnba, scoring_ratings_wnba
 from app.models.baseline.elo import implied_elo_diff
 from app.models.baseline.elo_wnba import HOME_COURT_ADV
 from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
@@ -31,10 +31,11 @@ from app.models.staking import has_real_trading, is_weekly_market_type, kelly_fr
 
 router = APIRouter(prefix="/wnba", tags=["wnba"])
 
-GAME_MARKET_TYPES = {"moneyline", "spread"}
-# "total" is ingested and game-linked but deliberately NOT priced: WNBA has no
-# per-team scoring-ratings service, and a totals model off the league average
-# alone would return the same number for every game (see game_lines_wnba).
+GAME_MARKET_TYPES = {"moneyline", "spread", "total"}
+# Totals became priceable once scoring_ratings_wnba supplied real per-team points
+# scored/allowed -- the old objection (a league-average model returns the same
+# number for every game) no longer applies. That module was validated
+# walk-forward against the naive league average before being wired in here.
 NO_BASELINE_REASONS = {
     "PRE": "No baseline -- WNBA preseason lineups are a coaching decision, not a fair team-strength test.",
 }
@@ -51,6 +52,10 @@ class WnbaMarketOut(BaseModel):
     # which has no line, so a spread row reached the UI with no threshold and the
     # bet was unactionable -- you couldn't tell WHICH line you were backing.
     line: float | None
+    # over/under for totals (null on moneyline/spread). Kalshi lists WNBA totals
+    # only as "over" markets today, but carrying the field means an under listing
+    # can't silently render as an over.
+    side: str | None
     game_label: str | None
     wnba_game_id: str | None
     gameday: str | None
@@ -96,9 +101,27 @@ def _spread_model_prob(m: Market, game: WnbaGame) -> float | None:
     return round(game_lines_wnba.prob_team_covers(m.team == game.home_team, m.line, elo_diff), 4)
 
 
+def _total_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
+    """P(combined score clears the line). Uses per-team scoring rates where both
+    teams clear scoring_ratings_wnba.MIN_GAMES; below that expected_total falls
+    back to the league average, which the walk-forward validation showed is the
+    BETTER prior early in a season, not merely a safe one."""
+    if m.line is None:
+        return None
+    p = game_lines_wnba.prob_over(m.line, scoring.get(game.home_team), scoring.get(game.away_team))
+    # Kalshi lists WNBA totals as "over" markets; honour an "under" if one appears
+    # rather than pricing it as its own opposite.
+    if (m.side or "over").lower() == "under":
+        p = 1.0 - p
+    return round(p, 4)
+
+
 @router.get("/markets", response_model=list[WnbaMarketOut])
 def list_wnba_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport == "wnba", Market.market_type.in_(GAME_MARKET_TYPES)).all()
+    # Computed ONCE per request, not per market: there are ~60 total markets per
+    # slate and this walks every finished game in the season.
+    scoring = scoring_ratings_wnba.compute_current_scoring_ratings()
     game_ids = {m.wnba_game_id for m in markets if m.wnba_game_id}
     games_by_id = {g.id: g for g in session.query(WnbaGame).filter(WnbaGame.id.in_(game_ids)).all()} if game_ids else {}
     now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -148,6 +171,8 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 model_prob = _moneyline_model_prob(m, game)
             elif no_baseline_reason is None and m.market_type == "spread":
                 model_prob = _spread_model_prob(m, game)
+            elif no_baseline_reason is None and m.market_type == "total":
+                model_prob = _total_model_prob(m, game, scoring)
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)
@@ -162,6 +187,7 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 id=m.id,
                 market_type=m.market_type,
                 line=m.line,
+                side=m.side,
                 source=m.source,
                 team=m.team,
                 game_label=f"{game.away_team} @ {game.home_team}" if game else None,

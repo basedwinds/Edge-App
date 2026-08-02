@@ -90,10 +90,43 @@ def prob_team_covers(team_is_home: bool, line: float, elo_diff: float) -> float:
     return 1.0 - _norm_cdf(line, mu, MARGIN_STD)
 
 
-# TOTALS ARE NOT MODELLED HERE, on purpose. NBA's prob_over needs per-team
-# offensive/defensive scoring ratings (scoring_ratings_service_nba); WNBA has no
-# equivalent service, and a totals model using only the league average would
-# return the SAME price for every game -- any "edge" it produced would just be
-# the market's line differing from 174.1, which is not a real read on the game.
-# Building it means a WNBA scoring-ratings service first (per-team points
-# for/against off the same WnbaGame scores used above).
+# --- Totals -------------------------------------------------------------------
+# These were previously left unmodelled because a totals model built on the league
+# average alone returns the SAME price for every game, so any "edge" would just be
+# the market's line differing from 174.1 rather than a read on the matchup. That
+# objection is answered by scoring_ratings_wnba, which supplies real per-team
+# points scored/allowed -- and which was validated walk-forward against the naive
+# league average BEFORE this was wired up (see that module for the table).
+#
+# Residual std of the validated model, measured on the same walk-forward run.
+# Note it is BELOW NAIVE_TOTAL_STD: knowing both teams' scoring rates genuinely
+# narrows the distribution, which is the point.
+TOTAL_STD = 21.35
+
+
+def expected_team_points(scoring: dict | None, opponent_scoring: dict | None) -> float:
+    """Points this team is expected to score: the average of what it scores and
+    what the opponent concedes. Same form as game_lines_nba.expected_team_points."""
+    if not scoring or not opponent_scoring:
+        return LEAGUE_AVG_TEAM_POINTS
+    return (scoring["points_scored"] + opponent_scoring["points_allowed"]) / 2
+
+
+def expected_total(home_scoring: dict | None, away_scoring: dict | None) -> tuple[float, float]:
+    """(expected total points, std to use). Falls back to the league average when
+    either team is below scoring_ratings_wnba.MIN_GAMES -- that fallback is not a
+    failure mode but the measured-correct behaviour early in a season, when team
+    scoring averages carry less signal than the league mean."""
+    if not home_scoring or not away_scoring:
+        return LEAGUE_AVG_TOTAL, NAIVE_TOTAL_STD
+    return (
+        expected_team_points(home_scoring, away_scoring)
+        + expected_team_points(away_scoring, home_scoring),
+        TOTAL_STD,
+    )
+
+
+def prob_over(line: float, home_scoring: dict | None, away_scoring: dict | None) -> float:
+    """P(combined score exceeds `line`)."""
+    mu, std = expected_total(home_scoring, away_scoring)
+    return 1.0 - _norm_cdf(line, mu, std)

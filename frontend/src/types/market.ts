@@ -249,9 +249,13 @@ export interface NbaMarketRow {
 
 export interface WnbaMarketRow {
   id: number;
-  market_type: "moneyline" | "spread";
+  market_type: "moneyline" | "spread" | "total";
   source: "kalshi" | "polymarket";
   team: string | null;
+  // over/under on totals, null otherwise. Added WITH the totals model rather
+  // than after it -- the spread rollout shipped the backend field and left this
+  // type behind, and the bet rendered unactionable until that was caught.
+  side: string | null;
   // Threshold for spread rows (null on moneyline). WnbaMarketOut gained this
   // when spread pricing shipped but this type didn't, so the whole frontend was
   // structurally blind to it and every spread bet rendered with no number --

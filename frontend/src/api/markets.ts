@@ -1212,7 +1212,9 @@ export function buildWnbaRecommendedBets(
       // no number, and crossPlatformKey (which keys on line) then treated two
       // DIFFERENT spread lines as the same bet.
       line: m.line,
-      side: null,  // WNBA spread is priced as "this team covers"; there is no over/under side
+      // Null on moneyline/spread (spread is priced as "this team covers", which
+      // has no over/under); carries "over"/"under" on totals.
+      side: m.side,
       gameday: m.gameday,
       gametime: m.gametime,
       estimatedStartTime: null,
