@@ -300,6 +300,7 @@ def run_paper_log():
                     new_alerts.append({
                         "sport": m.sport or "nfl", "market_type": m.market_type,
                         "team": m.team, "line": m.line, "side": m.side, "source": m.source,
+                        "label": m.group_label,   # e.g. "PHI @ BAL" -> tells you WHICH game
                         "edge": row.get("edge"), "model": row.get("model_prob"),
                         "market": row.get("implied_prob"), "stake": row.get("suggested_stake_dollars"),
                     })
@@ -325,6 +326,45 @@ def _fmt_pct(v) -> str:
     return "—" if v is None else f"{v * 100:.0f}%"
 
 
+_MARKET_LABELS = {
+    "moneyline": "Moneyline", "moneyline_3way": "Moneyline", "spread": "Spread",
+    "game_spread": "Spread", "total": "Total", "game_total": "Total",
+    "team_total": "Team Total", "f5": "First 5 Innings", "rfi": "Run in 1st Inning",
+    "series_winner": "Series Winner", "map_winner": "Map Winner",
+    "series_handicap": "Map Handicap", "series_total": "Total Maps",
+    "set_winner": "Set Winner", "set_total": "Total Sets", "exact_score": "Exact Score",
+    "distance": "Goes the Distance", "rounds": "Round of Finish",
+    "method_of_finish": "Method of Finish", "btts": "BTTS",
+    "race_winner": "Race Winner", "top_n": "Top Finish", "pole": "Pole",
+    "h2h": "Head-to-Head", "constructor_pole": "Constructor Pole",
+}
+
+
+def _describe_pick(a: dict) -> str:
+    """The actual thing to bet, spelled out. The old format printed
+    `team or market_type` and dropped `line`/`side` entirely, so a total rendered
+    as the useless "total — total" with no number -- you couldn't tell WHAT to
+    bet (user-reported 2026-08-02). line/side were already in the payload, just
+    never used."""
+    team, line, side = a.get("team"), a.get("line"), a.get("side")
+    mt = a.get("market_type") or ""
+    parts = []
+    if team:
+        parts.append(str(team))
+    if side and str(side).lower() not in ("yes", "no"):
+        parts.append(str(side).title())          # Over / Under / Home / Draw ...
+    if line is not None:
+        # whole numbers read better without the trailing .0 (map 2, not map 2.0)
+        num = str(int(line)) if float(line) == int(line) else str(line)
+        # map_winner's "line" is a MAP NUMBER, not a handicap -- label it so
+        # "Verdant 2" doesn't read like a 2-map spread (same convention the
+        # tracker already uses).
+        parts.append(f"Map {num}" if mt == "map_winner" else num)
+    if not parts:
+        parts.append("Yes")                      # binary market with no team/line
+    return " ".join(parts)
+
+
 def _send_recommendation_alert(webhook_url: str, alerts: list[dict]) -> None:
     from app.clients.discord_notify import send_discord
 
@@ -332,13 +372,15 @@ def _send_recommendation_alert(webhook_url: str, alerts: list[dict]) -> None:
     header = f"🔔 {len(alerts)} new recommended bet{'s' if len(alerts) != 1 else ''}"
     lines = [header]
     for a in alerts[:15]:  # cap the message; more are in the app
-        who = a.get("team") or a.get("market_type")
         edge = a.get("edge")
         edge_s = f"+{edge * 100:.1f}pp" if edge is not None else "?"
         stake = a.get("stake")
         stake_s = f" · ${stake:.0f}" if stake else ""
+        market = _MARKET_LABELS.get(a.get("market_type") or "", a.get("market_type") or "")
+        game = a.get("label")                    # e.g. "PHI @ BAL" -- context for which game
+        game_s = f"{game} — " if game else ""
         lines.append(
-            f"• [{a['sport'].upper()}] {who} — {a['market_type']} "
+            f"• [{a['sport'].upper()}] {game_s}{market}: {_describe_pick(a)} "
             f"(model {_fmt_pct(a.get('model'))} vs mkt {_fmt_pct(a.get('market'))}, {edge_s}){stake_s} · {a.get('source', '')}"
         )
     if len(alerts) > 15:
