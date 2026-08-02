@@ -36,8 +36,24 @@ def find_or_create_upcoming_match(
         return session.get(LolMatch, found["id"])
 
     resolved_date = match_date or datetime.date.today().isoformat()
+    source_match_id = f"live:{team_a_name}:{team_b_name}:{resolved_date}"
+    # Same bug fixed in market_catalog_cs2.py 2026-08-02, where it was hit for
+    # real: the existence check above reads _load_upcoming_matches(), a snapshot
+    # taken ONCE per run, so a fallback row created earlier in the SAME run is
+    # invisible to it and the second insert dies on "UNIQUE constraint failed:
+    # lol_matches.source, lol_matches.source_match_id", taking the whole refresh
+    # down with it. Trigger is any two markets that resolve to the same team-pair
+    # + date -- notably unresolved team names collapsing onto one placeholder.
+    # Fixed here proactively since the table carries the identical constraint.
+    existing = (
+        session.query(LolMatch)
+        .filter_by(source="live", source_match_id=source_match_id)
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
     match = LolMatch(
-        source="live", source_match_id=f"live:{team_a_name}:{team_b_name}:{resolved_date}",
+        source="live", source_match_id=source_match_id,
         event_name=event_name or "", match_date=resolved_date,
         team_a=team_a_name, team_b=team_b_name,
     )

@@ -57,8 +57,24 @@ def find_or_create_upcoming_match(
         return session.get(SoccerMatch, found["id"])
 
     resolved_date = match_date or datetime.date.today().isoformat()
+    source_match_id = f"live:{league}:{home_team_name}:{away_team_name}:{resolved_date}"
+    # Same bug fixed in market_catalog_cs2.py 2026-08-02, where it was hit for
+    # real: the existence check above reads _load_upcoming_matches(), a snapshot
+    # taken ONCE per run, so a fallback row created earlier in the SAME run is
+    # invisible to it and the second insert dies on "UNIQUE constraint failed:
+    # soccer_matches.source, soccer_matches.source_match_id", taking the whole
+    # refresh down with it. Trigger is any two markets resolving to the same
+    # league + team-pair + date. Fixed here proactively since the table carries
+    # the identical constraint.
+    existing = (
+        session.query(SoccerMatch)
+        .filter_by(source="live", source_match_id=source_match_id)
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
     match = SoccerMatch(
-        source="live", source_match_id=f"live:{league}:{home_team_name}:{away_team_name}:{resolved_date}",
+        source="live", source_match_id=source_match_id,
         league=league, season=_infer_season(league, resolved_date), match_date=resolved_date,
         home_team=home_team_name, away_team=away_team_name,
     )
