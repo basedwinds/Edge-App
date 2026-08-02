@@ -27,6 +27,33 @@ That gives 0.0515 for WNBA. Sanity check: the same derivation on NBA's own
 MARGIN_STD yields 0.0476 against their empirically fitted 0.04224 -- same
 ballpark, slightly steep, so treat this as a reasonable prior rather than a
 calibrated number. model_validated stays False; forward CLV is the judge.
+
+FITTING THIS WAS TRIED AND REJECTED (2026-08-02). A proper walk-forward fit was
+built -- replaying the season and rating each game on the Elo AS IT STOOD BEFORE
+it, so nothing leaks -- and the slope does NOT converge on 237 games:
+
+    first 40% of season (n= 94)  slope 0.06814
+    first 50%           (n=118)  slope 0.07776
+    first 60%           (n=142)  slope 0.07874
+    first 70%           (n=165)  slope 0.05503
+    first 80%           (n=189)  slope 0.05048
+    full season         (n=237)  slope 0.04456
+
+Any "fitted" value is an artifact of where the data is cut. Scored out of sample
+on a 60/40 time split (Brier over a grid of spread lines), the train-half fit
+(0.07874) was 8.4% WORSE than the derived constant shipped below. The full-season
+fit only "wins" by 1.2%, and that number is contaminated -- it was fit on the test
+half too. Root cause is weak signal: corr(elo_diff, margin) is just 0.298, and
+early-season ratings sit near 1500 so the elo_diff spread is small and noisy.
+
+Conditioning sigma on Elo was tested the same way and also rejected: residual std
+(13.7-14.1) is below the raw 14.27, but out-of-sample Brier moved -0.00001,
+-0.00006 and +0.00009 across three splits -- noise, and inconsistent in sign.
+
+So: DO NOT replace these with a regression fit until there are materially more
+games (multiple seasons). The derived slope sits mid-range of the unstable fits
+and has a reason to be the number it is, which a point estimate from 237 games
+does not.
 """
 import math
 
