@@ -79,6 +79,16 @@ def upsert_leaguepedia_match(session: Session, row: dict) -> LolMatch:
         match.best_of = match.best_of or row["best_of"]
     if match.winner is None and row.get("estimated_start_time"):
         match.estimated_start_time = row["estimated_start_time"]
+        # Keep match_date in step with the real start. It used to be written only
+        # at row creation, so when a match got rescheduled the start time moved
+        # but the DATE went stale -- e.g. Invictus Gaming vs LNG Esports showed
+        # 2026-07-24 in the UI while its real start was 2026-08-02 (9 days off,
+        # user-reported 2026-08-02). The date column is what the UI renders, so a
+        # stale match_date is a wrong date on screen even though we hold the
+        # correct instant.
+        start_date = str(row["estimated_start_time"])[:10]
+        if len(start_date) == 10 and start_date != match.match_date:
+            match.match_date = start_date
     if row.get("maps_won_a") is not None:
         match.maps_won_a = row["maps_won_a"]
     if row.get("maps_won_b") is not None:

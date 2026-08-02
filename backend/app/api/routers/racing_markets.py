@@ -20,7 +20,7 @@ from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
 from app.api.routers.settings import get_racing_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
 from app.api.schemas import RacingMarketOut, ReasoningOut, ReasoningFactorOut
 from app.db.database import get_session
-from app.db.models import Market
+from app.db.models import Market, RaceEvent
 from app.models import racing_sim
 from app.models.baseline import racing_ratings, racing_championship
 from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
@@ -64,7 +64,8 @@ def _h2h_model_prob(series: str, label: str, cc: dict) -> "float | None":
     return racing_sim.h2h_prob(sa, sb)
 
 
-def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, float | None]) -> list[RacingMarketOut]:
+def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, float | None],
+                 race_start_by_event: dict | None = None) -> list[RacingMarketOut]:
     st = racing_ratings._series_state(series)
     cc = st.get("current_constructor", {})
 
@@ -138,7 +139,15 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
             id=m.id, series=series, source=m.source, race_event_id=m.race_event_id, event=m.source_event_id, market_type=m.market_type,
             line=int(m.line) if m.line is not None else None, driver=m.team or "",
             implied_prob=imp, model_prob=mp, model_validated=False, edge=edge,
-            volume=None, close_time=None,
+            volume=None,
+            # close_time drives the DATE the UI shows for a racing bet. It used to
+            # be hardcoded None, so every racing row had no date at all and the
+            # frontend's formatGameDate fell through to its literal "Season-long"
+            # label -- making per-race h2h/pole/podium bets look like season
+            # futures in Recommended (user-reported 2026-08-02). The real race
+            # start already exists on the linked RaceEvent, so use it.
+            close_time=((race_start_by_event or {}).get(m.race_event_id).isoformat() + "Z")
+            if (race_start_by_event or {}).get(m.race_event_id) else None,
             model_note=note if mp is not None else None,
         ))
     return out
@@ -164,9 +173,17 @@ def list_racing_markets(session: Session = Depends(get_session)):
     for m in markets:
         by_event[(m.sport, m.source_event_id or "")].append(m)
 
+    # Real race start per RaceEvent -> becomes each row's close_time (see
+    # _price_event) so racing bets show a DATE instead of reading "Season-long".
+    event_ids = {m.race_event_id for m in markets if m.race_event_id is not None}
+    race_start_by_event = {
+        e.id: e.start_time
+        for e in session.query(RaceEvent).filter(RaceEvent.id.in_(event_ids)).all()
+    } if event_ids else {}
+
     out: list[RacingMarketOut] = []
     for (series, _event), evmarkets in by_event.items():
-        for row in _price_event(series, evmarkets, implied_by_id):
+        for row in _price_event(series, evmarkets, implied_by_id, race_start_by_event):
             row.volume = vol_by_id.get(row.id)
             snap = snaps.get(row.id)
             has_traded = has_real_trading(src_by_id.get(row.id), snap.volume if snap else None, snap.last_price if snap else None)
