@@ -14,13 +14,33 @@ SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scor
 _UA = {"User-Agent": "Mozilla/5.0"}
 
 
+FORWARD_DAYS = 14
+
+
 def fetch_scoreboard_events(start: datetime.date, end: datetime.date) -> list[dict]:
     """Raw ESPN event dicts across [start, end], one scoreboard call per day.
-    WNBA plays ~mid-May through mid-Oct; callers pass a season-wide window."""
+    WNBA plays ~mid-May through mid-Oct; callers pass a season-wide window.
+
+    REAL BUG fixed 2026-08-02: the loop stopped at `datetime.date.today()`, so it
+    only ever ingested games up to TODAY and the schedule could never contain an
+    UPCOMING game. Kalshi lists a game's markets a day or more ahead, so those
+    markets had no game row to link to -- they stayed unlinked, couldn't be priced
+    or settled, and showed up as the standing health-check warning "N active WNBA
+    Kalshi market(s) with no game/match link". Confirmed live: ESPN's 2026-08-03
+    scoreboard returns LV@ATL, SEA@NY and PHX@CHI (exactly the pairings Kalshi was
+    pricing) while our table had only TOR@GS that day -- and TOR@GS was there only
+    because it's a late tip that falls on Aug 3 in UTC but appears on the Aug 2
+    scoreboard.
+
+    Bounded to FORWARD_DAYS ahead rather than the caller's full season `end`: the
+    fetch is one HTTP call per day, so honouring a season-wide end would add ~100
+    calls per refresh for schedule that barely changes. Two weeks comfortably
+    covers the window in which markets get listed."""
+    horizon = datetime.date.today() + datetime.timedelta(days=FORWARD_DAYS)
     out = []
     with httpx.Client(timeout=30.0, headers=_UA) as client:
         day = start
-        while day <= end and day <= datetime.date.today():
+        while day <= end and day <= horizon:
             try:
                 r = client.get(SCOREBOARD, params={"dates": day.strftime("%Y%m%d")})
                 if r.status_code == 200:

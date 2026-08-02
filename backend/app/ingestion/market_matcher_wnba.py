@@ -25,7 +25,13 @@ _MONTHS = {
     "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
 }
 # KXWNBAGAME-26JUL22DALPDX -> (2026, 7, 22, "DALPDX")
-_EVENT_TICKER_RE = re.compile(r"^KXWNBAGAME-(\d{2})([A-Z]{3})(\d{2})([A-Z]+)$")
+# Any per-game WNBA series, not just moneyline: KXWNBAGAME / KXWNBASPREAD /
+# KXWNBATOTAL all use the same "-YYMMMDD<TEAMS>" event suffix. This was pinned to
+# KXWNBAGAME, so when spread/total ingestion was added (2026-08-02) every one of
+# those tickers failed to parse and its markets landed unlinked -- unpriceable and
+# unsettleable. Season-long tickers like "KXWNBAWINS-27-ATL" still don't match,
+# since they have no 3-letter month segment.
+_EVENT_TICKER_RE = re.compile(r"^KXWNBA[A-Z]*-(\d{2})([A-Z]{3})(\d{2})([A-Z]+)$")
 
 
 def to_espn_abbr(kalshi_abbr: str) -> str:
