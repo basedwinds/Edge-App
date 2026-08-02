@@ -83,12 +83,15 @@ def _compute(series: str) -> dict:
 
     # 12k trials -> ~0.4pp sampling SE on a 70% estimate, so hourly re-warms
     # don't jitter the title prices that feed CLV. The sim is vectorised (~1s).
+    dnf = sim.SERIES_DNF_RATE.get(series, 0.0)
     drivers = sim.simulate_driver_championship(
         ids, cur, strengths, remaining, trials=12000,
-        points_table=points_table, tail_points=tail,
+        points_table=points_table, tail_points=tail, dnf_rate=dnf,
     ) if ids else {}
     cons = (
-        sim.simulate_constructor_championship(constructors, cur, strengths, remaining, trials=12000)
+        sim.simulate_constructor_championship(
+            constructors, cur, strengths, remaining, trials=12000, dnf_rate=dnf,
+        )
         if constructors and series in _CONSTRUCTOR_SERIES else {}
     )
     return {

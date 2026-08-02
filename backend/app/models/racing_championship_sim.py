@@ -44,6 +44,54 @@ SERIES_POINTS = {
     "irl": (INDYCAR_POINTS, INDYCAR_TAIL_POINTS),
 }
 
+# Per-driver, per-race probability of a non-finish (retirement/crash).
+#
+# The Plackett-Luce sample draws finishing order from DRIVER STRENGTH, so it can
+# only put a fast driver at the back by having him lose to everyone -- which is
+# rare. A mechanical failure is close to random, and PL has no way to express it.
+# Measured 2026-08-02 on the strongest-rated driver in each of the last 60 races
+# (data/racing_*.json), asking how often he finished deep in the field:
+#
+#   series   deep-tail ACTUAL   PL PREDICTS   gap
+#   f1       0.083 (outside     0.011         +0.072   <- PL 7.5x too thin
+#            top-15)                                      (5 events vs 0.7
+#                                                          expected, Poisson
+#                                                          p~=0.0004)
+#   nascar   0.117              0.051         +0.066
+#   irl      0.033              0.066         -0.032   <- NO gap; do not correct
+#
+# So F1 gets a correction sized to close its gap, and it lands on the
+# independently well-documented real F1 retirement rate of ~7-9% per car per
+# race. IndyCar gets ZERO despite the oval-crash intuition, because its own data
+# says the tail is already fat enough -- correcting it would invent a bias.
+# NASCAR isn't listed: its title is playoff-elimination and is deliberately not
+# priced by this sim at all.
+#
+# Note the F1 moderate tail was fine before this (outside top-10: actual 0.117 vs
+# PL 0.132), which is why this is modelled as an occasional total loss rather
+# than by flattening the strength curve -- flattening would have broken a part of
+# the distribution that was already right.
+#
+# DIRECTION OF THE EFFECT, MEASURED -- it is the OPPOSITE of the intuition that
+# motivated this work. A/B at 80k trials per arm (SE 0.14pp) on the real 2026 F1
+# standings, 10 races remaining:
+#
+#     leader (Antonelli, 219pts)   0.8036 -> 0.8081   +0.45pp  (significant)
+#     Russell                      0.0910 -> 0.0881   -0.29pp  (significant)
+#     entropy of the title field   0.6908 -> 0.6800   (MORE concentrated)
+#
+# Adding retirement risk makes the leader MORE likely to win, not less. The
+# reason: a leader's edge is banked points, which DNFs cannot touch, while every
+# DNF destroys points that are still up for grabs. Shrinking the remaining pool
+# makes an existing cushion harder to overturn, and that outweighs the extra
+# variance a chaser needs. So this is shipped because the deep tail was
+# measurably 7.5x too thin -- a real misspecification -- NOT because it corrects
+# a favourite-overpricing bias. There was no such bias.
+SERIES_DNF_RATE = {
+    "f1": 0.072,
+    "irl": 0.0,
+}
+
 
 def _position_points(d: int, points_table: list[float], tail: float) -> np.ndarray:
     """Points awarded for each finishing position in a d-car field: the table for
@@ -54,6 +102,22 @@ def _position_points(d: int, points_table: list[float], tail: float) -> np.ndarr
     return pos
 
 
+def _apply_dnf(race_points, dnf_rate: float, tail_points: float, rng) -> np.ndarray:
+    """Knock out a random `dnf_rate` share of (season, race, driver) slots, giving
+    them the no-finish score: 0 in F1, 5 in IndyCar (a retired IndyCar entry is
+    still classified and still collects the tail).
+
+    SIMPLIFICATION worth knowing: this does not PROMOTE the drivers who were
+    behind the retirement, so a race with a DNF awards slightly fewer total points
+    than it should. The championship question is dominated by the leader losing a
+    haul rather than by one rival gaining one place, so the first-order effect is
+    captured; the promotion term would only matter for very tight title fights."""
+    if dnf_rate <= 0.0:
+        return race_points
+    dnf = rng.random(race_points.shape) < dnf_rate
+    return np.where(dnf, tail_points, race_points)
+
+
 def simulate_driver_championship(
     driver_ids: list[str],
     current_points: dict[str, float],
@@ -62,6 +126,7 @@ def simulate_driver_championship(
     trials: int = 4000,
     points_table: list[float] | None = None,
     tail_points: float = 0.0,
+    dnf_rate: float = 0.0,
 ) -> dict[str, float]:
     """{driver_id: P(wins the drivers' championship)}. `strengths` are Elo-like
     ratings (higher = faster); converted to Plackett-Luce weights the same way
@@ -94,6 +159,7 @@ def simulate_driver_championship(
         # P11-P25 table and its 5-point tail.
         rank = np.argsort(order, axis=2)
         race_points = pos_points[rank]
+        race_points = _apply_dnf(race_points, dnf_rate, tail_points, rng)
         season = base[None, :] + race_points.sum(axis=1)  # (n, d) final points per season
         champs = np.argmax(season, axis=1)
         for c in champs:
@@ -108,9 +174,14 @@ def simulate_constructor_championship(
     strengths: dict[str, float],
     remaining_races: int,
     trials: int = 4000,
+    dnf_rate: float = 0.0,
 ) -> dict[str, float]:
     """{constructor: P(wins the constructors' championship)} -- same season sim,
-    but each simulated season sums both of a team's drivers' points."""
+    but each simulated season sums both of a team's drivers' points.
+
+    DNFs are drawn per DRIVER, not per team, which is the physically right unit:
+    two cars from one team retiring in the same race is possible but should be
+    two independent draws, not one."""
     driver_ids = [d for ds in constructors.values() for d in ds]
     d = len(driver_ids)
     teams = list(constructors.keys())
@@ -141,9 +212,11 @@ def simulate_constructor_championship(
         n = min(chunk, trials - done)
         noise = rng.gumbel(size=(n, remaining_races, d))
         order = np.argsort(-(logw[None, None, :] + noise), axis=2)
-        race_points = np.zeros((n, remaining_races, d))
-        for p in range(min(10, d)):
-            np.put_along_axis(race_points, order[:, :, p : p + 1], pos_points[p], axis=2)
+        # Same rank-inversion as the driver sim (constructors are F1-only, so the
+        # top-10 table is complete here, but keeping the two loops identical stops
+        # them drifting apart the way the points handling once did).
+        race_points = pos_points[np.argsort(order, axis=2)]
+        race_points = _apply_dnf(race_points, dnf_rate, 0.0, rng)
         season = base[None, :] + race_points.sum(axis=1)  # (n, d)
         team_season = season @ membership.T  # (n, teams)
         champs = np.argmax(team_season, axis=1)
