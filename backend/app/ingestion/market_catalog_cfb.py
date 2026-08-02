@@ -95,3 +95,33 @@ def upsert_kalshi_cfb_win_total_market(session: Session, row: dict, team: str) -
         volume=row.get("volume"),
     ))
     return market
+
+
+def upsert_kalshi_cfb_conference_market(session: Session, row: dict, team: str, market_type: str) -> Market:
+    """Conference futures (champion / championship qualifier / regular-season
+    top-N). Season-long, so no cfb_game_id. `line` carries the top-N depth for
+    regtop markets and is null for the other two."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi",
+            source_ticker=row["ticker"],
+            source_event_id=row["event_ticker"],
+            market_type=market_type,
+            sport="cfb",
+        )
+        session.add(market)
+    market.team = team
+    market.line = row.get("line")
+    market.group_label = row.get("series")
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id,
+        ts=datetime.datetime.utcnow(),
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
+        last_price=row.get("last_price"),
+        volume=row.get("volume"),
+    ))
+    return market

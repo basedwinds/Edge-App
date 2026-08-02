@@ -58,6 +58,180 @@ def _fetch_season_games() -> list[dict]:
     return [g for g in (espn_cfb_client.parse_event(e) for e in events) if g]
 
 
+_CONF_FILE = None
+
+
+def load_conferences() -> dict[str, str]:
+    """{team abbr: conference name}, from data/cfb_conferences.json (fetched from
+    ESPN's own FBS group tree -- 138 teams across 11 conferences). Empty dict if
+    missing, which leaves conference markets unpriced rather than guessing."""
+    import json
+    from pathlib import Path
+    global _CONF_FILE
+    if _CONF_FILE is None:
+        _CONF_FILE = Path(__file__).resolve().parents[3] / "data" / "cfb_conferences.json"
+    try:
+        raw = json.loads(_CONF_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        # SELF-HEALING: data/ is gitignored (it holds caches and the DB), so a
+        # fresh clone has no conference file -- and without it 256 conference
+        # markets would silently go unpriced with only a log line to show for it.
+        # Rebuild it from ESPN once, then carry on.
+        raw = _fetch_conferences_from_espn()
+        if raw:
+            try:
+                _CONF_FILE.parent.mkdir(parents=True, exist_ok=True)
+                _CONF_FILE.write_text(json.dumps(raw, indent=1), encoding="utf-8")
+            except Exception:
+                log.warning("cfb conferences: could not cache to %s", _CONF_FILE)
+        else:
+            log.warning("cfb conferences unavailable -- conference markets stay unpriced")
+            return {}
+    return {abbr: conf for conf, abbrs in raw.items() for abbr in abbrs if abbr}
+
+
+def _fetch_conferences_from_espn() -> dict[str, list[str]]:
+    """{conference name: [team abbreviations]} from ESPN's FBS group tree
+    (group 80 -> its child conference groups -> each group's teams)."""
+    import httpx
+    base = ("https://sports.core.api.espn.com/v2/sports/football/leagues/"
+            f"college-football/seasons/{datetime.date.today().year}/types/2/groups/80")
+    out: dict[str, list[str]] = {}
+    try:
+        with httpx.Client(timeout=40.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True) as c:
+            children = ((c.get(base).json().get("children") or {}).get("$ref"))
+            if not children:
+                return {}
+            for k in c.get(children, params={"limit": 100}).json().get("items", []):
+                kg = c.get(k["$ref"]).json()
+                tref = (kg.get("teams") or {}).get("$ref")
+                if not tref:
+                    continue
+                abbrs = []
+                for t in c.get(tref, params={"limit": 100}).json().get("items", []):
+                    try:
+                        a = c.get(t["$ref"]).json().get("abbreviation")
+                        if a:
+                            abbrs.append(a)
+                    except Exception:
+                        continue
+                if kg.get("name") and abbrs:
+                    out[kg["name"]] = abbrs
+    except Exception:
+        log.exception("cfb conference fetch from ESPN failed")
+        return {}
+    return out
+
+
+def simulate_conferences(trials: int = 4000, games: list[dict] | None = None) -> dict:
+    """Per-conference finishing distributions, from the SAME game simulation the
+    win totals use.
+
+    Returns {"champion": {team: p}, "top2": {team: p}, "top4": {team: p}} where
+    ranking inside a conference is by CONFERENCE-ONLY wins (games between two
+    members), which is how conference standings actually work -- ranking by
+    overall record would let a soft non-conference schedule buy a title.
+
+    APPROXIMATION, stated plainly: "champion" here means FINISHING FIRST IN THE
+    REGULAR-SEASON CONFERENCE STANDINGS. It does NOT simulate the conference
+    title game, so it will overstate the regular-season leader and understate the
+    #2 seed that would meet them in that game. Real conferences also use
+    elaborate multi-team tiebreakers
+    (head-to-head, division records, common opponents); this breaks ties by Elo,
+    which is a reasonable proxy but not the actual rule. Independents (Notre
+    Dame, UConn) have no conference and are excluded."""
+    games = _fetch_season_games() if games is None else games
+    conf_of = load_conferences()
+    if not games or not conf_of:
+        return {"champion": {}, "top2": {}, "top4": {}}
+
+    teams = sorted({t for g in games for t in (g["home_team"], g["away_team"])} & set(conf_of))
+    if not teams:
+        return {"champion": {}, "top2": {}, "top4": {}}
+    idx = {t: i for i, t in enumerate(teams)}
+
+    banked = np.zeros(len(teams), dtype=np.int32)
+    probs, pair = [], []
+    for g in games:
+        h, a = g["home_team"], g["away_team"]
+        # Conference standings only count games between two members of the SAME
+        # conference -- cross-conference results are irrelevant to the title.
+        if h not in conf_of or a not in conf_of or conf_of[h] != conf_of[a]:
+            continue
+        if g.get("home_score") is not None and g.get("away_score") is not None:
+            banked[idx[h if g["home_score"] > g["away_score"] else a]] += 1
+            continue
+        if not (elo_service_cfb.is_rated(h) and elo_service_cfb.is_rated(a)):
+            continue
+        p = elo_service_cfb.get_home_win_prob(h, a, bool(g.get("neutral")))
+        if p is None:
+            continue
+        probs.append(float(p)); pair.append((idx[h], idx[a]))
+
+    wins = np.tile(banked, (trials, 1)).astype(np.int32)
+    if probs:
+        p_arr = np.array(probs)
+        hi = np.array([x[0] for x in pair]); ai = np.array([x[1] for x in pair])
+        rng = np.random.default_rng()
+        done = 0
+        while done < trials:
+            n = min(500, trials - done)
+            hw = rng.random((n, len(p_arr))) < p_arr
+            np.add.at(wins[done:done + n], (slice(None), hi), hw)
+            np.add.at(wins[done:done + n], (slice(None), ai), ~hw)
+            done += n
+
+    # Elo is the tiebreak, added as a tiny fractional term so it never outweighs
+    # a real win but always resolves an exact tie deterministically.
+    strength = np.array([(elo_service_cfb.rating(t) or elo_cfb.BASE_RATING) for t in teams])
+    score = wins + (strength - strength.min()) / (float(np.ptp(strength)) + 1.0) * 0.5
+
+    champ = {t: 0 for t in teams}
+    # Generic top-N: Kalshi's regular-season markets ask for "top 3"/"top 5"/etc
+    # per conference (the depth is in the event ticker, e.g. ...-27T5-WAKE), so
+    # every depth a conference can support is counted rather than a fixed few.
+    topn: dict[int, dict[str, int]] = {n: {t: 0 for t in teams} for n in range(1, 11)}
+    by_conf: dict[str, list[int]] = {}
+    for t in teams:
+        by_conf.setdefault(conf_of[t], []).append(idx[t])
+
+    rng2 = np.random.default_rng()
+    for members in by_conf.values():
+        cols = np.array(members)
+        sub = score[:, cols]
+        order = np.argsort(-sub, axis=1)
+        for n in topn:
+            if sub.shape[1] < n:
+                continue
+            topd = order[:, :n]
+            for i, m in enumerate(members):
+                topn[n][teams[m]] += int((topd == i).any(axis=1).sum())
+        # CONFERENCE TITLE GAME. The champion markets ask who WINS the title
+        # game, not who finishes first in the standings, so the top two seeds
+        # play a neutral-site game decided by Elo. Skipping this would overstate
+        # the regular-season leader and understate the #2 seed -- for a dominant
+        # #1 that is several percentage points.
+        if sub.shape[1] < 2:
+            for i, m in enumerate(members):
+                champ[teams[m]] += int((order[:, 0] == i).sum())
+            continue
+        seed1 = order[:, 0]
+        seed2 = order[:, 1]
+        r1 = strength[cols][seed1]
+        r2 = strength[cols][seed2]
+        p1 = 1.0 / (1.0 + 10 ** (-(r1 - r2) / 400.0))   # neutral site: no home edge
+        one_wins = rng2.random(trials) < p1
+        winner_local = np.where(one_wins, seed1, seed2)
+        for i, m in enumerate(members):
+            champ[teams[m]] += int((winner_local == i).sum())
+
+    return {
+        "champion": {t: champ[t] / trials for t in teams},
+        "top_n": {n: {t: v[t] / trials for t in teams} for n, v in topn.items()},
+        "conference_of": conf_of,
+    }
+
+
 def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, dict[int, int]]:
     """{team: {win count: how many simulated seasons ended there}}.
 

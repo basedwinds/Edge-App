@@ -161,6 +161,48 @@ def refresh_kalshi_cfb_win_totals():
             session.close()
 
 
+_CONF_SIM: dict = {"data": {}}
+
+
+def refresh_cfb_conference_sim():
+    """Conference standings/title Monte Carlo, off the request path like the win
+    sim. Reuses the same season schedule fetch."""
+    try:
+        games = season_sim_cfb._fetch_season_games()
+        _CONF_SIM["data"] = season_sim_cfb.simulate_conferences(games=games)
+    except Exception:
+        log.exception("cfb conference sim failed")
+
+
+def refresh_kalshi_cfb_conference_futures():
+    """Champion / championship-qualifier / regular-season-top-N ladders."""
+    sim = _CONF_SIM.get("data") or {}
+    known = set(sim.get("champion") or {})
+    fetchers = (
+        (kalshi_cfb_client.get_conference_champion_markets, "conference_champion"),
+        (kalshi_cfb_client.get_conference_qualifier_markets, "conference_qualifier"),
+        (kalshi_cfb_client.get_conference_regtop_markets, "conference_regtop"),
+    )
+    name_index = _NAME_INDEX_CACHE.get("index") or {}
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            total = resolved = 0
+            for fetch, mtype in fetchers:
+                for row in fetch():
+                    total += 1
+                    team = resolve_team(row.get("team_abbr_kalshi"), row.get("display_name"),
+                                        name_index, known)
+                    if team is None:
+                        continue
+                    resolved += 1
+                    market_catalog_cfb.upsert_kalshi_cfb_conference_market(session, row, team, mtype)
+            session.commit()
+            log.info("kalshi cfb conference futures: %d rows, %d resolved", total, resolved)
+        finally:
+            session.close()
+
+
 def settle_placed_bets_cfb():
     """Placeholder to keep the cycle shape identical to the other sports.
     Settlement needs finished games with scores, which only exist once the season
@@ -170,7 +212,8 @@ def settle_placed_bets_cfb():
 
 def run_full_refresh_cfb():
     for step in (refresh_cfb_games, refresh_cfb_ratings, refresh_cfb_season_sim,
-                 refresh_kalshi_cfb_moneyline, refresh_kalshi_cfb_win_totals):
+                 refresh_cfb_conference_sim, refresh_kalshi_cfb_moneyline,
+                 refresh_kalshi_cfb_win_totals, refresh_kalshi_cfb_conference_futures):
         try:
             step()
         except Exception:

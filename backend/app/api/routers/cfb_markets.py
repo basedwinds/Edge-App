@@ -34,7 +34,7 @@ router = APIRouter(prefix="/cfb", tags=["cfb"])
 GAME_MARKET_TYPES = {"moneyline"}
 # Season-long ladders -- no cfb_game_id, priced from the season Monte Carlo
 # rather than a single game's Elo.
-SEASON_MARKET_TYPES = {"win_total"}
+SEASON_MARKET_TYPES = {"win_total", "conference_champion", "conference_qualifier", "conference_regtop"}
 ALL_MARKET_TYPES = GAME_MARKET_TYPES | SEASON_MARKET_TYPES
 
 
@@ -92,6 +92,8 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         Market.sport == "cfb", Market.market_type.in_(ALL_MARKET_TYPES)
     ).all()
     win_dist, sim_trials = season_sim_cfb.get()
+    from app.ingestion.poller_cfb import _CONF_SIM
+    conf_sim = _CONF_SIM.get("data") or {}
     game_ids = {m.cfb_game_id for m in markets if m.cfb_game_id}
     games_by_id = {
         g.id: g for g in session.query(CfbGame).filter(CfbGame.id.in_(game_ids)).all()
@@ -141,7 +143,7 @@ def list_cfb_markets(session: Session = Depends(get_session)):
 
         model_prob = None
         no_baseline_reason = None
-        if m.market_type in SEASON_MARKET_TYPES:
+        if m.market_type == "win_total":
             if not win_dist:
                 no_baseline_reason = "Season simulation not warm yet."
             elif m.line is None or m.team not in win_dist:
@@ -150,6 +152,23 @@ def list_cfb_markets(session: Session = Depends(get_session)):
                 model_prob = season_sim_cfb.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
                 if model_prob is not None:
                     model_prob = round(model_prob, 4)
+        elif m.market_type in SEASON_MARKET_TYPES:
+            if not conf_sim:
+                no_baseline_reason = "Conference simulation not warm yet."
+            else:
+                if m.market_type == "conference_champion":
+                    src = conf_sim.get("champion") or {}
+                elif m.market_type == "conference_qualifier":
+                    # Reaching a conference title game IS finishing top two.
+                    src = (conf_sim.get("top_n") or {}).get(2) or {}
+                else:
+                    # Regular-season "top N", depth carried on m.line.
+                    src = (conf_sim.get("top_n") or {}).get(int(m.line)) if m.line else {}
+                    src = src or {}
+                if m.team in src:
+                    model_prob = round(src[m.team], 4)
+                else:
+                    no_baseline_reason = "No conference projection for this team."
         elif game is None:
             no_baseline_reason = "Not linked to a scheduled game yet."
         else:
@@ -171,7 +190,9 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             team=m.team,
             line=m.line,
             game_label=(f"{game.away_team} @ {game.home_team}" if game
-                        else (f"{m.team} season wins" if m.market_type == "win_total" else None)),
+                        else (f"{m.team} season wins" if m.market_type == "win_total"
+                              else (f"{m.team} {m.market_type.replace('conference_', 'conf ')}"
+                                    if m.market_type in SEASON_MARKET_TYPES else None))),
             cfb_game_id=m.cfb_game_id,
             gameday=game.gameday if game else None,
             gametime=game.gametime if game else None,

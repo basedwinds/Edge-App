@@ -24,6 +24,13 @@ MONEYLINE_SERIES = "KXNCAAFGAME"      # per-game moneyline (30 open 2026-08-02)
 WIN_TOTAL_SERIES = "KXNCAAFWINS"      # season win ladders (583 open, 69 teams)
 # These two exist as series but list NOTHING yet -- they populate closer to
 # kickoff. Declared so enabling them is a one-line change.
+# Conference futures. Champion = wins the conference TITLE GAME; qualifier =
+# finishes top-2 (i.e. reaches that game); regtop = finishes top-N in the
+# regular-season standings, with N encoded in the event ticker (…-27T5-WAKE).
+CONF_CHAMPION_SERIES = ["KXNCAAFACC", "KXNCAAFB12", "KXNCAAFMAC", "KXNCAAFPAC12"]
+CONF_QUALIFIER_SERIES = ["KXNCAAFSECQ", "KXNCAAFB12QUAL", "KXNCAAFMACQUAL", "KXNCAAFMWCQUAL"]
+CONF_REGTOP_SERIES = ["KXNCAAFACCREGTOP", "KXNCAAFSECREGTOP", "KXNCAAFB12REGTOP"]
+
 SPREAD_SERIES = "KXNCAAFSPREAD"
 TOTAL_SERIES = "KXNCAAFTOTAL"
 
@@ -104,3 +111,56 @@ def get_win_total_markets() -> list[dict]:
             "volume": _to_float(m.get("volume")),
         })
     return out
+
+
+def _conf_rows(series_list, market_type):
+    """Shared shape for the conference futures: one row per (team, series). Team
+    comes from the market ticker suffix; yes_sub_title is the display name and is
+    kept so the matcher's name fallback can resolve teams the alias table misses
+    (these series DO label by team, unlike the win ladders)."""
+    out = []
+    for series in series_list:
+        try:
+            data = get_json(f"{KALSHI_BASE}/markets?series_ticker={series}&status=open&limit=1000")
+        except Exception:
+            log.exception("kalshi cfb %s fetch failed", series)
+            continue
+        for m in data.get("markets", []):
+            ticker = m.get("ticker") or ""
+            ev = m.get("event_ticker") or ""
+            if not ticker or not ev:
+                continue
+            depth = None
+            if market_type == "conference_regtop":
+                # "KXNCAAFACCREGTOP-27T5-WAKE" -> the middle segment holds T<N>.
+                mid = ev.rsplit("-", 1)[-1]
+                hit = re.search(r"T(\d+)", mid)
+                if not hit:
+                    continue          # unparseable depth -> skip, never guess
+                depth = float(hit.group(1))
+            out.append({
+                "ticker": ticker,
+                "event_ticker": ev,
+                "series": series,
+                "team_abbr_kalshi": ticker.rsplit("-", 1)[-1],
+                "display_name": m.get("yes_sub_title"),
+                "line": depth,
+                "status": m.get("status") or "active",
+                "last_price": _to_float(m.get("last_price")),
+                "yes_bid": _to_float(m.get("yes_bid")),
+                "yes_ask": _to_float(m.get("yes_ask")),
+                "volume": _to_float(m.get("volume")),
+            })
+    return out
+
+
+def get_conference_champion_markets():
+    return _conf_rows(CONF_CHAMPION_SERIES, "conference_champion")
+
+
+def get_conference_qualifier_markets():
+    return _conf_rows(CONF_QUALIFIER_SERIES, "conference_qualifier")
+
+
+def get_conference_regtop_markets():
+    return _conf_rows(CONF_REGTOP_SERIES, "conference_regtop")
