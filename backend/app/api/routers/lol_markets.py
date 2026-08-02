@@ -31,7 +31,7 @@ from app.ingestion import market_catalog_lol
 from app.ingestion.market_matcher_lol import team_names_match
 from app.models.baseline import elo_service_lol
 from app.models.ladder_sanity import ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
-from app.models.staking import has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
@@ -241,7 +241,8 @@ def list_lol_markets(session: Session = Depends(get_session)):
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "lol", m.market_type)
         pool = futures_pool if m.market_type == "tournament_winner" else weekly_pool
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)
+        _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)
         out.append(
             LolMarketOut(
                 id=m.id,

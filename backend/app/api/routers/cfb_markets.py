@@ -27,7 +27,7 @@ from app.models import calibration_temp
 from app.models import playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
 from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
-from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
+from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, size_stake_dollars
 
 router = APIRouter(prefix="/cfb", tags=["cfb"])
 
@@ -242,8 +242,9 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         if kelly is not None and not is_bucket_enabled(clv_stats, "cfb", m.market_type):
             kelly = None
         pool = futures_pool if m.market_type in FUTURES_MARKET_TYPES else weekly_pool
+        _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied,
-                                           unit_dollars, flat_marginal, flat_full)
+                                           unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)
 
         out.append(CfbMarketOut(
             id=m.id,

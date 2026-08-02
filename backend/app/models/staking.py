@@ -194,6 +194,27 @@ def suggested_stake_dollars(kelly_frac: float | None, bankroll: float | None) ->
 # trusting the model to size. Switch buckets back to Kelly once CLV proves them.
 FLAT_MARGINAL_UNIT_EDGE = 0.03  # >= this edge (and Kelly-qualified) -> 0.5 unit
 FLAT_FULL_UNIT_EDGE = 0.05      # >= this edge -> 1.0 unit
+
+# Futures stake a QUARTER unit, not a full one. Measured 2026-08-02: a $20 unit
+# against each sport's own futures sub-pool, capped at PORTFOLIO_CEILING_PCT
+# (60%), made a futures bet arithmetically IMPOSSIBLE in eight of ten sports --
+#
+#     sport            futures pool   60% ceiling   max 1u bets
+#     nba / mlb          $48.00        $28.80            1
+#     soccer             $24.00        $14.40            0
+#     cfb / mma / tennis $18.00        $10.80            0
+#     valorant/cs2/lol   $12.00         $7.20            0
+#
+# Those buckets were not being throttled, they were blocked -- and a blocked
+# stake never becomes a paper bet, so they accrued ZERO forward CLV. Same
+# failure shape as the tracking-only suppression reversed earlier today: a rule
+# that quietly prevents the measurement it depends on.
+#
+# 0.25u is chosen because it is the smallest change that unblocks EVERY sport
+# (cfb/tennis/mma/soccer 2 bets, esports 1, nba/mlb 5). It is also independently
+# right: a futures bet locks capital for months at far lower turnover than a game
+# bet resolving in hours, so equal sizing was never really equal risk.
+FUTURES_UNIT_SCALE = 0.25
 # Deliberately does NOT scale UP past 1u for bigger edges: a large disagreement
 # is a red flag (probable model error), not a reason to bet more -- see above.
 
@@ -223,6 +244,7 @@ def size_stake_dollars(
     unit_dollars: float | None,
     flat_marginal_edge: float = FLAT_MARGINAL_UNIT_EDGE,
     flat_full_edge: float = FLAT_FULL_UNIT_EDGE,
+    unit_scale: float = 1.0,
 ) -> float | None:
     """The single sizing dispatch every router calls. `kelly_frac is None`
     means the bet didn't qualify (min-edge/has-traded/CLV gate) -> no bet in
@@ -235,5 +257,7 @@ def size_stake_dollars(
         if unit_dollars is None or unit_dollars <= 0:
             return None
         units = flat_stake_units(model_prob, market_price, flat_marginal_edge, flat_full_edge)
-        return round(units * unit_dollars, 2) if units else None
+        # unit_scale is FUTURES_UNIT_SCALE for season-long markets -- see its
+        # docstring for why an unscaled unit blocked them entirely.
+        return round(units * unit_dollars * unit_scale, 2) if units else None
     return suggested_stake_dollars(kelly_frac, pool)

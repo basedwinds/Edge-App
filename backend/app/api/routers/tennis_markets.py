@@ -29,7 +29,7 @@ from app.models import game_lines_tennis
 from app.models.baseline import elo_service_tennis
 from app.models.bracket_sim_tennis import simulate_tournament
 from app.models.ladder_sanity import find_resolved_entities, looks_already_live_by_trading
-from app.models.staking import has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/tennis", tags=["tennis"])
@@ -535,7 +535,7 @@ def list_tennis_futures(session: Session = Depends(get_session)):
         model_prob = _match_player_to_sim(m.team, sim_result) if (sim_result and m.team) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "tennis", m.market_type)
-        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)
+        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         out.append(
             FuturesMarketOut(

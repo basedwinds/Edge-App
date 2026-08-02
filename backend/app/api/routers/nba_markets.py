@@ -34,7 +34,7 @@ from app.models.ladder_sanity import find_resolved_entities
 from app.models.news_adjustment.schema import NewsAdjustment
 from app.models.scoring_ratings_service_nba import get_ratings as get_scoring_ratings
 from app.models.season_sim_service_nba import get_results as get_season_sim_results
-from app.models.staking import has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/nba", tags=["nba"])
@@ -201,7 +201,7 @@ def list_nba_futures(session: Session = Depends(get_session)):
         model_prob = _futures_model_prob(m, sim_results)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "nba", m.market_type)
-        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)  # every FUTURES_MARKET_TYPES entry is a futures-pool market
+        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE)  # every FUTURES_MARKET_TYPES entry is a futures-pool market
         out.append(
             FuturesMarketOut(
                 id=m.id,
