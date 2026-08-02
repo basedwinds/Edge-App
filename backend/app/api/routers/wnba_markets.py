@@ -22,14 +22,19 @@ from app.api.schemas import ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import Market, WnbaGame
 from app.models import calibration_temp
+from app.models import game_lines_wnba
 from app.models.baseline import elo_service_wnba
+from app.models.baseline.elo import implied_elo_diff
 from app.models.baseline.elo_wnba import HOME_COURT_ADV
 from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
 from app.models.staking import has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 
 router = APIRouter(prefix="/wnba", tags=["wnba"])
 
-GAME_MARKET_TYPES = {"moneyline"}
+GAME_MARKET_TYPES = {"moneyline", "spread"}
+# "total" is ingested and game-linked but deliberately NOT priced: WNBA has no
+# per-team scoring-ratings service, and a totals model off the league average
+# alone would return the same number for every game (see game_lines_wnba).
 NO_BASELINE_REASONS = {
     "PRE": "No baseline -- WNBA preseason lineups are a coaching decision, not a fair team-strength test.",
 }
@@ -42,6 +47,10 @@ class WnbaMarketOut(BaseModel):
     market_type: str
     source: str
     team: str | None
+    # Required once spread was priced (2026-08-02): the schema was moneyline-only,
+    # which has no line, so a spread row reached the UI with no threshold and the
+    # bet was unactionable -- you couldn't tell WHICH line you were backing.
+    line: float | None
     game_label: str | None
     wnba_game_id: str | None
     gameday: str | None
@@ -70,6 +79,21 @@ def _moneyline_model_prob(m: Market, game: WnbaGame) -> float | None:
     # home-perspective prob before flipping to the market's team side.
     p_home = calibration_temp.apply("wnba", p_home)
     return round(p_home, 4) if m.team == game.home_team else round(1 - p_home, 4)
+
+
+def _spread_model_prob(m: Market, game: WnbaGame) -> float | None:
+    """P(this team wins by more than its line), from the WNBA Elo turned into an
+    expected margin. Uses game_lines_wnba, NOT game_lines_nba: WNBA games average
+    174 points to the NBA's 218 and carry a wider margin spread (14.3 vs 13.2), so
+    the NBA constants would misprice every line."""
+    if m.team is None or m.line is None:
+        return None
+    p_home = elo_service_wnba.get_home_win_prob(game.home_team, game.away_team, game.location)
+    if p_home is None:
+        return None
+    p_home = calibration_temp.apply("wnba", p_home)
+    elo_diff = implied_elo_diff(p_home)
+    return round(game_lines_wnba.prob_team_covers(m.team == game.home_team, m.line, elo_diff), 4)
 
 
 @router.get("/markets", response_model=list[WnbaMarketOut])
@@ -122,6 +146,8 @@ def list_wnba_markets(session: Session = Depends(get_session)):
             no_baseline_reason = NO_BASELINE_REASONS.get(game.game_type)
             if no_baseline_reason is None and m.market_type == "moneyline":
                 model_prob = _moneyline_model_prob(m, game)
+            elif no_baseline_reason is None and m.market_type == "spread":
+                model_prob = _spread_model_prob(m, game)
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)
@@ -135,6 +161,7 @@ def list_wnba_markets(session: Session = Depends(get_session)):
             WnbaMarketOut(
                 id=m.id,
                 market_type=m.market_type,
+                line=m.line,
                 source=m.source,
                 team=m.team,
                 game_label=f"{game.away_team} @ {game.home_team}" if game else None,
@@ -231,6 +258,6 @@ def get_wnba_market_reasoning(
         factors=factors,
         caveats=[
             "model_validated: false — the WNBA Elo matches, it does not beat, the market on average.",
-            "Moneyline only; no spread/total/futures modeled for WNBA.",
+            "Moneyline + spread (Elo-implied margin, WNBA-specific constants); totals/futures not modeled.",
         ],
     )
