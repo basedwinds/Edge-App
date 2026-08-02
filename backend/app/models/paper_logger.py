@@ -50,12 +50,19 @@ _SEASON_TABLES = {
     "wnba": ("WnbaGame", "gameday"),
     "mlb": ("MlbGame", "gameday"),
     "soccer": ("SoccerMatch", "match_date"),
+    # CFB registered 2026-08-02. Its futures are the strongest case for this gate
+    # in the whole app: 944 of its 974 markets are season-long, and preseason they
+    # are priced off ratings carried from LAST season with ZERO current-season
+    # information -- against a sport with enormous roster turnover (transfer
+    # portal, NFL draft). The 21-day window ties them to the real season instead
+    # of an arbitrary date.
+    "cfb": ("CfbGame", "gameday"),
 }
 _MAX_ALERTS_PER_SPORT = 6  # cap Discord pings per sport per run (a slate-open lists hundreds at once)
 _ENDPOINTS = [
     "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
     "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets",
-    "/lol/markets", "/racing/markets",
+    "/lol/markets", "/racing/markets", "/cfb/markets",
 ]
 # Copied straight across from the Market row -- PlacedBet uses the identical
 # column names, so a game/race-tied bet stays CLV-computable (compute_bet_clv
