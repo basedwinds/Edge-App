@@ -489,8 +489,18 @@ const columns = [
 
 const sportColumn = columnHelper.accessor("sport", {
   header: "Sport",
-  cell: ({ getValue }) => (
-    <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">{getValue()}</span>
+  // Sport alone is too coarse to identify a row on the cross-sport views: TENNIS
+  // could be a Grand Slam or an ITF futures match, VALORANT could be VCT or a
+  // regional Challengers game. The league sits under it when the row has one.
+  cell: ({ getValue, row }) => (
+    <div className="leading-tight">
+      <span className="block text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">{getValue()}</span>
+      {row.original.league && (
+        <span className="block text-[10px] text-[var(--color-text-dim)] truncate max-w-[130px]" title={row.original.league}>
+          {row.original.league}
+        </span>
+      )}
+    </div>
   ),
 });
 

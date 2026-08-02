@@ -20,6 +20,9 @@ import { NbaPlaced } from "./pages/NbaPlaced";
 import { NbaCalibration } from "./pages/NbaCalibration";
 import { WnbaDashboard } from "./pages/WnbaDashboard";
 import { CfbDashboard } from "./pages/CfbDashboard";
+import { CfbRecommended } from "./pages/CfbRecommended";
+import { CfbPlaced } from "./pages/CfbPlaced";
+import { CfbCalibration } from "./pages/CfbCalibration";
 import { WnbaRecommended } from "./pages/WnbaRecommended";
 import { WnbaPlaced } from "./pages/WnbaPlaced";
 import { WnbaCalibration } from "./pages/WnbaCalibration";
@@ -82,6 +85,9 @@ function App() {
         <Route path="/nba/calibration" element={<NbaCalibration />} />
         <Route path="/wnba" element={<WnbaDashboard />} />
         <Route path="/cfb" element={<CfbDashboard />} />
+        <Route path="/cfb/recommended" element={<CfbRecommended />} />
+        <Route path="/cfb/placed" element={<CfbPlaced />} />
+        <Route path="/cfb/calibration" element={<CfbCalibration />} />
         <Route path="/wnba/recommended" element={<WnbaRecommended />} />
         <Route path="/wnba/placed" element={<WnbaPlaced />} />
         <Route path="/wnba/calibration" element={<WnbaCalibration />} />

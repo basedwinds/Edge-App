@@ -124,6 +124,21 @@ function navItems(sport: string) {
   // WNBA gets the full per-sport page set EXCEPT Futures (moneyline-only; Kalshi
   // lists no WNBA spread/total/futures markets) -- Dashboard/Recommended/Placed/
   // Calibration, uniform with every other sport (2026-07-24).
+  // CFB gets Dashboard/Recommended/Placed/Calibration but NO Futures page --
+  // unlike every other sport its futures are not a separate endpoint, they are
+  // market types inside /cfb/markets (944 of 974 rows), so they surface on the
+  // Dashboard and Recommended alongside the game markets.
+  if (sport === "cfb") {
+    return {
+      sportItems: [
+        { to: "/cfb", label: "Dashboard", icon: LayoutDashboard, end: true },
+        { to: "/cfb/recommended", label: "Recommended", icon: Target, end: false },
+        { to: "/cfb/placed", label: "Placed Bets", icon: ClipboardList, end: false },
+        { to: "/cfb/calibration", label: "Calibration", icon: Gauge, end: false },
+      ],
+      sharedItems: shared,
+    };
+  }
   if (sport === "wnba") {
     return {
       sportItems: [

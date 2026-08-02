@@ -453,8 +453,27 @@ export async function resolveFlaggedCatalogEntry(id: number): Promise<{ status: 
   return apiPost(`/catalog/${id}/resolve`);
 }
 
+/** football-data.co.uk division codes are opaque on screen ("E0"), so map the
+ * five leagues this app tracks to their common names. */
+const SOCCER_LEAGUE_LABEL: Record<string, string> = {"E0": "EPL", "SP1": "La Liga", "I1": "Serie A", "D1": "Bundesliga", "F1": "Ligue 1", "MLS": "MLS"};
+
+/** ATP/WTA + tier -> one readable label. Tier is what actually matters for
+ * identifying a tennis row: a Tour match and an ITF match look identical
+ * otherwise, and they are wildly different in quality and liquidity. */
+function tennisLeagueLabel(tour: string | null | undefined, tier: string | null | undefined): string | null {
+  const t = (tour || "").toUpperCase();
+  const lvl = tier === "challenger" ? "Challenger" : tier === "itf" ? "ITF" : tier === "tour" ? "Tour" : null;
+  if (!t && !lvl) return null;
+  return [t, lvl].filter(Boolean).join(" ");
+}
+
 export interface RecommendedBetRow {
   key: string;
+  /** Competition this bet sits in -- ATP tier, soccer division, esports event,
+   * racing series. Sport alone is too coarse to identify a row: "TENNIS" could
+   * be a Grand Slam or an ITF futures match, and "VALORANT" could be VCT or a
+   * regional Challengers game. Null where a sport has one competition. */
+  league?: string | null;
   marketId: number;
   label: string;
   marketType: string;
@@ -508,6 +527,7 @@ export interface RecommendedBetRow {
   /** Optional so only the WNBA builder sets it -- every other sport's builder
    * omits it (undefined), avoiding a churn edit across all ~9 builders. */
   wnbaGameId?: string | null;
+  cfbGameId?: string | null;
   mlbGameId: string | null;
   mmaFightId: string | null;
   tennisMatchId: number | null;
@@ -703,6 +723,7 @@ export function crossPlatformKey(row: {
   nflGameId: string | null;
   nbaGameId?: string | null;
   wnbaGameId?: string | null;
+  cfbGameId?: string | null;
   mlbGameId?: string | null;
   mmaFightId?: string | null;
   tennisMatchId?: number | null;
@@ -1288,6 +1309,93 @@ export function buildWnbaRecommendedBets(
  * ladder or player-stat markets yet), cross-platform collapse + portfolio
  * cap only. Kept separate rather than parameterizing, same "different
  * game-id field name" reasoning as buildNbaRecommendedBets. */
+export function buildCfbRecommendedBets(
+  markets: CfbMarketRow[],
+  weeklyPoolDollars: number,
+  lockedWeeklyDollars = 0
+): RecommendedBetsResult {
+  const candidates: RecommendedBetRow[] = [];
+  for (const m of markets) {
+    if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    const label = m.game_label ?? m.market_type;
+    candidates.push({
+      key: `market-${m.id}`,
+      marketId: m.id,
+      label,
+      marketType: m.market_type,
+      team: m.team,
+      // Carry the spread threshold through. Was hardcoded null from the
+      // moneyline-only days: spread rows reached the UI as a bare team name with
+      // no number, and crossPlatformKey (which keys on line) then treated two
+      // DIFFERENT spread lines as the same bet.
+      line: m.line,
+      // Null on moneyline/spread (spread is priced as "this team covers", which
+      // has no over/under); carries "over"/"under" on totals.
+      side: null,
+      gameday: m.gameday,
+      gametime: m.gametime,
+      estimatedStartTime: null,
+      source: m.source,
+      impliedProb: m.implied_prob,
+      estProb: m.model_prob,
+      edge: m.edge,
+      lineMovePp: null,
+      kellyFraction: m.kelly_fraction,
+      suggestedStakeDollars: m.suggested_stake_dollars,
+      suggestedStakeUnits: m.suggested_stake_units,
+      stakePool: m.stake_pool,
+      volume: m.volume,
+      nflGameId: null,
+      sport: "cfb",
+      nbaGameId: null,
+      wnbaGameId: null,
+      cfbGameId: m.cfb_game_id,
+      mlbGameId: null,
+      mmaFightId: null,
+      tennisMatchId: null,
+      soccerMatchId: null,
+      valorantMatchId: null,
+      cs2MatchId: null,
+      lolMatchId: null,
+      groupKey: recommendedKey(m.market_type, m.source, m.team, label),
+      waitReason: null, // WNBA has no news/injury layer wired yet
+    });
+  }
+
+  const rawCandidateCount = candidates.length;
+
+  const crossPlatformCollapsed = new Map<string, RecommendedBetRow>();
+  for (const row of candidates) {
+    const key = crossPlatformKey(row);
+    const existing = crossPlatformCollapsed.get(key);
+    if (!existing || preferForCrossPlatformCollapse(row, existing)) {
+      crossPlatformCollapsed.set(key, row);
+    }
+  }
+  const deduped = Array.from(crossPlatformCollapsed.values()).sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+  const gameCapped = capToOneRowPerGame(deduped);
+
+  const weeklyCeiling = Math.max(0, weeklyPoolDollars * PORTFOLIO_CEILING_PCT - lockedWeeklyDollars);
+  let cumulative = 0;
+  const shown: RecommendedBetRow[] = [];
+  for (const row of gameCapped) {
+    if (cumulative + row.suggestedStakeDollars > weeklyCeiling) continue;
+    cumulative += row.suggestedStakeDollars;
+    shown.push(row);
+  }
+
+  return {
+    rows: shown,
+    rawCandidateCount,
+    collapsedCount: rawCandidateCount - gameCapped.length,
+    cutByPortfolioCapCount: gameCapped.length - shown.length,
+  };
+}
+
+/** MLB equivalent of buildNbaRecommendedBets -- same leaner shape (no
+ * ladder or player-stat markets yet), cross-platform collapse + portfolio
+ * cap only. Kept separate rather than parameterizing, same "different
+ * game-id field name" reasoning as buildNbaRecommendedBets. */
 export function buildMlbRecommendedBets(
   markets: MlbMarketRow[],
   futures: FuturesMarketRow[],
@@ -1558,6 +1666,7 @@ export function buildTennisRecommendedBets(
     const label = m.match_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
+      league: tennisLeagueLabel(m.tour, m.tier),
       marketId: m.id,
       label,
       marketType: m.market_type,
@@ -1682,6 +1791,7 @@ export function buildSoccerRecommendedBets(
     const label = m.match_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
+      league: m.league ? (SOCCER_LEAGUE_LABEL[m.league] ?? m.league) : null,
       marketId: m.id,
       label,
       marketType: m.market_type,
@@ -1813,6 +1923,9 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
     candidates.push({
       key: `market-${m.id}`,
       marketId: m.id,
+      // Esports rows are unreadable without this: "VALORANT" alone could be a
+      // VCT international or a regional Challengers match.
+      league: m.event_name ?? m.group_label ?? null,
       label,
       marketType: m.market_type,
       team: m.team,
