@@ -172,7 +172,13 @@ export function Combined() {
     queryKey: ["placed-market-ids"],
     queryFn: async () => {
       const [open, settled] = await Promise.all([fetchOpenBets(), fetchSettledBets()]);
-      return new Set<string>([...open, ...settled].map((b) => b.cross_key)); // cross-platform placed KEYS (either book)
+      // cross-platform proposition keys + game-level keys (see usePlacedKeys)
+      const keys = new Set<string>();
+      for (const b of [...open, ...settled]) {
+        keys.add(b.cross_key);
+        if (b.game_key) keys.add(`game:${b.game_key}`);
+      }
+      return keys;
     },
   });
   const placedMarketIds = placedQuery.data ?? EMPTY_IDS;

@@ -33,6 +33,23 @@ def _fmt_line(v) -> str:
     return str(int(v)) if float(v) == int(v) else str(v)
 
 
+def _game_key(bet) -> str:
+    """The real-world GAME/match this bet is tied to ("" for futures/season-long
+    rows, which aren't game-tied). Mirrors the frontend capToOneRowPerGame id.
+
+    Why it's exposed: the Recommended view already caps to ONE row per game
+    (bets on the same game are correlated, not independent), but "already placed"
+    was matched per-proposition -- so after placing e.g. Over 4.5, the single row
+    for that game could later flip to Over 5.5 and read unplaced, tempting a
+    second correlated position on the same game. Matching at game level keeps the
+    display consistent with the cap the app already applies."""
+    for attr in _GAME_ID_ATTRS:
+        v = getattr(bet, attr, None)
+        if v:
+            return f"{attr.replace('_match_id', '')}:{v}" if attr in _ESPORTS_ID_ATTRS else str(v)
+    return ""
+
+
 def _cross_platform_key(bet) -> str:
     """BYTE-IDENTICAL to frontend markets.ts crossPlatformKey. Two rows sharing
     this key are the same real-world bet regardless of platform (Kalshi/Polymarket)
@@ -329,6 +346,7 @@ class OpenBetOut(BaseModel):
     rescheduled: bool = False   # current start is materially later than at placement (delayed/postponed to a new time)
     clv_status: str
     cross_key: str = ""         # frontend-identical crossPlatformKey: lets Recommended mark a bet "placed" on EITHER book
+    game_key: str = ""          # real-world game id ("" for futures): marks the whole game covered
 
 
 class SettledBetOut(BaseModel):
@@ -356,6 +374,7 @@ class SettledBetOut(BaseModel):
     clv_status: str
     final_score: str | None     # e.g. "KC 3 - 7 DET"; None for MMA/futures (no single game score)
     cross_key: str = ""         # frontend-identical crossPlatformKey (see OpenBetOut.cross_key)
+    game_key: str = ""          # real-world game id (see OpenBetOut.game_key)
 
 
 def _to_out(session: Session, row: PlacedBet) -> PlacedBetOut:
@@ -739,6 +758,7 @@ def get_open_bets(session: Session = Depends(get_session)):
             rescheduled=rescheduled,
             clv_status=clv["status"],
             cross_key=_cross_platform_key(r),
+            game_key=_game_key(r),
         )))
     # Ordering: UPCOMING first (soonest start at top -- the actionable ones),
     # then genuinely-DELAYED bets (start already >4h past but still pending --
@@ -798,6 +818,7 @@ def get_settled_bets(session: Session = Depends(get_session)):
             clv_pp=clv["clv_pp"], clv_status=clv["status"],
             final_score=final_score,
             cross_key=_cross_platform_key(r),
+            game_key=_game_key(r),
         ))
     return out
 

@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpDown, CircleCheck, Hourglass, Info, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, fetchReadiness, isRowNotReady, crossPlatformKey, type RecommendedBetRow } from "../../api/markets";
+import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, fetchReadiness, isRowNotReady, crossPlatformKey, rowGameId, type RecommendedBetRow } from "../../api/markets";
 
 // Shared across every Recommended page: the cross-platform KEYS of bets already
 // placed (any pool, EITHER book), so a proposition you've marked reads "Placed"
@@ -18,12 +18,21 @@ import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, fetchReadiness, isRo
 // the same real bet re-appears as unplaced and gets placed twice. `cross_key`
 // comes from the backend and is byte-identical to this file's crossPlatformKey.
 // (Query key name kept for cache-sharing + invalidation; it now holds keys.)
+// Two keys per placed bet: its exact proposition (cross_key, platform-agnostic)
+// AND its game (game_key, "" for futures). Matching on EITHER means a game you've
+// already bet reads "Placed" even when the single row shown for it flips to a
+// different line -- consistent with the one-row-per-game cap the list applies.
 function usePlacedKeys(enabled: boolean): Set<string> {
   const q = useQuery({
     queryKey: ["placed-market-ids"],
     queryFn: async () => {
       const [open, settled] = await Promise.all([fetchOpenBets(), fetchSettledBets()]);
-      return new Set<string>([...open, ...settled].map((b) => b.cross_key));
+      const keys = new Set<string>();
+      for (const b of [...open, ...settled]) {
+        keys.add(b.cross_key);
+        if (b.game_key) keys.add(`game:${b.game_key}`);
+      }
+      return keys;
     },
     enabled,
   });
@@ -534,7 +543,11 @@ export function RecommendedBetsTable({
       const marking = markingKeys.has(row.original.key);
       // "marked" = tapped this session OR already recorded as placed (survives
       // remounts, so a bet you placed earlier still reads "Placed" on return).
-      const marked = markedKeys.has(row.original.key) || effectivePlaced.has(crossPlatformKey(row.original));
+      const rowGid = rowGameId(row.original);
+      const marked =
+        markedKeys.has(row.original.key) ||
+        effectivePlaced.has(crossPlatformKey(row.original)) ||
+        (rowGid !== null && effectivePlaced.has(`game:${rowGid}`));
       return (
         <div className="flex items-center gap-2">
           <button

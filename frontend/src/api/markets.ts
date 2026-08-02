@@ -804,17 +804,32 @@ function preferForCrossPlatformCollapse(candidate: RecommendedBetRow, existing: 
  * same as the player cap already leaves team-level futures alone (division
  * winner AND conference champion for the same team ARE genuinely separate
  * real propositions worth separate exposure). */
+/** The real-world game/match a row belongs to (null for futures/season-long).
+ * Shared by capToOneRowPerGame and the Recommended "already placed" check, which
+ * matches at GAME level so a second, correlated line on a game you've already bet
+ * (place Over 4.5, then Over 5.5 becomes the best row) reads as placed rather than
+ * as a fresh opportunity -- consistent with the one-row-per-game cap below. */
+export function rowGameId(row: {
+  nflGameId: string | null; nbaGameId?: string | null; wnbaGameId?: string | null;
+  mlbGameId?: string | null; mmaFightId?: string | null; tennisMatchId?: number | null;
+  soccerMatchId?: number | null; valorantMatchId?: number | null; cs2MatchId?: number | null;
+  lolMatchId?: number | null;
+}): string | null {
+  const gameId =
+    row.nflGameId || row.nbaGameId || row.mlbGameId || row.mmaFightId || row.tennisMatchId || row.soccerMatchId ||
+    (row.valorantMatchId ? `valorant:${row.valorantMatchId}` : null) ||
+    (row.cs2MatchId ? `cs2:${row.cs2MatchId}` : null) ||
+    (row.lolMatchId ? `lol:${row.lolMatchId}` : null);
+  return gameId ? String(gameId) : null;
+}
+
 function capToOneRowPerGame(rows: RecommendedBetRow[]): RecommendedBetRow[] {
   const gameBest = new Map<string, RecommendedBetRow>();
   const nonGameRows: RecommendedBetRow[] = [];
   for (const row of rows) {
     // Same per-title-prefixed scoping as crossPlatformKey above, for the
     // same real cross-title id-collision reason.
-    const gameId =
-      row.nflGameId || row.nbaGameId || row.mlbGameId || row.mmaFightId || row.tennisMatchId || row.soccerMatchId ||
-      (row.valorantMatchId ? `valorant:${row.valorantMatchId}` : null) ||
-      (row.cs2MatchId ? `cs2:${row.cs2MatchId}` : null) ||
-      (row.lolMatchId ? `lol:${row.lolMatchId}` : null);
+    const gameId = rowGameId(row);
     if (!gameId) {
       nonGameRows.push(row);
       continue;
@@ -2182,6 +2197,7 @@ export interface OpenBetPayload {
   rescheduled: boolean;
   clv_status: "closed" | "pending" | "unavailable" | "not_applicable";
   cross_key: string; // frontend-identical crossPlatformKey -> mark "placed" on either book
+  game_key: string;  // real-world game id ("" for futures) -> marks the whole game covered
 }
 
 export async function fetchPortfolio(): Promise<PortfolioPayload> {
@@ -2215,6 +2231,7 @@ export interface SettledBetPayload {
   clv_status: "closed" | "pending" | "unavailable" | "not_applicable";
   final_score: string | null;
   cross_key: string; // frontend-identical crossPlatformKey -> mark "placed" on either book
+  game_key: string;  // real-world game id ("" for futures) -> marks the whole game covered
 }
 
 export async function fetchSettledBets(): Promise<SettledBetPayload[]> {
