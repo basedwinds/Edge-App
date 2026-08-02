@@ -31,6 +31,7 @@ from app.db.models import LolMatch, Market, MarketSnapshot
 from app.ingestion import market_catalog_lol
 from app.ingestion.market_matcher_lol import team_names_match
 from app.models.baseline import elo_service_lol
+from app.models.esports_tournament_pricing import price_tournament_winners
 from app.models.ladder_sanity import ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
@@ -112,6 +113,21 @@ def _game_model_prob(m: Market, match: LolMatch | None) -> float | None:
 # than it does. This filters the VIEW only -- market_type is left alone on
 # purpose, since rewriting it would move rows between CLV buckets and change what
 # settlement expects, for no gain here.
+# "Team to Make Grand Finals" is a DIFFERENT QUESTION from "wins the bracket":
+# two teams reach a final, so its probabilities must sum to ~2.0 across the
+# field, not 1.0. price_tournament_winners answers P(wins), so pointing it at
+# these would understate every team by roughly half and manufacture a large
+# negative edge on exactly the rows a user would notice. Excluded from pricing
+# until a reach-the-final variant exists; they still LIST, just unpriced.
+_REACH_FINAL_FUTURES = re.compile(r"make\s+grand\s+final|reach\s+.*final", re.IGNORECASE)
+
+
+def _is_win_bracket_future(m: Market) -> bool:
+    """Only the rows the win-the-bracket sim actually answers."""
+    blob = f"{m.group_label or ''} {m.team or ''}"
+    return _is_bracket_future(m) and not _REACH_FINAL_FUTURES.search(blob)
+
+
 _NON_BRACKET_FUTURES = re.compile(
     r"penta|solo\s*q|soloq|tft|tacticians|power\s*rank|qualify|qualifi|shortest",
     re.IGNORECASE,
@@ -130,11 +146,32 @@ def list_lol_futures(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport == "lol", Market.market_type == "tournament_winner", Market.status == "active").all()
     markets = [m for m in markets if _is_bracket_future(m)]
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
+    # Priced by the SAME Elo-seeded bracket Monte Carlo that already prices CS2
+    # and Valorant tournament winners -- LoL was left unpriced not because the
+    # model didn't fit but because 446 non-bracket rows (player props, TFT,
+    # solo-queue) made the inventory look unmodellable. With those filtered out,
+    # every team in every field is rated (103/103 checked across the ten largest
+    # fields), so the existing sim applies unchanged.
+    priced = price_tournament_winners([m for m in markets if _is_win_bracket_future(m)], elo_service_lol)
+    _weekly, _futures_pool = get_lol_pool_dollars(session)
+    _unit = get_unit_dollars(session)
+    _fk, _msf, _mineg = get_staking_params(session)
+    _mode, _fm, _ff = get_flat_params(session)
+    _clv = bucket_clv_stats(session)
 
     out = []
     for m in markets:
         snap = snapshots_by_market.get(m.id)
         implied = _implied_prob(snap)
+        model_prob = priced.get(m.id)
+        edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
+        _traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
+        _kelly = gate_kelly(
+            kelly_fraction(model_prob, implied, _fk, _msf, _mineg, _traded),
+            _clv, "lol", m.market_type,
+        )
+        _stake = size_stake_dollars(_mode, _kelly, _futures_pool, model_prob, implied, _unit, _fm, _ff,
+                                    unit_scale=FUTURES_UNIT_SCALE)
         out.append(
             FuturesMarketOut(
                 id=m.id,
@@ -150,16 +187,12 @@ def list_lol_futures(session: Session = Depends(get_session)):
                 last_price=snap.last_price if snap else None,
                 volume=snap.volume if snap else None,
                 updated_at=m.updated_at.isoformat() if m.updated_at else None,
-                model_prob=None,
+                model_prob=model_prob,
                 model_validated=False,
-                edge=None,
-                # Genuinely unstaked because model_prob is None -- LoL tournament
-                # winners have NO model (unlike CS2/Valorant, which have the
-                # bracket sim). Nothing is being suppressed here; there is simply
-                # nothing to price, so there is no CLV to lose either.
-                kelly_fraction=None,
-                suggested_stake_dollars=None,
-                suggested_stake_units=None,
+                edge=edge,
+                kelly_fraction=_kelly,
+                suggested_stake_dollars=_stake,
+                suggested_stake_units=round(_stake / _unit, 3) if (_stake is not None and _unit > 0) else None,
                 stake_pool="futures",
                 line_move_pp=None,
             )
