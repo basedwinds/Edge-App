@@ -2181,6 +2181,7 @@ export interface OpenBetPayload {
   original_start_time: string | null;
   rescheduled: boolean;
   clv_status: "closed" | "pending" | "unavailable" | "not_applicable";
+  cross_key: string; // frontend-identical crossPlatformKey -> mark "placed" on either book
 }
 
 export async function fetchPortfolio(): Promise<PortfolioPayload> {
@@ -2213,6 +2214,7 @@ export interface SettledBetPayload {
   clv_pp: number | null;
   clv_status: "closed" | "pending" | "unavailable" | "not_applicable";
   final_score: string | null;
+  cross_key: string; // frontend-identical crossPlatformKey -> mark "placed" on either book
 }
 
 export async function fetchSettledBets(): Promise<SettledBetPayload[]> {

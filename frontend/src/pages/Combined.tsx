@@ -144,7 +144,7 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
 
 const MAX_FUTURES_PER_SPORT = 8; // futures shortlist: top-N per sport (fairness across sports)
 
-const EMPTY_IDS: Set<number> = new Set(); // stable ref for the loading state
+const EMPTY_IDS: Set<string> = new Set(); // stable ref for the loading state (cross-platform placed keys)
 
 function localDateStr(offsetDays = 0): string {
   return new Date(Date.now() + offsetDays * 86400000).toLocaleDateString("en-CA"); // YYYY-MM-DD, local
@@ -172,7 +172,7 @@ export function Combined() {
     queryKey: ["placed-market-ids"],
     queryFn: async () => {
       const [open, settled] = await Promise.all([fetchOpenBets(), fetchSettledBets()]);
-      return new Set<number>([...open, ...settled].map((b) => b.market_id));
+      return new Set<string>([...open, ...settled].map((b) => b.cross_key)); // cross-platform placed KEYS (either book)
     },
   });
   const placedMarketIds = placedQuery.data ?? EMPTY_IDS;

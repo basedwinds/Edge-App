@@ -12,35 +12,45 @@ router = APIRouter(prefix="/placed-bets", tags=["placed-bets"])
 
 VALID_SETTLE_STATUSES = {"won", "lost", "push", "void"}
 
-# Game/match id columns, in the SAME priority order as the frontend's
-# crossPlatformKey (markets.ts): the first non-null wins. Used to decide when
-# two placed bets are really the SAME real-world opportunity offered on both
-# Kalshi and Polymarket.
+# Game/match id columns in the SAME priority order as the frontend crossPlatformKey
+# (markets.ts). race_event_id is deliberately NOT here: the frontend key doesn't
+# read it (racing rows fall to the sport|market_type|team fallback), so this must
+# stay byte-identical to the frontend -- the Recommended view's cross-platform
+# "already placed" check compares this backend key against the frontend key.
 _GAME_ID_ATTRS = [
     "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
     "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
-    "lol_match_id", "race_event_id",
+    "lol_match_id",
 ]
+_ESPORTS_ID_ATTRS = {"valorant_match_id", "cs2_match_id", "lol_match_id"}
 
 
-def _cross_platform_key(bet: PlacedBet) -> str:
-    """Mirror of frontend markets.ts crossPlatformKey: two rows sharing this key
-    are the same bet regardless of which platform (Kalshi/Polymarket) priced it.
-    The esports match-id columns are plain auto-increment ints from three
-    separate tables, so they're title-prefixed to avoid a cross-title collision
-    (same reasoning as the frontend)."""
+def _fmt_line(v) -> str:
+    """Match JS `${line}`: whole numbers drop the decimal (4.0 -> '4'), fractional
+    keep it (4.5 -> '4.5'); None -> '' (JS `line ?? ''`)."""
+    if v is None:
+        return ""
+    return str(int(v)) if float(v) == int(v) else str(v)
+
+
+def _cross_platform_key(bet) -> str:
+    """BYTE-IDENTICAL to frontend markets.ts crossPlatformKey. Two rows sharing
+    this key are the same real-world bet regardless of platform (Kalshi/Polymarket)
+    or which ladder rung/price is shown. Used by the create copycat guard AND
+    exposed as OpenBetOut/SettledBetOut.cross_key so the Recommended view can mark
+    a proposition "placed" no matter which book's copy the deduped row shows. MUST
+    match the frontend exactly (esports title-prefix, JS line formatting, race
+    excluded, team??label fallback)."""
     gid = None
     for attr in _GAME_ID_ATTRS:
         v = getattr(bet, attr, None)
         if v:
-            gid = f"{attr}:{v}" if attr in ("valorant_match_id", "cs2_match_id", "lol_match_id") else str(v)
+            gid = f"{attr.replace('_match_id', '')}:{v}" if attr in _ESPORTS_ID_ATTRS else str(v)
             break
     mt = bet.market_type or ""
     if gid:
-        line = "" if bet.line is None else str(bet.line)
-        return f"{gid}|{mt}|{bet.team or ''}|{line}|{bet.side or ''}"
-    # Futures fallback (no single game id): sport-scoped, like the frontend.
-    return f"{bet.sport or ''}|{mt}|{bet.team or bet.label or ''}"
+        return f"{gid}|{mt}|{bet.team or ''}|{_fmt_line(bet.line)}|{bet.side or ''}"
+    return f"{bet.sport or ''}|{mt}|{bet.team if bet.team is not None else (bet.label or '')}"
 
 # Calibration buckets group settled bets by their predicted probability at
 # placement time (10-point buckets, 0-100%) so "does 70%-confidence
@@ -318,6 +328,7 @@ class OpenBetOut(BaseModel):
     original_start_time: str | None = None  # scheduled start at placement, for reschedule detection
     rescheduled: bool = False   # current start is materially later than at placement (delayed/postponed to a new time)
     clv_status: str
+    cross_key: str = ""         # frontend-identical crossPlatformKey: lets Recommended mark a bet "placed" on EITHER book
 
 
 class SettledBetOut(BaseModel):
@@ -344,6 +355,7 @@ class SettledBetOut(BaseModel):
     clv_pp: float | None
     clv_status: str
     final_score: str | None     # e.g. "KC 3 - 7 DET"; None for MMA/futures (no single game score)
+    cross_key: str = ""         # frontend-identical crossPlatformKey (see OpenBetOut.cross_key)
 
 
 def _to_out(session: Session, row: PlacedBet) -> PlacedBetOut:
@@ -726,6 +738,7 @@ def get_open_bets(session: Session = Depends(get_session)):
             original_start_time=r.original_start_time,
             rescheduled=rescheduled,
             clv_status=clv["status"],
+            cross_key=_cross_platform_key(r),
         )))
     # Ordering: UPCOMING first (soonest start at top -- the actionable ones),
     # then genuinely-DELAYED bets (start already >4h past but still pending --
@@ -784,6 +797,7 @@ def get_settled_bets(session: Session = Depends(get_session)):
             settled_at=(r.settled_at.isoformat() + "Z") if r.settled_at else None,
             clv_pp=clv["clv_pp"], clv_status=clv["status"],
             final_score=final_score,
+            cross_key=_cross_platform_key(r),
         ))
     return out
 

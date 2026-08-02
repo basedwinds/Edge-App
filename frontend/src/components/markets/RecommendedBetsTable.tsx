@@ -10,23 +10,26 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpDown, CircleCheck, Hourglass, Info, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, fetchReadiness, isRowNotReady, type RecommendedBetRow } from "../../api/markets";
+import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, fetchReadiness, isRowNotReady, crossPlatformKey, type RecommendedBetRow } from "../../api/markets";
 
-// Shared across every Recommended page: market ids already placed (any pool),
-// so a row you've marked still reads "Placed" after you navigate away and back.
-// Cached under one key so all tables (and Combined) share the same fetch.
-function usePlacedMarketIds(enabled: boolean): Set<number> {
+// Shared across every Recommended page: the cross-platform KEYS of bets already
+// placed (any pool, EITHER book), so a proposition you've marked reads "Placed"
+// even when the deduped row flips to show the other platform's copy -- otherwise
+// the same real bet re-appears as unplaced and gets placed twice. `cross_key`
+// comes from the backend and is byte-identical to this file's crossPlatformKey.
+// (Query key name kept for cache-sharing + invalidation; it now holds keys.)
+function usePlacedKeys(enabled: boolean): Set<string> {
   const q = useQuery({
     queryKey: ["placed-market-ids"],
     queryFn: async () => {
       const [open, settled] = await Promise.all([fetchOpenBets(), fetchSettledBets()]);
-      return new Set<number>([...open, ...settled].map((b) => b.market_id));
+      return new Set<string>([...open, ...settled].map((b) => b.cross_key));
     },
     enabled,
   });
   return q.data ?? EMPTY_PLACED;
 }
-const EMPTY_PLACED: Set<number> = new Set();
+const EMPTY_PLACED: Set<string> = new Set();
 import { MARKET_TYPE_LABELS } from "./FuturesTable";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
@@ -492,7 +495,7 @@ export function RecommendedBetsTable({
   rows: RecommendedBetRow[];
   onMarkPlaced: (row: RecommendedBetRow) => Promise<void>;
   onShowReasoning: (row: RecommendedBetRow) => void;
-  placedMarketIds?: Set<number>;
+  placedMarketIds?: Set<string>; // cross-platform placed KEYS (see usePlacedKeys); Combined passes its own
   showSport?: boolean;
 }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: false }]);
@@ -501,7 +504,7 @@ export function RecommendedBetsTable({
   // Persistent "already placed" set: use the parent's if given (Combined passes
   // one), otherwise fetch it ourselves so every per-sport Recommended page also
   // remembers placed bets across navigation.
-  const fetchedPlaced = usePlacedMarketIds(placedMarketIds === undefined);
+  const fetchedPlaced = usePlacedKeys(placedMarketIds === undefined);
   const effectivePlaced = placedMarketIds ?? fetchedPlaced;
   const navigate = useNavigate();
   // Hide "not ready yet" rows: far-future games + season-sport futures whose
@@ -531,7 +534,7 @@ export function RecommendedBetsTable({
       const marking = markingKeys.has(row.original.key);
       // "marked" = tapped this session OR already recorded as placed (survives
       // remounts, so a bet you placed earlier still reads "Placed" on return).
-      const marked = markedKeys.has(row.original.key) || effectivePlaced.has(row.original.marketId);
+      const marked = markedKeys.has(row.original.key) || effectivePlaced.has(crossPlatformKey(row.original));
       return (
         <div className="flex items-center gap-2">
           <button
