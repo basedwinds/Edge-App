@@ -63,6 +63,7 @@ been found in this app's own data."""
 from __future__ import annotations
 
 import bisect
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -175,6 +176,10 @@ class SeasonSimResult:
     top2_prob: dict = field(default_factory=dict)
     top_half_prob: dict = field(default_factory=dict)
     relegation_prob: dict = field(default_factory=dict)
+    # team -> {final points: how many simulated seasons ended there}. Kept as a
+    # histogram rather than a raw sample list so it stays small (a season spans
+    # ~40 distinct point totals) and can be cached alongside the other outputs.
+    points_dist: dict = field(default_factory=dict)
     unrated_teams: list[str] = field(default_factory=list)
     n_simulations: int = 0
 
@@ -247,6 +252,11 @@ def simulate_season(
     top2_count = {t: 0 for t in teams}
     top_half_count = {t: 0 for t in teams}
     relegation_count = {t: 0 for t in teams}
+    # Final points per simulated season, per team. The sim already computed this
+    # to do the ranking and then discarded it; keeping it is what makes Kalshi's
+    # "<team> finishes with N+ points" ladders (KX*TEAMPOINTS, 384 live markets
+    # across 5 leagues) priceable, with no second model and no extra simulation.
+    points_count: dict[str, dict[int, int]] = {t: {} for t in teams}
     zone_size = RELEGATION_ZONE_SIZE.get(league)
     half_size = len(teams) // 2
 
@@ -268,6 +278,10 @@ def simulate_season(
                 results[home].points += 1
                 results[away].points += 1
 
+        for t, r in results.items():
+            pc = points_count[t]
+            pc[r.points] = pc.get(r.points, 0) + 1
+
         ranked = sorted(results.values(), key=lambda r: (-r.points, -r.goal_diff, -r.goals_for))
         champion_count[ranked[0].team] += 1
         for r in ranked[:2]:
@@ -287,6 +301,23 @@ def simulate_season(
         top2_prob={t: top2_count[t] / n_simulations for t in teams},
         top_half_prob={t: top_half_count[t] / n_simulations for t in teams},
         relegation_prob={t: relegation_count[t] / n_simulations for t in teams} if zone_size else {},
+        points_dist=points_count,
         unrated_teams=unrated_teams,
         n_simulations=n_simulations,
     )
+
+
+def prob_points_at_least(result: "SeasonSimResult", team: str, threshold: float) -> float | None:
+    """P(team finishes the season on at least `threshold` points).
+
+    Kalshi states these as a floor_strike of N-0.5 for an "N+ points" market, so
+    the comparison is >= ceil(threshold): a 74.5 floor means 75 points or more.
+    Returns None for a team the sim doesn't cover (newly promoted sides the
+    ratings can't place, which are already tracked in unrated_teams) rather than
+    guessing off the league average."""
+    dist = (result.points_dist or {}).get(team)
+    if not dist or not result.n_simulations:
+        return None
+    cutoff = math.ceil(threshold)
+    hits = sum(c for pts, c in dist.items() if pts >= cutoff)
+    return hits / result.n_simulations
