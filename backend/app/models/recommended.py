@@ -35,6 +35,8 @@ _PLAYER_STAT = {"season_pass_yds", "season_rush_yds", "season_rec_yds", "season_
 # Season champion futures belong on the Futures page, not the cross-sport games
 # view -- buildRacingRecommendedBets filters them out (CHAMP).
 _RACING_CHAMP = {"drivers_champion", "constructors_champion"}
+# Mirrors frontend MAX_RACING_BETS_PER_EVENT -- keep the two in lockstep.
+_MAX_RACING_BETS_PER_EVENT = 3
 
 # (sport, /markets endpoint, weekly-pool settings field). Games view = weekly pool
 # only (Combined passes futures=[]), so no futures pool needed. Order + fields
@@ -139,18 +141,25 @@ def _build_racing(rows: list[_Row], weekly_pool: float) -> list[_Row]:
     staked = [r for r in rows
               if r.market_type not in _RACING_CHAMP and (r.stake or 0) > 0
               and r.model_prob is not None and r.edge is not None]
-    # JS: [...staked].sort(byStake) -- Array.sort is STABLE, so rows tied on stake
-    # keep their original /racing order; the first such row wins the event. Python's
-    # sort is stable too, so sorting the rows in their original order matches.
-    staked = sorted(staked, key=lambda r: -(r.stake or 0.0))
-    best: dict[str, _Row] = {}
+    # Mirrors the frontend byStakeThenEdge + per-DRIVER / per-race caps (see
+    # buildRacingRecommendedBets for why racing doesn't use the one-row-per-game
+    # rule: podium bets on different drivers can all win, so they diversify; the
+    # same driver across markets is the real correlation). Both sorts are stable,
+    # so ties keep the original /racing order in Python and JS alike.
+    staked = sorted(staked, key=lambda r: (-(r.stake or 0.0), -(r.edge or 0.0)))
+    per_event: dict[str, int] = {}
+    seen_driver: set[str] = set()
+    deduped: list[_Row] = []
     for r in staked:
-        k = f"{r.sport}|{r.event if r.event is not None else ''}"
-        if k not in best:
-            best[k] = r
-    # JS: deduped.sort(byStake) on the Map's insertion order (= the order events
-    # were first seen above), then the cap walks that order.
-    deduped = sorted(best.values(), key=lambda r: -(r.stake or 0.0))
+        event_key = f"{r.sport}|{r.event if r.event is not None else ''}"
+        driver_key = f"{event_key}|{r.team or ''}"          # _Row.team is the driver for racing
+        if driver_key in seen_driver:
+            continue
+        if per_event.get(event_key, 0) >= _MAX_RACING_BETS_PER_EVENT:
+            continue
+        seen_driver.add(driver_key)
+        per_event[event_key] = per_event.get(event_key, 0) + 1
+        deduped.append(r)
     ceiling = max(0.0, (weekly_pool or 0.0) * _CEILING_PCT)
     out: list[_Row] = []
     running = 0.0

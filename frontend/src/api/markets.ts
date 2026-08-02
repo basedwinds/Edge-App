@@ -627,6 +627,11 @@ function ladderCollapseKey(row: RecommendedBetRow): string {
 // pools would compare fractions of different denominators, so this caps on
 // actual dollars against each pool's own dollar total instead.
 const PORTFOLIO_CEILING_PCT = 0.6;
+// Max recommended bets per single race event (see buildRacingRecommendedBets).
+// A race supports several genuinely different positions (podium spots, h2h
+// pairings) unlike a team game, but one race shouldn't be able to fill the whole
+// racing pool either.
+const MAX_RACING_BETS_PER_EVENT = 3;
 
 function recommendedKey(marketType: string, source: string, team: string | null, label: string): string {
   return `${marketType}|${source}|${team ?? label}`;
@@ -1968,20 +1973,42 @@ export function buildRacingRecommendedBets(
   );
   const rawCandidateCount = staked.length;
 
-  const byStake = (a: RacingMarketRow, b: RacingMarketRow) => (b.suggested_stake_dollars ?? 0) - (a.suggested_stake_dollars ?? 0);
-  const bestByEvent = new Map<string, RacingMarketRow>();
-  for (const m of [...staked].sort(byStake)) {
-    const key = `${m.series}|${m.race_event_id ?? m.event ?? ""}`;
-    if (!bestByEvent.has(key)) bestByEvent.set(key, m); // one bet per race event
+  // Racing deliberately does NOT use the one-row-per-game cap the team sports
+  // use. That cap exists because moneyline/spread/total on one game are the same
+  // team-strength belief stacked, so they lose together. A race is not shaped
+  // like that: podium (top_n) bets on DIFFERENT drivers can all win at once, and
+  // h2h pairings are near-independent, so collapsing a race to one bet threw away
+  // genuinely diversifying positions (measured live 2026-08-02: 32 qualifying
+  // racing bets collapsed to 5 -- one event alone discarded 13 of 14 podium bets).
+  // What IS correlated is the same DRIVER across markets (his "wins" and "top 3"
+  // are one belief), so the cap is per-driver instead, plus a per-race ceiling so
+  // a single race can't flood the list. Race winner/pole entries stay mutually
+  // exclusive by nature -- backing a few is a deliberate longshot spread, and the
+  // pool ceiling below is what actually bounds that risk.
+  const byStakeThenEdge = (a: RacingMarketRow, b: RacingMarketRow) =>
+    ((b.suggested_stake_dollars ?? 0) - (a.suggested_stake_dollars ?? 0)) || ((b.edge ?? 0) - (a.edge ?? 0));
+  const perEventCount = new Map<string, number>();
+  const seenDriver = new Set<string>();
+  const deduped: RacingMarketRow[] = [];
+  for (const m of [...staked].sort(byStakeThenEdge)) {
+    const eventKey = `${m.series}|${m.race_event_id ?? m.event ?? ""}`;
+    const driverKey = `${eventKey}|${m.driver ?? ""}`;
+    if (seenDriver.has(driverKey)) continue;                                  // same driver = one belief
+    if ((perEventCount.get(eventKey) ?? 0) >= MAX_RACING_BETS_PER_EVENT) continue;
+    seenDriver.add(driverKey);
+    perEventCount.set(eventKey, (perEventCount.get(eventKey) ?? 0) + 1);
+    deduped.push(m);
   }
-  const deduped = [...bestByEvent.values()];
   const collapsedCount = rawCandidateCount - deduped.length;
 
   const ceiling = Math.max(0, weeklyPoolDollars * PORTFOLIO_CEILING_PCT - lockedWeeklyDollars);
   const rows: RecommendedBetRow[] = [];
   let running = 0;
   let cutByPortfolioCapCount = 0;
-  for (const m of deduped.sort(byStake)) {
+  // `deduped` is already in byStakeThenEdge order (it's built by walking the
+  // sorted list), so no re-sort here -- and the backend mirror iterates it in the
+  // same order, which is what keeps alerts identical to this list.
+  for (const m of deduped) {
     const stake = m.suggested_stake_dollars ?? 0;
     if (running + stake > ceiling && rows.length > 0) { cutByPortfolioCapCount++; continue; }
     running += stake;
