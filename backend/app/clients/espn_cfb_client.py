@@ -8,11 +8,24 @@ Division II and Division III games, which have no Elo ratings here (the game
 cache the constants were derived from is FBS-only) and would flood the table
 with teams we can never price.
 
-CFB is a WEEKLY sport, so this fetches by week-sized strides rather than the
-day-at-a-time loop the WNBA client uses -- ESPN's scoreboard accepts a
-YYYYMMDD-YYYYMMDD range and returns every game inside it, so a whole season
-costs a handful of calls instead of ~150. Verified: the 2026-09-19 slate alone
-returns 71 events.
+Fetches ONE DAY AT A TIME, like the WNBA client. A date-RANGE query
+(YYYYMMDD-YYYYMMDD) looks like an obvious optimisation and is a trap -- ESPN
+silently returns an arbitrary SUBSET rather than everything in the range.
+Measured 2026-08-02:
+
+    dates=20260919            -> 25 events, all 25 on 9/19
+    dates=20260913-20260919   ->  4 events, only  2 on 9/19
+    dates=20260906-20260919   -> 94 events, only  2 on 9/19
+
+The range form is not merely capped (a cap would truncate consistently); it
+drops most of each day. Building on it left three already-listed Kalshi games --
+Michigan St @ Notre Dame, LSU @ Ole Miss, Clemson @ LSU -- with no schedule row
+to link to, which is exactly the silent unlinked-market failure this client
+exists to avoid.
+
+Because a schedule changes slowly, the poller should refresh it on a long
+interval rather than every market cycle; per-day fetching is only expensive if
+run every few minutes.
 """
 import datetime
 import logging
@@ -26,9 +39,21 @@ _UA = {"User-Agent": "Mozilla/5.0"}
 
 # FBS only -- see module docstring.
 FBS_GROUP = "80"
-# ESPN caps the scoreboard response; 900 comfortably clears a full Saturday
-# (the busiest CFB day tops out near 130 FBS games).
-_LIMIT = 900
+# DO NOT RAISE THIS. ESPN silently falls back to a tiny default page when `limit`
+# is too large -- the failure is inverted from what you'd expect. Measured
+# 2026-08-02 on dates=20260919&groups=80:
+#
+#     limit omitted -> 71 events
+#     limit=50      -> 71 events
+#     limit=100     -> 71 events
+#     limit=1000    -> 25 events   <-- silently degraded
+#
+# The original value here was 900, which returned 25 of 71 games per day. That is
+# what left three already-listed Kalshi fixtures (Michigan St @ Notre Dame, LSU @
+# Ole Miss, Clemson @ LSU) with no schedule row -- it looked like "ESPN doesn't
+# have those games" rather than "we asked wrongly", which is exactly why a too-
+# large limit is more dangerous than no limit at all.
+_LIMIT = 100
 # How far ahead to pull. This MUST exceed Kalshi's listing horizon or markets
 # arrive with no game row to link to -- the exact bug that left WNBA markets
 # unlinked when its client stopped at today.
@@ -37,27 +62,40 @@ _LIMIT = 900
 # gives real headroom over that observed horizon; the fetch is a handful of
 # range calls, so a wide window is cheap.
 FORWARD_DAYS = 90
-_STRIDE_DAYS = 14
+# Sunday(6) and Monday(0): FBS plays Tue-Sat.
+_SKIP_WEEKDAYS = {6, 0}
 
 
 def fetch_scoreboard_events(start: datetime.date, end: datetime.date) -> list[dict]:
-    """Raw ESPN event dicts across [start, end], fetched in date-range strides."""
+    """Raw ESPN event dicts across [start, end], ONE CALL PER DAY.
+
+    Sunday and Monday are skipped: FBS plays Tuesday through Saturday, so those
+    two days are ~29% of calls for essentially no games. De-duped by event id
+    because a late kickoff can appear on two adjacent days' scoreboards (the same
+    UTC-boundary effect the WNBA client documents)."""
     out: list[dict] = []
+    seen: set[str] = set()
     with httpx.Client(timeout=30.0, headers=_UA) as client:
         day = start
         while day <= end:
-            chunk_end = min(day + datetime.timedelta(days=_STRIDE_DAYS - 1), end)
+            if day.weekday() in _SKIP_WEEKDAYS:
+                day += datetime.timedelta(days=1)
+                continue
             try:
                 r = client.get(SCOREBOARD, params={
-                    "dates": f"{day.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}",
+                    "dates": day.strftime("%Y%m%d"),
                     "groups": FBS_GROUP,
                     "limit": _LIMIT,
                 })
                 if r.status_code == 200:
-                    out.extend(r.json().get("events", []))
+                    for e in r.json().get("events", []):
+                        eid = str(e.get("id"))
+                        if eid and eid not in seen:
+                            seen.add(eid)
+                            out.append(e)
             except httpx.HTTPError:
-                log.exception("cfb scoreboard fetch failed for %s..%s", day, chunk_end)
-            day = chunk_end + datetime.timedelta(days=1)
+                log.exception("cfb scoreboard fetch failed for %s", day)
+            day += datetime.timedelta(days=1)
     return out
 
 

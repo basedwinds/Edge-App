@@ -38,6 +38,11 @@ DEFAULT_NBA_FUTURES_SUBPOOL_PCT = 0.30
 # NBA, so it warrants NBA-style, not zero, treatment).
 WNBA_ALLOCATION_PCT_KEY = "wnba_allocation_pct"
 DEFAULT_WNBA_ALLOCATION_PCT = 0.15
+# CFB starts at the same 6% tier as the other seasonal non-core sports. It has
+# NO forward-CLV history yet (the season starts late August), so this is a prior,
+# not evidence -- revisit at the early-September re-decide alongside mma/cs2.
+CFB_ALLOCATION_PCT_KEY = "cfb_allocation_pct"
+DEFAULT_CFB_ALLOCATION_PCT = 0.06
 # Racing (F1/NASCAR/IndyCar share one pool). Small + no futures split -- it's
 # now staked (paper) like the others, but its models are unbacktested so it
 # defaults lighter. 2026-07-24.
@@ -222,6 +227,7 @@ class SettingsIn(BaseModel):
     nba_allocation_pct: float = DEFAULT_NBA_ALLOCATION_PCT
     nba_futures_subpool_pct: float = DEFAULT_NBA_FUTURES_SUBPOOL_PCT
     wnba_allocation_pct: float = DEFAULT_WNBA_ALLOCATION_PCT
+    cfb_allocation_pct: float = DEFAULT_CFB_ALLOCATION_PCT
     wnba_futures_subpool_pct: float = DEFAULT_WNBA_FUTURES_SUBPOOL_PCT
     mlb_allocation_pct: float = DEFAULT_MLB_ALLOCATION_PCT
     mlb_futures_subpool_pct: float = DEFAULT_MLB_FUTURES_SUBPOOL_PCT
@@ -431,6 +437,7 @@ def _read_all(session: Session) -> SettingsOut:
         _get_float(session, NBA_ALLOCATION_PCT_KEY, DEFAULT_NBA_ALLOCATION_PCT),
         _get_float(session, NBA_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_NBA_FUTURES_SUBPOOL_PCT),
         _get_float(session, WNBA_ALLOCATION_PCT_KEY, DEFAULT_WNBA_ALLOCATION_PCT),
+        _get_float(session, CFB_ALLOCATION_PCT_KEY, DEFAULT_CFB_ALLOCATION_PCT),
         _get_float(session, WNBA_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_WNBA_FUTURES_SUBPOOL_PCT),
         _get_float(session, MLB_ALLOCATION_PCT_KEY, DEFAULT_MLB_ALLOCATION_PCT),
         _get_float(session, MLB_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_MLB_FUTURES_SUBPOOL_PCT),
@@ -494,6 +501,7 @@ def update_settings(body: SettingsIn, session: Session = Depends(get_session)):
     _set_float(session, NBA_ALLOCATION_PCT_KEY, body.nba_allocation_pct)
     _set_float(session, NBA_FUTURES_SUBPOOL_PCT_KEY, body.nba_futures_subpool_pct)
     _set_float(session, WNBA_ALLOCATION_PCT_KEY, body.wnba_allocation_pct)
+    _set_float(session, CFB_ALLOCATION_PCT_KEY, body.cfb_allocation_pct)
     _set_float(session, WNBA_FUTURES_SUBPOOL_PCT_KEY, body.wnba_futures_subpool_pct)
     _set_float(session, MLB_ALLOCATION_PCT_KEY, body.mlb_allocation_pct)
     _set_float(session, MLB_FUTURES_SUBPOOL_PCT_KEY, body.mlb_futures_subpool_pct)
@@ -521,6 +529,7 @@ _ALL_ALLOCATION_KEYS = [
     (NFL_ALLOCATION_PCT_KEY, DEFAULT_NFL_ALLOCATION_PCT),
     (NBA_ALLOCATION_PCT_KEY, DEFAULT_NBA_ALLOCATION_PCT),
     (WNBA_ALLOCATION_PCT_KEY, DEFAULT_WNBA_ALLOCATION_PCT),
+    (CFB_ALLOCATION_PCT_KEY, DEFAULT_CFB_ALLOCATION_PCT),
     (MLB_ALLOCATION_PCT_KEY, DEFAULT_MLB_ALLOCATION_PCT),
     (MMA_ALLOCATION_PCT_KEY, DEFAULT_MMA_ALLOCATION_PCT),
     (TENNIS_ALLOCATION_PCT_KEY, DEFAULT_TENNIS_ALLOCATION_PCT),
@@ -583,6 +592,16 @@ def get_wnba_pool_dollars(session: Session) -> tuple[float, float]:
     wnba_futures_subpool_pct = _get_float(session, WNBA_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_WNBA_FUTURES_SUBPOOL_PCT)
     wnba_pool = bankroll * wnba_allocation_pct * _allocation_scale(session)
     return wnba_pool * (1.0 - wnba_futures_subpool_pct), wnba_pool * wnba_futures_subpool_pct
+
+
+def get_cfb_pool_dollars(session: Session) -> float:
+    """CFB per-game pool. No futures sub-pool: the CFB futures series (playoff
+    qualifiers, conference champions, AP rank) are real and listed, but nothing
+    prices them yet -- the Elo is a per-game model. Splitting off a futures pool
+    now would reserve bankroll no market can use."""
+    bankroll = _get_float(session, BANKROLL_KEY, DEFAULT_BANKROLL)
+    pct = _get_float(session, CFB_ALLOCATION_PCT_KEY, DEFAULT_CFB_ALLOCATION_PCT)
+    return bankroll * pct * _allocation_scale(session)
 
 
 def get_racing_pool_dollars(session: Session) -> float:

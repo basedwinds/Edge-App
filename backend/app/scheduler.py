@@ -15,6 +15,7 @@ from app.ingestion.poller_valorant import run_full_refresh_valorant
 from app.ingestion.poller_cs2 import run_full_refresh_cs2
 from app.ingestion.poller_lol import run_full_refresh_lol
 from app.ingestion.poller_racing import run_full_refresh_racing
+from app.ingestion.poller_cfb import run_full_refresh_cfb
 from app.ingestion.poller_lock import serialized
 from app.models.dead_market_sanity_check import run_dead_market_sanity_check
 from app.models.snapshot_maintenance import prune_market_snapshots
@@ -53,7 +54,7 @@ def run_surface_backfill():
 _WARM_PATHS = [
     "/markets", "/nba/markets", "/wnba/markets", "/mlb/markets", "/mma/markets",
     "/tennis/markets", "/soccer/markets", "/valorant/markets", "/cs2/markets", "/lol/markets",
-    "/racing/markets",
+    "/racing/markets", "/cfb/markets",
     "/markets/cross-platform-divergences",
     # Futures endpoints that run a real model (tennis draw sim, esports
     # tournament Monte Carlo, team-sport season sims) -- warmed too so a
@@ -245,6 +246,19 @@ def start():
         minutes=5,
         id="full_refresh_racing",
         next_run_time=base_tick + timedelta(seconds=9 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # CFB on a 15min interval, not the 5min the other sports use. The schedule
+    # fetch is one ESPN call PER DAY across a 90-day window (a date-RANGE query
+    # silently returns a subset -- see espn_cfb_client), so a 5min cadence would
+    # be ~90 calls every 5 minutes for a schedule that changes weekly. Market
+    # prices still refresh inside each run.
+    scheduler.add_job(
+        run_full_refresh_cfb,
+        "interval",
+        minutes=15,
+        id="full_refresh_cfb",
+        next_run_time=base_tick + timedelta(seconds=12 * JOB_STAGGER_SECONDS),
         replace_existing=True,
     )
     scheduler.add_job(

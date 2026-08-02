@@ -8,13 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.response_cache import ResponseCacheMiddleware
 from sqlalchemy.orm import Session
 
-from app.api.routers import backtests, catalog, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
+from app.api.routers import backtests, catalog, cfb_markets, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
 from app.config import settings
 from app.db.database import get_session, init_db
 from app.db.models import Setting
 from app.ingestion.poller import LAST_REFRESH_KEY, run_full_refresh
 from app.ingestion.poller_nba import run_full_refresh_nba
 from app.ingestion.poller_wnba import run_full_refresh_wnba
+from app.ingestion.poller_cfb import run_full_refresh_cfb
 from app.ingestion.poller_mlb import run_full_refresh_mlb
 from app.ingestion.poller_mma import run_full_refresh_mma
 from app.ingestion.poller_tennis import run_full_refresh_tennis
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI):
         run_full_refresh, run_full_refresh_nba, run_full_refresh_wnba, run_full_refresh_mlb, run_full_refresh_mma,
         run_full_refresh_tennis, run_full_refresh_soccer, run_full_refresh_valorant,
         run_full_refresh_cs2, run_full_refresh_lol, run_full_refresh_racing,
+        run_full_refresh_cfb,
     ]
     for i, poller in enumerate(pollers):
         threading.Timer(i * STARTUP_POLLER_STAGGER_SECONDS, poller).start()
@@ -119,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(markets.router)
     app.include_router(nba_markets.router)
     app.include_router(wnba_markets.router)
+    app.include_router(cfb_markets.router)
     app.include_router(mlb_markets.router)
     app.include_router(mma_markets.router)
     app.include_router(tennis_markets.router)

@@ -550,6 +550,7 @@ class Market(Base):
     nfl_game_id = Column(String, ForeignKey("nfl_games.id"), nullable=True)
     nba_game_id = Column(String, ForeignKey("nba_games.id"), nullable=True)
     wnba_game_id = Column(String, ForeignKey("wnba_games.id"), nullable=True)
+    cfb_game_id = Column(String, ForeignKey("cfb_games.id"), nullable=True)
     mlb_game_id = Column(String, ForeignKey("mlb_games.id"), nullable=True)
     mma_fight_id = Column(String, ForeignKey("mma_fights.id"), nullable=True)
     tennis_match_id = Column(Integer, ForeignKey("tennis_matches.id"), nullable=True)
@@ -670,6 +671,7 @@ class PlacedBet(Base):
     nfl_game_id = Column(String, nullable=True)  # present only for game-tied market types
     nba_game_id = Column(String, nullable=True)  # present only for NBA game-tied market types
     wnba_game_id = Column(String, nullable=True)  # present only for WNBA game-tied market types
+    cfb_game_id = Column(String, nullable=True)  # present only for CFB game-tied market types
     mlb_game_id = Column(String, nullable=True)  # present only for MLB game-tied market types
     mma_fight_id = Column(String, nullable=True)  # present only for MMA fight-tied market types
     tennis_match_id = Column(Integer, nullable=True)  # present only for Tennis match-tied market types
