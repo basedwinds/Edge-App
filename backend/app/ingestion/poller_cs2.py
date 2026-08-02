@@ -220,9 +220,33 @@ def refresh_kalshi_cs2_markets():
 
 
 def run_full_refresh_cs2():
-    refresh_cs2_matches()
-    refresh_cs2_ratings()
-    refresh_kalshi_cs2_markets()
+    """REAL BUG this fixes (found live 2026-08-02 via /health-check: "782 active
+    cs2 markets but the newest price snapshot is 189h old"): the Kalshi PRICE
+    refresh used to run LAST, behind refresh_cs2_matches(), whose HLTV/Liquipedia
+    sources are Cloudflare-gated and now hang or fail. One blocked scrape
+    therefore silently starved the whole sport of price updates -- 782 markets
+    that DO carry real quotes went ~8 days stale, so cs2 produced no edges and no
+    alerts, while valorant (identical structure, working scraper) stayed current.
+
+    Two changes: prices go FIRST (they're the time-sensitive part, and the market
+    upsert can create its own fallback match rows from Kalshi's team names, so it
+    doesn't depend on the scrape), and each stage is isolated so a failing one
+    can't starve the others. Note the scrape can HANG rather than raise, which
+    try/except alone wouldn't survive -- ordering is what actually protects the
+    prices here.
+
+    HONEST CAVEAT (measured, don't assume this is the whole fix):
+    refresh_kalshi_cs2_markets() is ITSELF slow -- it did not finish within 2
+    minutes when run alone, so ordering may not be sufficient on its own. It
+    crawls 4 Kalshi series and then upserts ~780 markets under the write lock.
+    If cs2 prices are STILL stale after this ships, the next thing to measure is
+    where that time actually goes (Kalshi pagination vs the per-event
+    find_or_create_upcoming_match work), rather than assuming the scrape."""
+    for step in (refresh_kalshi_cs2_markets, refresh_cs2_matches, refresh_cs2_ratings):
+        try:
+            step()
+        except Exception:
+            log.exception("cs2 refresh step %s failed; continuing", step.__name__)
     # Roster-change scrape removed 2026-07-23: the informational "Wait" badge
     # it fed was retired for esports (no post-roster-change accuracy penalty
     # found -- see scripts/calibrate_cs2_roster_window.py), so there's nothing
