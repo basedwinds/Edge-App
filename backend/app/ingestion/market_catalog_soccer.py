@@ -247,6 +247,31 @@ def upsert_kalshi_soccer_relegation_market(session: Session, row: dict) -> Marke
     return market
 
 
+def upsert_kalshi_soccer_team_points_market(session: Session, row: dict) -> Market:
+    """Season points ladder, no soccer_match_id -- same season-long shape as
+    league_winner/relegation above, but it also carries `line` (the points
+    threshold), since the same team appears on several rungs and the team alone
+    doesn't identify the market."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="team_points", sport="soccer",
+        )
+        session.add(market)
+    market.team = row["team"]
+    market.line = row["line"]
+    # group_label carries the division code, because that is what the router's
+    # _futures_division looks up to decide WHICH league's season sim prices a
+    # futures row. Leaving it null would strand every one of these markets
+    # unpriced with no visible error.
+    market.group_label = row["division"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                      yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
 def upsert_soccer_news_adjustment(session: Session, soccer_match_id: int, adjustment: NewsAdjustment) -> SoccerNewsAdjustmentCache:
     cache = session.get(SoccerNewsAdjustmentCache, soccer_match_id)
     if cache is None:

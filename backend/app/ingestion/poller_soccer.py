@@ -397,6 +397,7 @@ def refresh_kalshi_soccer_futures():
     rows = kalshi_soccer_client.get_league_winner_markets()
     relegation_rows = kalshi_soccer_client.get_relegation_markets()
     top_n_rows = kalshi_soccer_client.get_top_n_markets()
+    team_points_rows = kalshi_soccer_client.get_team_points_markets()
 
     with db_write_lock():
         session = SessionLocal()
@@ -407,13 +408,16 @@ def refresh_kalshi_soccer_futures():
                 market_catalog_soccer.upsert_kalshi_soccer_relegation_market(session, row)
             for row in top_n_rows:
                 market_catalog_soccer.upsert_kalshi_soccer_top_n_market(session, row)
+            for row in team_points_rows:
+                market_catalog_soccer.upsert_kalshi_soccer_team_points_market(session, row)
             session.commit()
             log.info(
                 "kalshi soccer futures: %d league_winner rows across %d leagues, %d relegation rows across %d leagues, "
-                "%d top-N rows (top_half/top4/top2, EPL only)",
+                "%d top-N rows (top_half/top4/top2, EPL only), %d team-points rows across %d leagues",
                 len(rows), len({r["division"] for r in rows}),
                 len(relegation_rows), len({r["division"] for r in relegation_rows}),
                 len(top_n_rows),
+                len(team_points_rows), len({r["division"] for r in team_points_rows}),
             )
         finally:
             session.close()

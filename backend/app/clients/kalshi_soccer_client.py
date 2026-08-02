@@ -120,6 +120,22 @@ RELEGATION_SERIES = {
 # during the same live scan -- EPL-only for now, same "ship what has real
 # inventory" precedent as everything else in this app.
 TOP_N_SERIES = {"E0": "KXEPLTOP"}
+
+# Season points ladders: "Will <team> finish the 2026-27 season with N+ points?".
+# Unlike every other futures series here, these are a LADDER -- one market per
+# (team, threshold) rather than one per team -- so a row needs both the team and
+# the number. Confirmed live 2026-08-02: 384 open markets across the five
+# leagues, each under a SINGLE event per league, yes_sub_title of the form
+# "Tottenham: 75+ Points", and the threshold carried in floor_strike as N-0.5
+# (74.5 for a 75+ market). All five were unquoted at the time -- the 2026-27
+# seasons had not kicked off -- which is expected, not a fault.
+TEAM_POINTS_SERIES = {
+    "E0": "KXEPLTEAMPOINTS",
+    "SP1": "KXLALIGATEAMPOINTS",
+    "I1": "KXSERIEATEAMPOINTS",
+    "D1": "KXBUNDESLIGATEAMPOINTS",
+    "F1": "KXLIGUE1TEAMPOINTS",
+}
 _TOP_N_EVENT_LABELS = {"TOPHALF": ("top_half", "EPL Top Half"), "TOP4": ("top4", "EPL Top 4"), "TOP2": ("top2", "EPL Top 2")}
 
 
@@ -378,6 +394,45 @@ def get_relegation_markets() -> list[dict]:
                     "group_label": group_label,
                     "ticker": m["ticker"],
                     "team": team,
+                    "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                    "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                    "last_price": _to_float(m.get("last_price_dollars")),
+                    "volume": _to_float(m.get("volume_fp")),
+                    "status": m.get("status"),
+                })
+    return rows
+
+
+def get_team_points_markets() -> list[dict]:
+    """One row per (league, team, points threshold) for the KX*TEAMPOINTS ladders.
+
+    Two things differ from the other per-team futures fetchers above. The team
+    name has to be split off yes_sub_title ("Tottenham: 75+ Points"), since the
+    same team appears on several rungs. And the threshold is taken from
+    floor_strike rather than parsed out of the title -- Kalshi already states it
+    numerically, and reading "75+" out of prose would break the moment a market
+    is worded differently. A row with no usable team or no floor_strike is
+    SKIPPED rather than guessed at: an unpriceable rung is better than a rung
+    priced against the wrong number."""
+    rows = []
+    for division, series_ticker in TEAM_POINTS_SERIES.items():
+        for ev in get_open_events(series_ticker):
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                sub = m.get("yes_sub_title") or ""
+                team = sub.split(":", 1)[0].strip()
+                floor = m.get("floor_strike")
+                if not team or floor is None:
+                    continue
+                rows.append({
+                    "event_ticker": ev["event_ticker"],
+                    "division": division,
+                    "ticker": m["ticker"],
+                    "team": team,
+                    "line": _to_float(floor),
                     "yes_bid": _to_float(m.get("yes_bid_dollars")),
                     "yes_ask": _to_float(m.get("yes_ask_dollars")),
                     "last_price": _to_float(m.get("last_price_dollars")),

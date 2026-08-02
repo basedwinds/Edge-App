@@ -61,7 +61,7 @@ from app.models.ladder_sanity import (
     looks_already_live_by_trading,
 )
 from app.models.news_adjustment.schema import NewsAdjustment
-from app.models.season_sim_soccer import SeasonSimResult, simulate_season
+from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season
 from app.models.staking import has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -560,7 +560,16 @@ _MARKET_TYPE_LABEL_TO_DIVISION.update({
     for threshold, group_label in kalshi_soccer_client._TOP_N_EVENT_LABELS.values()
 })
 
-_FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2"]
+# Season points ladders. group_label holds the division code itself (see
+# market_catalog_soccer.upsert_kalshi_soccer_team_points_market) rather than a
+# prose label, because these series have one event per league and no
+# human-readable label to key on.
+_MARKET_TYPE_LABEL_TO_DIVISION.update({
+    ("team_points", division): division
+    for division in kalshi_soccer_client.TEAM_POINTS_SERIES
+})
+
+_FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points"]
 
 _SIM_PROB_FIELD_BY_MARKET_TYPE = {
     "relegation": "relegation_prob",
@@ -621,9 +630,18 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         sim_result = sim_by_league.get(division) if division else None
         model_prob = None
         if sim_result is not None and m.team:
-            prob_field = _SIM_PROB_FIELD_BY_MARKET_TYPE.get(m.market_type, "champion_prob")
-            prob_dict = getattr(sim_result, prob_field)
-            model_prob = round(prob_dict.get(canonical_team_key(m.team), 0.0), 4)
+            if m.market_type == "team_points":
+                # Not a rank question -- read the simulated season-points
+                # distribution at this rung's threshold. Left unpriced (None) when
+                # the sim doesn't cover the team, rather than defaulting to 0.0
+                # the way the rank markets below do: on a points ladder 0.0 is a
+                # confident "will not reach", which is a fabricated price.
+                raw = prob_points_at_least(sim_result, canonical_team_key(m.team), m.line) if m.line is not None else None
+                model_prob = round(raw, 4) if raw is not None else None
+            else:
+                prob_field = _SIM_PROB_FIELD_BY_MARKET_TYPE.get(m.market_type, "champion_prob")
+                prob_dict = getattr(sim_result, prob_field)
+                model_prob = round(prob_dict.get(canonical_team_key(m.team), 0.0), 4)
         snap = snapshots_by_market.get(m.id)
         implied = _implied_prob(snap)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
@@ -637,7 +655,11 @@ def list_soccer_futures(session: Session = Depends(get_session)):
                 source=m.source,
                 team=m.team,
                 group_label=m.group_label,
-                line=None,
+                # Points threshold on team_points rungs, null on every other
+                # futures type. Was hardcoded None, which would have rendered
+                # "Arsenal" with no number -- the same unactionable-bet bug the
+                # WNBA spread and Discord alerts each hit.
+                line=m.line,
                 side=None,
                 implied_prob=implied,
                 yes_bid=snap.yes_bid if snap else None,
