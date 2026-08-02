@@ -820,12 +820,18 @@ function preferForCrossPlatformCollapse(candidate: RecommendedBetRow, existing: 
  * as a fresh opportunity -- consistent with the one-row-per-game cap below. */
 export function rowGameId(row: {
   nflGameId: string | null; nbaGameId?: string | null; wnbaGameId?: string | null;
-  mlbGameId?: string | null; mmaFightId?: string | null; tennisMatchId?: number | null;
+  mlbGameId?: string | null; cfbGameId?: string | null; mmaFightId?: string | null;
+  tennisMatchId?: number | null;
   soccerMatchId?: number | null; valorantMatchId?: number | null; cs2MatchId?: number | null;
   lolMatchId?: number | null;
 }): string | null {
   const gameId =
-    row.nflGameId || row.nbaGameId || row.mlbGameId || row.mmaFightId || row.tennisMatchId || row.soccerMatchId ||
+    row.nflGameId || row.nbaGameId || row.mlbGameId ||
+    // CFB ids are ESPN event ids, the same shape as NBA/WNBA's, so they are
+    // prefixed to avoid colliding across sports -- the same reason the esports
+    // ids below are prefixed.
+    (row.cfbGameId ? `cfb:${row.cfbGameId}` : null) ||
+    row.mmaFightId || row.tennisMatchId || row.soccerMatchId ||
     (row.valorantMatchId ? `valorant:${row.valorantMatchId}` : null) ||
     (row.cs2MatchId ? `cs2:${row.cs2MatchId}` : null) ||
     (row.lolMatchId ? `lol:${row.lolMatchId}` : null);
