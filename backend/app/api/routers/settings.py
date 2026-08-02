@@ -192,6 +192,9 @@ class SettingsOut(BaseModel):
     wnba_pool_dollars: float
     wnba_futures_pool_dollars: float
     wnba_weekly_pool_dollars: float
+    cfb_pool_dollars: float
+    cfb_futures_pool_dollars: float
+    cfb_weekly_pool_dollars: float
     mlb_pool_dollars: float
     mlb_futures_pool_dollars: float
     mlb_weekly_pool_dollars: float
@@ -311,6 +314,8 @@ def _build_settings_out(
     nba_futures_subpool_pct: float,
     wnba_allocation_pct: float,
     wnba_futures_subpool_pct: float,
+    cfb_allocation_pct: float,
+    cfb_futures_subpool_pct: float,
     mlb_allocation_pct: float,
     mlb_futures_subpool_pct: float,
     mma_allocation_pct: float,
@@ -345,6 +350,9 @@ def _build_settings_out(
     wnba_pool_dollars = bankroll_dollars * wnba_allocation_pct * _bs_scale
     wnba_futures_pool_dollars = wnba_pool_dollars * wnba_futures_subpool_pct
     wnba_weekly_pool_dollars = wnba_pool_dollars * (1.0 - wnba_futures_subpool_pct)
+    cfb_pool_dollars = bankroll_dollars * cfb_allocation_pct * _bs_scale
+    cfb_futures_pool_dollars = cfb_pool_dollars * cfb_futures_subpool_pct
+    cfb_weekly_pool_dollars = cfb_pool_dollars * (1.0 - cfb_futures_subpool_pct)
     mlb_pool_dollars = bankroll_dollars * mlb_allocation_pct * _bs_scale
     mlb_futures_pool_dollars = mlb_pool_dollars * mlb_futures_subpool_pct
     mlb_weekly_pool_dollars = mlb_pool_dollars * (1.0 - mlb_futures_subpool_pct)
@@ -402,6 +410,9 @@ def _build_settings_out(
         wnba_pool_dollars=wnba_pool_dollars,
         wnba_futures_pool_dollars=wnba_futures_pool_dollars,
         wnba_weekly_pool_dollars=wnba_weekly_pool_dollars,
+        cfb_pool_dollars=cfb_pool_dollars,
+        cfb_futures_pool_dollars=cfb_futures_pool_dollars,
+        cfb_weekly_pool_dollars=cfb_weekly_pool_dollars,
         mlb_pool_dollars=mlb_pool_dollars,
         mlb_futures_pool_dollars=mlb_futures_pool_dollars,
         mlb_weekly_pool_dollars=mlb_weekly_pool_dollars,
@@ -444,9 +455,15 @@ def _read_all(session: Session) -> SettingsOut:
         _get_float(session, NBA_ALLOCATION_PCT_KEY, DEFAULT_NBA_ALLOCATION_PCT),
         _get_float(session, NBA_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_NBA_FUTURES_SUBPOOL_PCT),
         _get_float(session, WNBA_ALLOCATION_PCT_KEY, DEFAULT_WNBA_ALLOCATION_PCT),
+        _get_float(session, WNBA_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_WNBA_FUTURES_SUBPOOL_PCT),
+        # NOTE: _build_settings_out takes these POSITIONALLY across 28 params.
+        # These two must stay adjacent and in this exact slot -- inserting them
+        # between wnba's allocation and its subpool silently shifted three values
+        # by one position, so WNBA's futures split became CFB's allocation and
+        # /settings returned wrong pools for both. It did not raise; the arity
+        # only broke because two were added rather than one.
         _get_float(session, CFB_ALLOCATION_PCT_KEY, DEFAULT_CFB_ALLOCATION_PCT),
         _get_float(session, CFB_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_CFB_FUTURES_SUBPOOL_PCT),
-        _get_float(session, WNBA_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_WNBA_FUTURES_SUBPOOL_PCT),
         _get_float(session, MLB_ALLOCATION_PCT_KEY, DEFAULT_MLB_ALLOCATION_PCT),
         _get_float(session, MLB_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_MLB_FUTURES_SUBPOOL_PCT),
         _get_float(session, MMA_ALLOCATION_PCT_KEY, DEFAULT_MMA_ALLOCATION_PCT),
