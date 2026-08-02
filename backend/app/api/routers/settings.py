@@ -237,6 +237,10 @@ class SettingsIn(BaseModel):
     cs2_futures_subpool_pct: float = DEFAULT_CS2_FUTURES_SUBPOOL_PCT
     lol_allocation_pct: float = DEFAULT_LOL_ALLOCATION_PCT
     lol_futures_subpool_pct: float = DEFAULT_LOL_FUTURES_SUBPOOL_PCT
+    # Racing was readable via SettingsOut but NOT settable here, so a racing
+    # allocation could never be synced to another machine (found 2026-08-02 while
+    # syncing the Vultr host, which was silently running default bankroll/pools).
+    racing_allocation_pct: float = DEFAULT_RACING_ALLOCATION_PCT
     fractional_kelly: float
     max_stake_fraction: float
     min_edge_to_bet: float
@@ -505,6 +509,7 @@ def update_settings(body: SettingsIn, session: Session = Depends(get_session)):
     _set_float(session, CS2_FUTURES_SUBPOOL_PCT_KEY, body.cs2_futures_subpool_pct)
     _set_float(session, LOL_ALLOCATION_PCT_KEY, body.lol_allocation_pct)
     _set_float(session, LOL_FUTURES_SUBPOOL_PCT_KEY, body.lol_futures_subpool_pct)
+    _set_float(session, RACING_ALLOCATION_PCT_KEY, body.racing_allocation_pct)
     _set_float(session, FRACTIONAL_KELLY_KEY, body.fractional_kelly)
     _set_float(session, MAX_STAKE_FRACTION_KEY, body.max_stake_fraction)
     _set_float(session, MIN_EDGE_TO_BET_KEY, body.min_edge_to_bet)
