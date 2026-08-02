@@ -8,10 +8,22 @@ is left in the raw feed and naturally drops out downstream: its ticker blob
 ("SPNCOO") splits to non-real abbreviations, so the matcher returns no game id
 and the Elo has no rating for those pseudo-teams -- no special-casing needed.
 """
+import re
+
 from app.clients.base import get_json, paginate
+from app.clients.kalshi_client import get_open_markets_for_series
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 MONEYLINE_SERIES = "KXWNBAGAME"
+SPREAD_SERIES = "KXWNBASPREAD"
+TOTAL_SERIES = "KXWNBATOTAL"
+
+# Spread market tickers glue the team code to a rung index with no separator
+# (confirmed live 2026-08-02: "KXWNBASPREAD-26AUG03PHXCHI-PHX7" = Phoenix, and
+# "...-CHI7" = Chicago, both on the same event). Splitting on the letter/digit
+# boundary resolves the team without needing a WNBA abbreviation table, unlike
+# the NBA client's prefix-matching approach.
+_SPREAD_SUFFIX_RE = re.compile(r"^([A-Z]+)\d+$")
 
 
 def get_open_events(series_ticker: str = MONEYLINE_SERIES) -> list[dict]:
@@ -64,3 +76,50 @@ def get_moneyline_markets(series: str = MONEYLINE_SERIES) -> list[dict]:
                 }
             )
     return rows
+
+
+def _ladder_rows(series: str, with_team: bool) -> list[dict]:
+    """Shared spread/total ladder fetch. Uses the BULK per-series markets call
+    (see kalshi_client.get_open_markets_for_series) rather than one request per
+    event -- the per-event pattern is what stalled the cs2 refresh with Kalshi
+    429s (fixed 2026-08-02), so WNBA is built without inheriting it.
+
+    Row shape mirrors kalshi_nba_client's ladder rows so the catalog upsert can
+    follow the NBA one. `line` comes from floor_strike, which Kalshi populates
+    directly on both series (confirmed live: spread "greater/6.5", total
+    "greater/186.5")."""
+    events = {ev["event_ticker"]: ev for ev in get_open_events(series)}
+    rows = []
+    for m in get_open_markets_for_series(series):
+        ev_ticker = m.get("event_ticker")
+        if ev_ticker not in events or m.get("floor_strike") is None:
+            continue
+        row = {
+            "event_ticker": ev_ticker,
+            "event_title": events[ev_ticker].get("title", ""),
+            "ticker": m["ticker"],
+            "line": float(m["floor_strike"]),
+            "yes_bid": _to_float(m.get("yes_bid_dollars")),
+            "yes_ask": _to_float(m.get("yes_ask_dollars")),
+            "last_price": _to_float(m.get("last_price_dollars")),
+            "volume": _to_float(m.get("volume_fp")),
+            "status": m.get("status"),
+        }
+        if with_team:
+            suffix = m["ticker"].rsplit("-", 1)[-1]
+            match = _SPREAD_SUFFIX_RE.match(suffix)
+            if not match:
+                continue  # unparseable team code -> skip rather than guess
+            row["team_abbr_kalshi"] = match.group(1)
+        rows.append(row)
+    return rows
+
+
+def get_spread_markets() -> list[dict]:
+    """Per-TEAM ladder: "<Team> wins the game by over X.5 points?"."""
+    return _ladder_rows(SPREAD_SERIES, with_team=True)
+
+
+def get_total_markets() -> list[dict]:
+    """Game-level ladder: "Over X.5 points scored" (no team side)."""
+    return _ladder_rows(TOTAL_SERIES, with_team=False)

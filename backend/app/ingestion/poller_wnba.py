@@ -72,6 +72,35 @@ def refresh_kalshi_wnba_moneyline():
             session.close()
 
 
+def refresh_kalshi_wnba_spread_total():
+    """Spread + total ladders (KXWNBASPREAD / KXWNBATOTAL). WNBA was moneyline-
+    only until 2026-08-02 even though Kalshi has run these series all along --
+    both reuse the existing WNBA Elo via the same NBA-shaped models, so this is
+    ingestion + wiring rather than a new model."""
+    game_index = _load_game_index_readonly()
+    spreads = kalshi_wnba_client.get_spread_markets()
+    totals = kalshi_wnba_client.get_total_markets()
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            matched = unmatched = 0
+            for row in spreads:
+                game_id = match_kalshi_event_ticker(row["event_ticker"], game_index)
+                matched += game_id is not None
+                unmatched += game_id is None
+                market_catalog_wnba.upsert_kalshi_wnba_spread_market(session, row, game_id)
+            for row in totals:
+                game_id = match_kalshi_event_ticker(row["event_ticker"], game_index)
+                matched += game_id is not None
+                unmatched += game_id is None
+                market_catalog_wnba.upsert_kalshi_wnba_total_market(session, row, game_id)
+            session.commit()
+            log.info("kalshi wnba spread/total: %d spread + %d total rows, %d matched, %d unmatched",
+                     len(spreads), len(totals), matched, unmatched)
+        finally:
+            session.close()
+
+
 def settle_placed_bets_wnba():
     from app.models.bet_settlement import settle_finished_games
     with db_write_lock():
@@ -86,4 +115,5 @@ def run_full_refresh_wnba():
     refresh_wnba_games()
     refresh_wnba_ratings()
     refresh_kalshi_wnba_moneyline()
+    refresh_kalshi_wnba_spread_total()
     settle_placed_bets_wnba()
