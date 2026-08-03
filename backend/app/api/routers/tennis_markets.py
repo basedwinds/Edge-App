@@ -424,6 +424,29 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     # start means the start was never revised (see _start_time_untrusted).
     _RESCHEDULE_GAP = datetime.timedelta(hours=10)
 
+    # A market claiming to be UPCOMING that has already traded heavily has, in
+    # practice, already started -- Kalshi keeps quoting through play while
+    # occurrence_datetime stays at the original estimate.
+    #
+    # Measured over live tennis markets: among those whose stored start is still
+    # in the FUTURE, median volume is 1 and p75 is 623 -- pre-match ITF markets
+    # are essentially untraded. Yet 15% carry over 20k. That tail is the live
+    # matches. The reported case (Nellie Taraba Wallberg vs Marie Vogt) showed
+    # volume 89,325 while claiming to start four hours later.
+    #
+    # Threshold from the measured pre-match distribution, not a guess: median 1,
+    # p75 623. 5,000 is ~8x the p75, so a genuinely quiet upcoming market is
+    # nowhere near it, while Tyler Zink vs Millen Hurrion (6,727 and 11,390 while
+    # claiming to start two hours later) trips it. This will block the occasional
+    # genuinely heavily-traded upcoming match; that is the accepted trade, since
+    # betting into a live match is the failure that actually costs money.
+    _PREMATCH_VOLUME_CEILING = 5_000.0
+
+    def _traded_like_live(m: Market) -> bool:
+        snap = all_snapshots.get(m.id)
+        vol = snap.volume if snap else None
+        return vol is not None and vol >= _PREMATCH_VOLUME_CEILING
+
     def _start_time_untrusted(m: Market) -> bool:
         """True when this match's stored start cannot be believed.
 
@@ -483,6 +506,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         and not _match_looks_live_by_trading(m)
         and not _match_pair_resolved(m)
         and not _start_time_untrusted(m)
+        and not _traded_like_live(m)
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]
