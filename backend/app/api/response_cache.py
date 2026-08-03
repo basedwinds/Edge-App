@@ -32,7 +32,33 @@ from starlette.responses import Response
 # cache kept serving it as a $20 recommendation. A stale PRICE is a minor
 # annoyance; a stale SAFETY DECISION recommends a bet on a match already in
 # play, so the window has to be short.
-CACHE_TTL_SECONDS = 60
+# 2026-08-03, SECOND revision, after the first one caused a user-visible
+# regression. Lowering this to 60s (for the good reason above) ignored the fact
+# that the TTL and the WARMER are a matched pair: the warmer ran every 200s, so a
+# 60s TTL left the cache EMPTY for ~140s of every cycle. During that hole a
+# request had to compute live -- and the combined /all page fires ~20 endpoints
+# at once -- so tennis appeared for about a minute, vanished for two, and came
+# back, over and over. That is precisely the flicker the user reported.
+#
+# The constants are now sized against a MEASURED full warm pass: 61.7s across 20
+# endpoints (slowest: /tennis/futures 14.6s, /tennis/markets 11.9s). A 60s TTL
+# was not merely mismatched with the 200s interval -- it was shorter than one
+# pass, so no interval could have kept it covered.
+#
+# The invariant to preserve when touching either number:
+#     CACHE_TTL_SECONDS  >  warm interval + one full pass
+# Currently 180 > 90 + ~62, so every entry is refreshed with roughly 30s to
+# spare. See scheduler.py's cache_warm job -- change the two together or the
+# flicker comes straight back.
+#
+# This does mean a safety decision can now be up to ~3 minutes old rather than
+# 1. That is still better than the 300s it was before today, but it is a
+# stop-gap, not the real answer: the right fix is to re-evaluate the cheap
+# time-based gates (already_started/already_decided) when a cached payload is
+# SERVED, so cache age cannot produce a stale safety decision at all. Logged as
+# the follow-up rather than bolted on here, since it touches every sport's
+# payload shape, not just tennis.
+CACHE_TTL_SECONDS = 180
 # The warmer sends this header to force a recompute+recache even when the
 # current entry is still fresh, so the cache never ages out from under a user.
 REFRESH_HEADER = "x-cache-refresh"

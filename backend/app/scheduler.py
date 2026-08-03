@@ -352,7 +352,12 @@ def start():
     scheduler.add_job(
         run_cache_warm,
         "interval",
-        seconds=200,
+        # Paired with response_cache.CACHE_TTL_SECONDS (180) and a MEASURED
+        # 61.7s full pass: 90 + 62 < 180, so an entry is always refreshed before
+        # it can expire. At the old 200s against a 60s TTL the cache sat empty
+        # ~140s of every cycle, which is what made tennis flicker in and out of
+        # Recommended. Change these two together.
+        seconds=90,
         id="cache_warm",
         next_run_time=base_tick + timedelta(seconds=11 * JOB_STAGGER_SECONDS),
         replace_existing=True,
