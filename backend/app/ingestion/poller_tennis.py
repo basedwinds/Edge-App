@@ -30,6 +30,12 @@ log = logging.getLogger("poller_tennis")
 # listed there is not the fixture our market is for -- see refresh_tennis_start_times.
 _MAX_START_CORRECTION = datetime.timedelta(hours=12)
 
+# Sources that are a REAL observation of when play began, as opposed to a
+# platform's own never-revised estimate. One of these may freely replace
+# another; the cross-day sanity window only guards replacing a PLATFORM time,
+# where a mismatched fixture would be the likely explanation.
+_REAL_START_SOURCES = ("flashscore", "tennisexplorer")
+
 
 def refresh_tennis_ratings():
     elo_service_tennis.refresh_ratings()
@@ -235,13 +241,22 @@ def refresh_tennis_start_times():
 
     from app.db.models import TennisMatch
 
+    from app.clients import flashscore_tennis_client
+
     try:
         with TennisExplorerClient() as client:
             times = client.get_scheduled_times()
     except Exception:
         log.exception("tennisexplorer schedule fetch failed")
-        return
-    if not times:
+        times = {}
+    # Never raises and returns {} on any failure, so one dead source degrades
+    # this to the other rather than skipping the refresh entirely.
+    flash = {
+        pair: state["start"].strftime("%Y-%m-%dT%H:%M:%SZ")
+        for pair, state in flashscore_tennis_client.get_match_states().items()
+        if state.get("start")
+    }
+    if not times and not flash:
         return
 
     def _key(full_name: str | None) -> str | None:
@@ -266,7 +281,24 @@ def refresh_tennis_start_times():
                 a, b = _key(match.player_a_name), _key(match.player_b_name)
                 if not a or not b:
                     continue
-                fresh = times.get(frozenset((a, b)))
+                pair = frozenset((a, b))
+                # Flashscore keys are lowercase, and TennisMatch.player_*_key is
+                # ALREADY in that exact space ("berrettini m."), so match on the
+                # stored keys directly rather than re-deriving from the display
+                # name -- _key() above produces title case for tennisexplorer,
+                # which silently matched nothing against flashscore.
+                fs_pair = frozenset((match.player_a_key or "", match.player_b_key or ""))
+                # Flashscore first (broader: it carries ~630 pairs across a
+                # 4-day window against tennisexplorer's ~250 for today only, and
+                # it reaches the rescheduled tour matches that were the worst
+                # offenders). tennisexplorer is applied second so it can refine
+                # today's order of play. Where both have a match they AGREE --
+                # checked exactly on Berrettini/Navone, Kopriva/Galarneau and
+                # Mejia/Landaluce -- so the order is about coverage, not trust.
+                fresh = None
+                for candidate, tag in ((flash.get(fs_pair), "flashscore"), (times.get(pair), "tennisexplorer")):
+                    if candidate:
+                        fresh, source_tag = candidate, tag
                 if not fresh or fresh == match.estimated_start_time:
                     continue
                 # SANITY WINDOW. /matches/ is a SINGLE day's order of play, so a
@@ -278,7 +310,7 @@ def refresh_tennis_start_times():
                 # get it wrongly filtered out as "already started". Keep the
                 # platform value in that case; a stale time is recoverable on the
                 # next pass, a match silently dropped from Recommended is not.
-                if match.start_time_source != "tennisexplorer" and match.estimated_start_time:
+                if match.start_time_source not in _REAL_START_SOURCES and match.estimated_start_time:
                     try:
                         held = datetime.datetime.fromisoformat(match.estimated_start_time.replace("Z", "+00:00"))
                         got = datetime.datetime.fromisoformat(fresh.replace("Z", "+00:00"))
@@ -288,10 +320,14 @@ def refresh_tennis_start_times():
                         skipped += 1
                         continue
                 match.estimated_start_time = fresh
-                match.start_time_source = "tennisexplorer"
+                match.start_time_source = source_tag
                 updated += 1
             session.commit()
-            log.info("tennis start times refreshed from tennisexplorer: %d updated, %d rejected as cross-day", updated, skipped)
+            log.info(
+                "tennis start times refreshed: %d updated, %d rejected as cross-day "
+                "(flashscore %d pairs, tennisexplorer %d pairs)",
+                updated, skipped, len(flash), len(times),
+            )
         finally:
             session.close()
 

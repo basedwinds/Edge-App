@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.api.routers.markets import _batch_latest_snapshots, _edge_sentence, _implied_prob, _seeded_choice
 from app.api.routers.settings import get_staking_params, get_flat_params, get_tennis_pool_dollars, get_unit_dollars
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut, TennisMarketOut
+from app.clients import flashscore_tennis_client
 from app.clients.tennisexplorer_client import TennisExplorerClient
 from app.db.database import get_session
 from app.db.models import Market, TennisMatch
@@ -582,12 +583,36 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     def _match_looks_live_by_trading(m: Market) -> bool:
         return m.tennis_match_id in matches_live_by_trading
 
+    # EIGHTH gap, and the first one backed by a POSITIVE in-play signal rather
+    # than an inference from a timestamp. Kalshi and Polymarket cannot report
+    # that a match has started -- every candidate field was tested and failed
+    # (see flashscore_tennis_client's docstring) -- so all seven checks above
+    # ultimately reason from estimated_start_time, which for a rescheduled match
+    # was measured wrong on 38/38 tour matches by a median of 26 hours.
+    #
+    # Flashscore publishes an explicit status, so this hides a match only when a
+    # real source says it is in play. It is deliberately one-directional: a match
+    # the feed does not know about, or any feed failure at all, leaves everything
+    # exactly as it is. That is the guarantee that matters here -- the app can
+    # miss hiding a started match, but it cannot hide a match that has not
+    # started, which is the failure that costs a real bet.
+    live_pairs = _flashscore_live_pairs()
+    live_match_ids = {
+        mid for mid, match in matches_by_id.items()
+        if match.player_a_key and match.player_b_key
+        and frozenset((match.player_a_key, match.player_b_key)) in live_pairs
+    } if live_pairs else set()
+
+    def _match_live_on_flashscore(m: Market) -> bool:
+        return m.tennis_match_id in live_match_ids
+
     markets = [
         m for m in markets
         if not _match_already_decided(m)
         and not _match_already_started(m)
         and not _match_ladder_resolved(m)
         and not _match_looks_live_by_trading(m)
+        and not _match_live_on_flashscore(m)
         and not _match_pair_resolved(m)
         and not _start_time_untrusted(m)
         and (m.status or "active") == "active"
@@ -664,6 +689,39 @@ def list_tennis_markets(session: Session = Depends(get_session)):
 # (a real draw changes at most a few times a day, well within a TTL this
 # short). Module-level, same "cheap in-process cache" pattern as MLB's
 # BatterOpsCache.
+# Flashscore's in-play flag, cached off the request path. Short TTL because this
+# is a SAFETY decision: a match going live is exactly the event we need to react
+# to quickly, and the feed is 5 cheap requests.
+_LIVE_CACHE_TTL_SECONDS = 60
+_live_cache: dict[str, object] = {"at": None, "data": frozenset()}
+
+
+def _flashscore_live_pairs() -> frozenset:
+    """Pairs Flashscore positively reports as IN PLAY.
+
+    FAILS OPEN, and that is the whole design. On any error -- including the
+    x-fsign token rotating and every request 4xx-ing -- this returns the last
+    good set, or an EMPTY set before the first success. An empty set hides
+    nothing, so a dead feed degrades to exactly today's behaviour rather than
+    blanking the board or hiding genuinely upcoming matches.
+    """
+    import time
+
+    now = time.monotonic()
+    at = _live_cache["at"]
+    if isinstance(at, float) and now - at < _LIVE_CACHE_TTL_SECONDS:
+        return _live_cache["data"]  # type: ignore[return-value]
+    try:
+        fresh = frozenset(flashscore_tennis_client.get_live_pairs())
+    except Exception:
+        return _live_cache["data"]  # type: ignore[return-value]
+    # Only advance the cache on a real answer. An empty result is indistinguishable
+    # from "feed down", so it must not overwrite a good set and un-hide live matches.
+    if fresh:
+        _live_cache["at"], _live_cache["data"] = now, fresh
+    return _live_cache["data"]  # type: ignore[return-value]
+
+
 _DRAW_CACHE_TTL_SECONDS = 600
 _draw_cache: dict[tuple[str, str], tuple[float, tuple[list[list[str]] | None, str | None]]] = {}
 
