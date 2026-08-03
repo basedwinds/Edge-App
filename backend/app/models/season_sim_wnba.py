@@ -25,7 +25,11 @@ import numpy as np
 
 from app.clients import espn_wnba_client
 from app.ingestion import wnba_data
+from app.ingestion.market_matcher_wnba import KALSHI_TEAM_ABBRS, to_espn_abbr
 from app.models.baseline import elo_service_wnba
+
+# The 15 real franchises, in ESPN abbreviations (the form WnbaGame stores).
+REAL_TEAMS = {to_espn_abbr(a) for a in KALSHI_TEAM_ABBRS}
 
 log = logging.getLogger("season_sim_wnba")
 
@@ -61,6 +65,15 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
     # Regular season only: preseason games don't count toward a win total, and
     # including them would inflate every team.
     games = [g for g in games if g.get("game_type") == "REG"]
+    # ESPN tags the All-Star game "REG" too, and its participants are the exhibition
+    # squads (2026: "COOP" / "SPO"), not franchises. They only ever play each other,
+    # so no real team's win count is affected -- but they would otherwise appear as
+    # two extra "teams" in the output, and an abbreviation collision with a real
+    # franchise would silently corrupt a win total. Restrict to real franchises.
+    games = [
+        g for g in games
+        if g["home_team"] in REAL_TEAMS and g["away_team"] in REAL_TEAMS
+    ]
     if not games:
         return {}
 
@@ -81,8 +94,29 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
         probs.append(float(p))
         pair.append((idx[h], idx[a]))
 
+    # REFUSE to price off a schedule whose remaining games mostly failed to rate.
+    # Skipping them doesn't produce a wide distribution, it produces a POINT MASS
+    # at the banked wins -- every threshold below it reads 1.0 and every one above
+    # reads 0.0, which is a certainty the data does not support. Caught live: a
+    # cold Elo cache (get_home_win_prob returns None until refresh_ratings runs)
+    # made every remaining game unrateable and priced MIN 25+ wins at exactly 1.0,
+    # with a real stake attached. An empty dict shows "no season projection"
+    # instead, which is the honest answer.
+    unplayed = sum(
+        1 for g in games
+        if g.get("home_score") is None or g.get("away_score") is None
+    )
+    if unplayed and len(probs) < 0.5 * unplayed:
+        log.error(
+            "wnba season sim: only %d of %d remaining games could be rated -- "
+            "refusing to return a distribution", len(probs), unplayed,
+        )
+        return {}
+
     counts: dict[str, dict[int, int]] = {t: {} for t in teams}
     if not probs:
+        # Season genuinely complete: every game has a real result, so a point mass
+        # at the final win count is correct rather than a fabricated certainty.
         for t in teams:
             counts[t][int(banked[idx[t]])] = trials
         return counts
@@ -127,6 +161,11 @@ def warm(trials: int = 4000) -> None:
         if hit and now - hit[0] < _TTL:
             return
     try:
+        # Load the Elo cache first -- it starts empty, and without this every
+        # remaining game rates None. run_full_refresh_wnba happens to call
+        # refresh_wnba_ratings beforehand, but relying on caller order is what
+        # made a cold sim return certainties (see the guard in simulate).
+        elo_service_wnba.refresh_ratings()
         dist = simulate(trials=trials)
     except Exception:
         log.exception("wnba season sim failed")

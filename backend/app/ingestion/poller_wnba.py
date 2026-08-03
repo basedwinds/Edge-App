@@ -50,7 +50,6 @@ def refresh_wnba_games():
 
 
 def refresh_wnba_ratings():
-    from app.models.baseline import elo_service_wnba
     elo_service_wnba.refresh_ratings()
 
 
@@ -126,6 +125,29 @@ def refresh_kalshi_wnba_halves():
             session.close()
 
 
+def refresh_wnba_season_sim():
+    """Season win-total Monte Carlo, warmed off the request path -- it fetches
+    the season-wide schedule (one ESPN call per day), far too slow for a
+    request."""
+    season_sim_wnba.warm()
+
+
+def refresh_kalshi_wnba_win_totals():
+    """KXWNBAWINS ladders. Season-long, so no game match is attempted."""
+    rows = kalshi_wnba_client.get_win_total_markets()
+    if not rows:
+        return
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for row in rows:
+                market_catalog_wnba.upsert_kalshi_wnba_win_total_market(session, row)
+            session.commit()
+            log.info("kalshi wnba win totals: %d rows", len(rows))
+        finally:
+            session.close()
+
+
 def settle_placed_bets_wnba():
     from app.models.bet_settlement import settle_finished_games
     with db_write_lock():
@@ -142,4 +164,6 @@ def run_full_refresh_wnba():
     refresh_kalshi_wnba_moneyline()
     refresh_kalshi_wnba_spread_total()
     refresh_kalshi_wnba_halves()
+    refresh_wnba_season_sim()
+    refresh_kalshi_wnba_win_totals()
     settle_placed_bets_wnba()

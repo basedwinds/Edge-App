@@ -25,9 +25,10 @@ from app.models import calibration_temp
 from app.models import game_lines_wnba
 from app.models.baseline import elo_service_wnba, scoring_ratings_wnba
 from app.models.baseline.elo import implied_elo_diff
+from app.models import season_sim_wnba
 from app.models.baseline.elo_wnba import HOME_COURT_ADV
 from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
-from app.models.staking import has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 
 router = APIRouter(prefix="/wnba", tags=["wnba"])
 
@@ -40,6 +41,13 @@ GAME_MARKET_TYPES = {
     "first_half_winner", "first_half_spread", "first_half_total",
     "second_half_winner", "second_half_spread", "second_half_total",
 }
+# Season-long ladders (KXWNBAWINS). These have NO wnba_game_id, so they must
+# bypass the per-game final/started guards below -- running them through those
+# would silently drop every season row (the trap that would have dropped all of
+# CFB's season markets). They also draw on the futures sub-pool, not the weekly
+# one, at the reduced futures unit size.
+SEASON_MARKET_TYPES = {"win_total"}
+ALL_MARKET_TYPES = GAME_MARKET_TYPES | SEASON_MARKET_TYPES
 _HALF_OF = {"first": 1, "second": 2}
 # Kalshi outcome labels that are NOT a team. A half can end level, so the winner
 # markets carry a TIE leg -- see _half_model_prob for the bug this prevents.
@@ -173,7 +181,7 @@ def _half_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
 
 @router.get("/markets", response_model=list[WnbaMarketOut])
 def list_wnba_markets(session: Session = Depends(get_session)):
-    markets = session.query(Market).filter(Market.sport == "wnba", Market.market_type.in_(GAME_MARKET_TYPES)).all()
+    markets = session.query(Market).filter(Market.sport == "wnba", Market.market_type.in_(ALL_MARKET_TYPES)).all()
     # Computed ONCE per request, not per market: there are ~60 total markets per
     # slate and this walks every finished game in the season.
     scoring = scoring_ratings_wnba.compute_current_scoring_ratings()
@@ -201,9 +209,14 @@ def list_wnba_markets(session: Session = Depends(get_session)):
             return False
         return now_utc >= kickoff
 
-    markets = [m for m in markets if not _game_already_final(m) and not _game_already_started(m)]
+    markets = [
+        m for m in markets
+        if m.market_type in SEASON_MARKET_TYPES
+        or (not _game_already_final(m) and not _game_already_started(m))
+    ]
+    win_dist, sim_trials = season_sim_wnba.get()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
-    weekly_pool, _futures_pool = get_wnba_pool_dollars(session)
+    weekly_pool, futures_pool = get_wnba_pool_dollars(session)
     unit_dollars = get_unit_dollars(session)
     fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)
     staking_mode, flat_marginal, flat_full = get_flat_params(session)
@@ -220,7 +233,16 @@ def list_wnba_markets(session: Session = Depends(get_session)):
 
         model_prob = None
         no_baseline_reason = None
-        if game is not None:
+        if m.market_type == "win_total":
+            if not win_dist:
+                no_baseline_reason = "Season simulation not warm yet."
+            elif m.line is None or m.team not in win_dist:
+                no_baseline_reason = "No season projection for this team."
+            else:
+                model_prob = season_sim_wnba.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
+                if model_prob is not None:
+                    model_prob = round(model_prob, 4)
+        elif game is not None:
             no_baseline_reason = NO_BASELINE_REASONS.get(game.game_type)
             if no_baseline_reason is None and m.market_type == "moneyline":
                 model_prob = _moneyline_model_prob(m, game)
@@ -237,7 +259,12 @@ def list_wnba_markets(session: Session = Depends(get_session)):
         # until the bucket is well-sampled -- see clv_selection.py).
         if kelly is not None and not is_bucket_enabled(clv_stats, "wnba", m.market_type):
             kelly = None
-        stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)
+        _is_futures = m.market_type in SEASON_MARKET_TYPES
+        stake_dollars = size_stake_dollars(
+            staking_mode, kelly, futures_pool if _is_futures else weekly_pool,
+            model_prob, implied, unit_dollars, flat_marginal, flat_full,
+            FUTURES_UNIT_SCALE if _is_futures else 1.0,
+        )
 
         out.append(
             WnbaMarketOut(
@@ -247,7 +274,8 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 side=m.side,
                 source=m.source,
                 team=m.team,
-                game_label=f"{game.away_team} @ {game.home_team}" if game else None,
+                game_label=(f"{game.away_team} @ {game.home_team}" if game
+                            else (f"{m.team} season wins" if m.market_type == "win_total" else None)),
                 wnba_game_id=m.wnba_game_id,
                 gameday=game.gameday if game else None,
                 gametime=game.gametime if game else None,
@@ -263,7 +291,7 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 kelly_fraction=kelly,
                 suggested_stake_dollars=stake_dollars,
                 suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
-                stake_pool="weekly" if kelly is not None else None,
+                stake_pool=(("futures" if _is_futures else "weekly") if kelly is not None else None),
             )
         )
     out.sort(key=lambda m: (m.gameday or "9999", m.game_label or ""))

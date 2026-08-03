@@ -22,6 +22,7 @@ TOTAL_SERIES = "KXWNBATOTAL"
 # constants. The winner series carry no floor_strike (they are "which team wins
 # the half", not a threshold), so they use the moneyline fetch shape rather than
 # the ladder one.
+WIN_TOTAL_SERIES = "KXWNBAWINS"   # season win ladders (45 open, 15 teams)
 HALF_WINNER_SERIES = {1: "KXWNBA1HWINNER", 2: "KXWNBA2HWINNER"}
 HALF_SPREAD_SERIES = {1: "KXWNBA1HSPREAD", 2: "KXWNBA2HSPREAD"}
 HALF_TOTAL_SERIES = {1: "KXWNBA1HTOTAL", 2: "KXWNBA2HTOTAL"}
@@ -147,3 +148,35 @@ def get_half_spread_markets(half: int) -> list[dict]:
 def get_half_total_markets(half: int) -> list[dict]:
     """Game-level ladder: "Over X.5 points in the Nth half"."""
     return _ladder_rows(HALF_TOTAL_SERIES[half], with_team=False)
+
+
+def get_win_total_markets() -> list[dict]:
+    """Season win ladders. Team comes from the EVENT ticker suffix
+    ("KXWNBAWINS-26CONN" -> "CONN", after stripping the two-digit season) --
+    yes_sub_title here is "20+ wins", not a team, so there is no name to fall
+    back on. The suffix is a KALSHI abbreviation, so callers must map it through
+    to_espn_abbr (CONN -> CON, PDX -> POR) before matching a team.
+
+    floor_strike is an INTEGER here (20 means 20+), matching CFB's win ladders
+    rather than the soccer points ladders' N-0.5."""
+    out = []
+    for m in get_open_markets_for_series(WIN_TOTAL_SERIES):
+        ev = m.get("event_ticker") or ""
+        floor = m.get("floor_strike")
+        if not ev or not m.get("ticker") or floor is None:
+            continue
+        abbr = re.sub(r"^\d+", "", ev.rsplit("-", 1)[-1])
+        if not abbr:
+            continue
+        out.append({
+            "event_ticker": ev,
+            "ticker": m["ticker"],
+            "team_abbr_kalshi": abbr,
+            "line": float(floor),
+            "yes_bid": _to_float(m.get("yes_bid_dollars")),
+            "yes_ask": _to_float(m.get("yes_ask_dollars")),
+            "last_price": _to_float(m.get("last_price_dollars")),
+            "volume": _to_float(m.get("volume_fp")),
+            "status": m.get("status"),
+        })
+    return out

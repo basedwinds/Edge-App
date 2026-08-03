@@ -62,7 +62,7 @@ async function loadCombined(): Promise<RecommendedBetRow[]> {
   const rows = [
     ...buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).rows,
     ...buildNbaRecommendedBets(nbaM, [], s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars).rows,
-    ...buildWnbaRecommendedBets(wnbaM, s.wnba_weekly_pool_dollars).rows,
+    ...buildWnbaRecommendedBets(wnbaM, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars).rows,
     ...buildMlbRecommendedBets(mlbM, [], s.mlb_weekly_pool_dollars, s.mlb_futures_pool_dollars).rows,
     ...buildMmaRecommendedBets(mmaM, s.mma_weekly_pool_dollars).rows,
     ...buildTennisRecommendedBets(tenM, s.tennis_weekly_pool_dollars).rows,
