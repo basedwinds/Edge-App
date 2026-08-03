@@ -29,6 +29,20 @@ log = logging.getLogger("scheduler")
 scheduler = BackgroundScheduler()
 
 
+def run_stuck_bet_check():
+    """Reports pending bets whose event finished long ago -- the shared symptom
+    of every settlement/timing bug found 2026-08-03, each of which was spotted by
+    the user rather than the app. Only logs; never raises."""
+    session = SessionLocal()
+    try:
+        from app.models.stuck_bet_check import report_stuck_bets
+        report_stuck_bets(session)
+    except Exception:
+        log.exception("stuck-bet check crashed")
+    finally:
+        session.close()
+
+
 def run_sanity_check():
     """Catches the "dead/decided market shown as live" bug class (see
     dead_market_sanity_check.py's own docstring) -- runs after the price
@@ -299,6 +313,15 @@ def start():
         minutes=20,
         id="wnba_season_sim",
         next_run_time=datetime.now() + timedelta(seconds=90),
+        replace_existing=True,
+    )
+    # Hourly: cheap DB-only scan, no network, no per-sport knowledge.
+    scheduler.add_job(
+        run_stuck_bet_check,
+        "interval",
+        hours=1,
+        id="stuck_bet_check",
+        next_run_time=datetime.now() + timedelta(seconds=150),
         replace_existing=True,
     )
     scheduler.add_job(
