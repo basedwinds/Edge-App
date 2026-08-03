@@ -309,14 +309,49 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     # cycles' worth of slack) essentially certainly isn't live-listed by
     # either platform anymore.
     all_snapshots = _batch_latest_snapshots(session, [m.id for m in markets])
-    STALE_AFTER = datetime.timedelta(minutes=20)
+
+    # THIS IS MEASURED AGAINST THE FEED, NOT THE WALL CLOCK, and that is the
+    # whole point. The wall-clock version was the cause of the user-reported
+    # FLICKER: tennis matches vanishing from Recommended and reappearing minutes
+    # later, repeatedly.
+    #
+    # The old comment above justified 20 minutes as "4 missed 5-minute cycles'
+    # worth of slack". That premise is simply false in practice. Measured over
+    # 6 hours of real snapshot history (41 write bursts): the tennis refresh
+    # lands at a MEDIAN gap of 8 minutes, not 5, with a long tail -- real
+    # observed gaps of 16, 17, 21 and 26 minutes. The refresh does six sequential
+    # jobs over hundreds of events and routinely overruns its own 5-minute
+    # interval, so the scheduler skips the overlapping run.
+    #
+    # Every gap past 20 minutes therefore tipped EVERY tennis market over the
+    # staleness line at once, emptying the board until the next burst refilled
+    # it. Nothing was wrong with the matches; the poll was just late.
+    #
+    # Comparing each market against the newest snapshot in the feed instead is
+    # self-calibrating: when the whole poll runs late, everything shifts together
+    # and nothing is dropped, while a single market that stops updating WHILE
+    # its neighbours keep ticking -- the genuine "delisted, price frozen" case
+    # this gate exists to catch -- still stands out immediately.
+    STALE_BEHIND_FEED = datetime.timedelta(minutes=20)
+    # If the feed itself dies, "behind the feed" would keep every frozen market
+    # alive forever, so an absolute backstop still applies. Set well past the
+    # worst observed gap so normal lateness never reaches it.
+    FEED_DEAD_AFTER = datetime.timedelta(hours=2)
+
+    _snap_times = [
+        (s.ts if s.ts.tzinfo else s.ts.replace(tzinfo=datetime.timezone.utc))
+        for s in all_snapshots.values() if s is not None and s.ts is not None
+    ]
+    feed_latest = max(_snap_times) if _snap_times else None
 
     def _market_stale(m: Market) -> bool:
         snap = all_snapshots.get(m.id)
         if snap is None or snap.ts is None:
             return False
         ts = snap.ts if snap.ts.tzinfo else snap.ts.replace(tzinfo=datetime.timezone.utc)
-        return now_utc - ts > STALE_AFTER
+        if feed_latest is None or now_utc - feed_latest > FEED_DEAD_AFTER:
+            return now_utc - ts > STALE_BEHIND_FEED
+        return feed_latest - ts > STALE_BEHIND_FEED
 
     # FIFTH gap (2026-07-19, user-reported): a match can be genuinely
     # IN PROGRESS -- not yet decided, not stale, status still "active" on
