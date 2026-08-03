@@ -209,7 +209,70 @@ def refresh_tennis_results():
         log.exception("tennis results backfill failed")
 
 
+
+def refresh_tennis_start_times():
+    """Overwrite estimated_start_time from tennisexplorer's live order of play.
+
+    Kalshi's occurrence_datetime is a scheduled estimate it never revises, so a
+    slipping order of play leaves the app showing the original time and every
+    "has it started?" gate reasoning from a wrong number. tennisexplorer tracks
+    the real schedule -- verified 2026-08-03 on two matches the user confirmed
+    were already under way (17:10Z and 16:50Z actual vs 23:00Z and 19:00Z from
+    Kalshi).
+
+    Only unfinished matches are touched, and only when the site actually lists
+    the player, so a missing row leaves the existing value alone rather than
+    blanking it.
+    """
+    from app.clients.tennisexplorer_client import TennisExplorerClient
+    import datetime
+
+    from app.db.models import TennisMatch
+
+    try:
+        with TennisExplorerClient() as client:
+            times = client.get_scheduled_times()
+    except Exception:
+        log.exception("tennisexplorer schedule fetch failed")
+        return
+    if not times:
+        return
+
+    def _key(full_name: str | None) -> str | None:
+        if not full_name:
+            return None
+        parts = full_name.split()
+        return f"{parts[-1]} {parts[0][0]}." if len(parts) >= 2 else None
+
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            updated = 0
+            # TODAY'S matches only. The schedule page is today's order of play, and
+            # the lookup key is just "Surname I." -- without this, an unfinished
+            # fixture from weeks ago involving the same player would be stamped
+            # with today's time.
+            today = datetime.date.today().isoformat()
+            candidates = (
+                session.query(TennisMatch)
+                .filter(TennisMatch.winner_key.is_(None), TennisMatch.match_date == today)
+                .all()
+            )
+            for match in candidates:
+                for name in (match.player_a_name, match.player_b_name):
+                    key = _key(name)
+                    fresh = times.get(key) if key else None
+                    if fresh and fresh != match.estimated_start_time:
+                        match.estimated_start_time = fresh
+                        updated += 1
+                        break
+            session.commit()
+            log.info("tennis start times refreshed from tennisexplorer: %d updated", updated)
+        finally:
+            session.close()
+
 def run_full_refresh_tennis():
+    refresh_tennis_start_times()
     refresh_tennis_ratings()
     refresh_kalshi_tennis_markets()
     refresh_polymarket_tennis_markets()

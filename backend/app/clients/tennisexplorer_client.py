@@ -84,6 +84,58 @@ class TennisExplorerClient:
         resp = self._client.get(f"{BASE_URL}/{slug}/{year}/{tour_suffix}/")
         return parse_draw_html(resp.text), parse_tournament_surface(resp.text)
 
+
+    def get_scheduled_times(self) -> dict[str, str]:
+        """{"Surname I.": ISO-UTC start} for every match on today's schedule.
+
+        WHY THIS EXISTS. Kalshi's occurrence_datetime is a scheduled estimate it
+        NEVER revises, so as an order of play slips the app keeps showing the
+        original time -- and every "has it started?" gate reasons from a wrong
+        number. tennisexplorer tracks the real order of play. Verified live
+        2026-08-03 against two matches the user confirmed were already under way:
+
+            Izquierdo Luque vs Sanchez Quilez  -> 17:10Z  (Kalshi said 23:00Z)
+            Zink vs Hurrion                    -> 16:50Z  (Kalshi said 19:00Z)
+
+        TIMEZONE. The site renders Berlin time and applies DST on top of whatever
+        my_timezone is set to -- even my_timezone=0 shows UTC+1 in summer, so no
+        cookie value yields true UTC. Instead the page publishes its OWN current
+        clock next to a timezone label, so the offset is derived from that on
+        every fetch. That is DST-proof and survives the site changing its default.
+        """
+        import datetime
+        import re as _re
+
+        resp = self._client.get(f"{BASE_URL}/matches/", cookies={"my_timezone": "0"})
+        html = resp.text
+        now = datetime.datetime.now(datetime.timezone.utc)
+        stamp = _re.search(r"(\d{2})\.(\d{2})\.\s*(\d{2}):(\d{2}),\s*<span class=\"timezone\"", html)
+        if not stamp:
+            return {}   # no clock to calibrate against -- better nothing than a wrong hour
+        day, month, hh, mm = (int(x) for x in stamp.groups())
+        try:
+            page_now = datetime.datetime(now.year, month, day, hh, mm, tzinfo=datetime.timezone.utc)
+        except ValueError:
+            return {}
+        offset = round((page_now - now).total_seconds() / 60)
+
+        soup = BeautifulSoup(html, "html.parser")
+        out: dict[str, str] = {}
+        for table in soup.select("table.result"):
+            current: tuple[int, int] | None = None
+            for row in table.select("tr"):
+                cell = row.select_one("td.first.time") or row.select_one("td.time")
+                if cell:
+                    m = _re.match(r"(\d{1,2}):(\d{2})", cell.get_text(strip=True))
+                    current = (int(m.group(1)), int(m.group(2))) if m else None
+                link = row.select_one("td.t-name a")
+                if not link or current is None:
+                    continue
+                total = current[0] * 60 + current[1] - offset
+                start = now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(minutes=total)
+                out.setdefault(link.get_text(strip=True), start.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        return out
+
     def get_results_day(self, year: int, month: int, day: int) -> list[dict]:
         """One request returns every tier's completed matches for this
         single calendar day (see module docstring on why `type=all` is used
