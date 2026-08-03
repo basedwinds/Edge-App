@@ -28,7 +28,7 @@ from app.ingestion.market_matcher_tennis import full_name_to_abbreviated_key
 from app.models import game_lines_tennis
 from app.models.baseline import elo_service_tennis
 from app.models.bracket_sim_tennis import simulate_tournament
-from app.models.ladder_sanity import find_resolved_entities, looks_already_live_by_trading
+from app.models.ladder_sanity import find_resolved_entities, looks_already_live_by_trading, pair_looks_resolved
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -373,6 +373,33 @@ def list_tennis_markets(session: Session = Depends(get_session)):
 
     matches_live_by_trading = {m.tennis_match_id for m in markets if m.tennis_match_id and _market_looks_live_by_trading(m)}
 
+    # SEVENTH gap (2026-08-03, user-reported): Firman vs Vladson, a Kalshi ITF
+    # women's moneyline. Kalshi had it status=finalized (result Vladson) with
+    # prices 0.01/0.99 on 33k/41k volume, while this app still recommended it --
+    # estimated_start_time claimed the match started ~4 hours AFTER it had
+    # actually finished, no winner was scraped yet, and market_cleanup keys on
+    # the ticker date being in the PAST so a same-day match cannot trip it until
+    # tomorrow. The two checks above both miss it by construction: a moneyline
+    # has no ladder rungs, and a price pinned near 0.01 for hours shows no recent
+    # swing. Grouping the two SIDES of the same moneyline gives the missing
+    # signal -- see ladder_sanity.pair_looks_resolved.
+    moneyline_sides: dict[int, list[tuple[float | None, float | None]]] = {}
+    for m in markets:
+        if m.market_type != "moneyline" or m.tennis_match_id is None:
+            continue
+        snap = all_snapshots.get(m.id)
+        if snap is None:
+            continue
+        moneyline_sides.setdefault(m.tennis_match_id, []).append(
+            (_implied_prob(snap), snap.volume)
+        )
+    matches_pair_resolved = {
+        mid for mid, sides in moneyline_sides.items() if pair_looks_resolved(sides)
+    }
+
+    def _match_pair_resolved(m: Market) -> bool:
+        return m.tennis_match_id in matches_pair_resolved
+
     def _match_looks_live_by_trading(m: Market) -> bool:
         return m.tennis_match_id in matches_live_by_trading
 
@@ -382,6 +409,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         and not _match_already_started(m)
         and not _match_ladder_resolved(m)
         and not _match_looks_live_by_trading(m)
+        and not _match_pair_resolved(m)
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]

@@ -218,3 +218,44 @@ def looks_already_live_by_trading(
     volume_delta = max(volumes) - min(volumes)
     price_swing = max(prices) - min(prices)
     return volume_delta >= min_volume_delta and price_swing >= min_price_swing
+
+
+# Minimum traded volume before an extreme two-sided price is treated as decided.
+# Kalshi tennis volumes on a real ITF match run into the tens of thousands (the
+# reported case: 33,541 and 41,714), while an untraded market sits at 0.
+PAIR_RESOLVED_MIN_VOLUME = 1_000.0
+
+
+def pair_looks_resolved(sides: list[tuple[float | None, float | None]]) -> bool:
+    """A two-outcome market (moneyline: exactly one side wins) whose BOTH sides
+    are quoted, priced at opposite extremes, and have really traded.
+
+    Why this exists even though ladder_looks_resolved and
+    looks_already_live_by_trading already do related jobs:
+
+      - ladder_looks_resolved needs 2+ thresholds of the SAME quantity. A
+        moneyline has no thresholds, so it never applies.
+      - looks_already_live_by_trading needs a recent price SWING. A market that
+        has been pinned near 0.01 for hours shows no swing inside the window, so
+        it silently passes.
+
+    Real case (user-reported 2026-08-03): Firman vs Vladson, Kalshi ITF women's
+    moneyline. Kalshi had it status=finalized, result Vladson, prices 0.01/0.99
+    on 33k/41k volume -- while this app still showed a recommended bet, because
+    estimated_start_time claimed the match began ~4 hours LATER than it had
+    already finished, no winner had been scraped, and the ticker date was today
+    so market_cleanup (which keys on the ticker date being in the PAST) could not
+    fire until tomorrow.
+
+    Requiring BOTH sides, opposite extremes AND real volume is what keeps this
+    off a genuine pre-match heavy favourite: an untraded lopsided market has no
+    volume, and a live-but-undecided one does not sit with both sides pinned.
+    """
+    prices = [p for p, _ in sides if p is not None]
+    if len(prices) < 2:
+        return False
+    lo, hi = min(prices), max(prices)
+    if not (lo <= EXTREME_LOW and hi >= EXTREME_HIGH):
+        return False
+    volumes = [v for _, v in sides if v is not None]
+    return bool(volumes) and max(volumes) >= PAIR_RESOLVED_MIN_VOLUME

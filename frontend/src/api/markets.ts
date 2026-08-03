@@ -466,10 +466,17 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {"E0": "EPL", "SP1": "La Lig
  * identifying a tennis row: a Tour match and an ITF match look identical
  * otherwise, and they are wildly different in quality and liquidity. */
 function tennisLeagueLabel(tour: string | null | undefined, tier: string | null | undefined): string | null {
-  const t = (tour || "").toUpperCase();
-  const lvl = tier === "challenger" ? "Challenger" : tier === "itf" ? "ITF" : tier === "tour" ? "Tour" : null;
-  if (!t && !lvl) return null;
-  return [t, lvl].filter(Boolean).join(" ");
+  // `tour` is really the GENDER circuit (atp = men, wta = women); `tier` is the
+  // actual competition (main tour, Challenger, ITF). Joining them produced
+  // "WTA ITF", which reads as two different leagues -- ITF events are not WTA
+  // events. User-reported 2026-08-03. Below the main tour the competition is
+  // the ITF/Challenger circuit, so name that and use the gender as a qualifier.
+  const t = (tour || "").toLowerCase();
+  const women = t === "wta";
+  if (tier === "itf") return women ? "ITF Women" : "ITF Men";
+  if (tier === "challenger") return women ? "WTA 125" : "ATP Challenger";
+  if (tier === "tour") return women ? "WTA Tour" : "ATP Tour";
+  return t ? t.toUpperCase() : null;
 }
 
 export interface RecommendedBetRow {

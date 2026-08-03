@@ -26,18 +26,23 @@ from app.db.models import Cs2Match, LolMatch, PlacedBet, SoccerMatch, TennisMatc
 
 log = logging.getLogger("league_backfill")
 
-_TENNIS_TIER = {"challenger": "Challenger", "itf": "ITF", "tour": "Tour"}
-
-
 def _tennis_label(tour: str | None, tier: str | None) -> str | None:
-    """"ATP Tour", "WTA ITF". Mirrors tennisLeagueLabel in the frontend exactly
-    so backfilled history and newly-captured bets read identically -- two
-    different spellings of the same league would break the search box."""
-    t = (tour or "").upper()
-    lvl = _TENNIS_TIER.get(tier or "")
-    if not t and not lvl:
-        return None
-    return " ".join(x for x in (t, lvl) if x)
+    """"ATP Tour", "ITF Women", "ATP Challenger". Mirrors tennisLeagueLabel in
+    the frontend EXACTLY -- two spellings of one league would split the Bet
+    Tracker search box.
+
+    `tour` is the gender circuit (atp/wta), `tier` the real competition. The
+    earlier version joined them into "WTA ITF", which reads as two leagues: an
+    ITF event is not a WTA event."""
+    t = (tour or "").lower()
+    women = t == "wta"
+    if tier == "itf":
+        return "ITF Women" if women else "ITF Men"
+    if tier == "challenger":
+        return "WTA 125" if women else "ATP Challenger"
+    if tier == "tour":
+        return "WTA Tour" if women else "ATP Tour"
+    return t.upper() or None
 
 
 # (sport, PlacedBet id attr, match model, how to build the label from the row)
