@@ -582,22 +582,43 @@ def settle_finished_games(session: Session) -> int:
     # for its own market result. Only for bets already past their scheduled
     # start, so this is a few single-market lookups, not a crawl. See
     # kalshi_settlement.py for why it is deliberately narrow.
-    settled += _settle_stragglers_from_kalshi(session)
+    settled += _settle_stragglers_from_platform(session)
     return settled
 
 
-def _settle_stragglers_from_kalshi(session: Session) -> int:
+# Most lookups one settlement pass may make (1 HTTP call each).
+_MAX_PLATFORM_LOOKUPS = 60
+
+
+def _settle_stragglers_from_platform(session: Session) -> int:
     import datetime
 
     from app.models.clv import _game_kickoff_dt, _get_game
     from app.models.kalshi_settlement import settle_pending_from_kalshi
+    from app.models.polymarket_settlement import settle_pending_from_polymarket
 
     now = datetime.datetime.utcnow()
     stuck = []
-    for bet in session.query(PlacedBet).filter(PlacedBet.status == "pending").all():
+    # REAL-money bets only, and capped. This makes ONE network call per bet, and
+    # there are ~1,600 stuck PAPER bets -- including them turned a quick fallback
+    # into thousands of API calls that stalled outright (600s+, caught in
+    # testing). Paper bets exist to accrue CLV and are graded by the normal
+    # result path; they do not need an authoritative platform lookup.
+    candidates = (
+        session.query(PlacedBet)
+        .filter(PlacedBet.status == "pending", PlacedBet.paper == False)  # noqa: E712
+        .all()
+    )
+    for bet in candidates:
         game = _get_game(session, bet)
         kickoff = _game_kickoff_dt(game) if game is not None else None
         if kickoff is None or (now - kickoff).total_seconds() < 4 * 3600:
             continue
         stuck.append(bet)
-    return settle_pending_from_kalshi(session, stuck) if stuck else 0
+    if not stuck:
+        return 0
+    # Hard cap so one bad day can never turn this into an unbounded crawl.
+    stuck = stuck[:_MAX_PLATFORM_LOOKUPS]
+    # Both platforms: Kalshi resolves a whole market yes/no, Polymarket publishes
+    # a per-outcome price, so the two paths grade different market types.
+    return settle_pending_from_kalshi(session, stuck) + settle_pending_from_polymarket(session, stuck)
