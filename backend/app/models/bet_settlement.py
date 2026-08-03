@@ -29,7 +29,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.db.models import (
-    Cs2Match, LolMatch, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
+    CfbGame, Cs2Match, LolMatch, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
     RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame,
 )
 
@@ -64,6 +64,15 @@ def _get_game(session: Session, bet: PlacedBet):
         return session.get(NbaGame, bet.nba_game_id) if bet.nba_game_id else None
     if bet.sport == "wnba":
         return session.get(WnbaGame, bet.wnba_game_id) if bet.wnba_game_id else None
+    if bet.sport == "cfb":
+        # CFB previously fell through to the NFL lookup below, where a CFB bet's
+        # nfl_game_id is always None -- so CFB bets could never be graded and sat
+        # pending forever. CfbGame carries home/away team + score exactly like
+        # NflGame, so the shared score-based graders apply unchanged and
+        # _pick_grader's default _GRADERS branch already routes CFB correctly.
+        # CFB's only game market is moneyline (cfb_markets.GAME_MARKET_TYPES);
+        # Kalshi has not listed CFB spread/total, so nothing else needs a grader.
+        return session.get(CfbGame, bet.cfb_game_id) if bet.cfb_game_id else None
     if bet.sport == "mlb":
         return session.get(MlbGame, bet.mlb_game_id) if bet.mlb_game_id else None
     if bet.sport == "soccer":

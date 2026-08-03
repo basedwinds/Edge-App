@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.data.mlb_ballparks import TEAM_TZ
-from app.db.models import Cs2Match, LolMatch, MarketSnapshot, MlbGame, NbaGame, NflGame, PlacedBet, RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame
+from app.db.models import CfbGame, Cs2Match, LolMatch, MarketSnapshot, MlbGame, NbaGame, NflGame, PlacedBet, RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame
 
 
 def _implied_prob(snap: MarketSnapshot | None) -> float | None:
@@ -200,6 +200,12 @@ def _get_game(session: Session, bet: PlacedBet):
         return session.get(NbaGame, bet.nba_game_id) if bet.nba_game_id else None
     if bet.sport == "wnba":
         return session.get(WnbaGame, bet.wnba_game_id) if bet.wnba_game_id else None
+    if bet.sport == "cfb":
+        # Without this CFB fell through to the NFL lookup at the bottom, where
+        # nfl_game_id is always None for a CFB bet -- so every CFB bet silently
+        # got no CLV at all. CfbGame has a real kickoff (gameday + gametime),
+        # so true CLV is computable exactly as it is for NFL/WNBA.
+        return session.get(CfbGame, bet.cfb_game_id) if bet.cfb_game_id else None
     if bet.sport == "mlb":
         return session.get(MlbGame, bet.mlb_game_id) if bet.mlb_game_id else None
     if bet.sport == "tennis":
@@ -245,6 +251,7 @@ def compute_bet_clv(session: Session, bet: PlacedBet) -> dict:
     has_game_id = (
         bet.nba_game_id if bet.sport == "nba"
         else bet.wnba_game_id if bet.sport == "wnba"
+        else bet.cfb_game_id if bet.sport == "cfb"
         else bet.mlb_game_id if bet.sport == "mlb"
         else bet.tennis_match_id if bet.sport == "tennis"
         else bet.soccer_match_id if bet.sport == "soccer"
