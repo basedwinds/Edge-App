@@ -27,7 +27,12 @@ WIN_TOTAL_SERIES = "KXNCAAFWINS"      # season win ladders (583 open, 69 teams)
 # Conference futures. Champion = wins the conference TITLE GAME; qualifier =
 # finishes top-2 (i.e. reaches that game); regtop = finishes top-N in the
 # regular-season standings, with N encoded in the event ticker (…-27T5-WAKE).
-CONF_CHAMPION_SERIES = ["KXNCAAFACC", "KXNCAAFB12", "KXNCAAFMAC", "KXNCAAFPAC12"]
+# KXNCAAFSEC added 2026-08-03: it had no open markets when this list was first
+# built and now lists 16 (ticker KXNCAAFSEC-26-VAN, the same "-<season>-<team>"
+# shape the other four use, so the existing parser handles it unchanged). Big
+# Ten is STILL unlisted -- checked KXNCAAFBIGTEN, KXNCAAFB1G and KXNCAAFBIG10,
+# all zero open -- so it stays out rather than being added speculatively.
+CONF_CHAMPION_SERIES = ["KXNCAAFACC", "KXNCAAFB12", "KXNCAAFMAC", "KXNCAAFPAC12", "KXNCAAFSEC"]
 CONF_QUALIFIER_SERIES = ["KXNCAAFSECQ", "KXNCAAFB12QUAL", "KXNCAAFMACQUAL", "KXNCAAFMWCQUAL"]
 CONF_REGTOP_SERIES = ["KXNCAAFACCREGTOP", "KXNCAAFSECREGTOP", "KXNCAAFB12REGTOP"]
 # Playoff futures. Priced by playoff_sim_cfb, which models a COMMITTEE decision
@@ -69,10 +74,10 @@ def get_moneyline_markets() -> list[dict]:
             "display_name": m.get("yes_sub_title"),
             "close_time": m.get("close_time") or m.get("expiration_time"),
             "status": m.get("status") or "active",
-            "last_price": _to_float(m.get("last_price")),
-            "yes_bid": _to_float(m.get("yes_bid")),
-            "yes_ask": _to_float(m.get("yes_ask")),
-            "volume": _to_float(m.get("volume")),
+            "last_price": _to_float(m.get("last_price_dollars")),
+            "yes_bid": _to_float(m.get("yes_bid_dollars")),
+            "yes_ask": _to_float(m.get("yes_ask_dollars")),
+            "volume": _to_float(m.get("volume_fp")),
         })
     return out
 
@@ -110,10 +115,10 @@ def get_win_total_markets() -> list[dict]:
             "team_abbr_kalshi": abbr,
             "line": float(floor),
             "status": m.get("status") or "active",
-            "last_price": _to_float(m.get("last_price")),
-            "yes_bid": _to_float(m.get("yes_bid")),
-            "yes_ask": _to_float(m.get("yes_ask")),
-            "volume": _to_float(m.get("volume")),
+            "last_price": _to_float(m.get("last_price_dollars")),
+            "yes_bid": _to_float(m.get("yes_bid_dollars")),
+            "yes_ask": _to_float(m.get("yes_ask_dollars")),
+            "volume": _to_float(m.get("volume_fp")),
         })
     return out
 
@@ -151,10 +156,10 @@ def _conf_rows(series_list, market_type):
                 "display_name": m.get("yes_sub_title"),
                 "line": depth,
                 "status": m.get("status") or "active",
-                "last_price": _to_float(m.get("last_price")),
-                "yes_bid": _to_float(m.get("yes_bid")),
-                "yes_ask": _to_float(m.get("yes_ask")),
-                "volume": _to_float(m.get("volume")),
+                "last_price": _to_float(m.get("last_price_dollars")),
+                "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                "volume": _to_float(m.get("volume_fp")),
             })
     return out
 

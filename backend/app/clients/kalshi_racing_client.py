@@ -40,6 +40,20 @@ SERIES_MAP = {
 }
 
 
+def _to_float(v):
+    """Kalshi returns these as STRINGS ("0.0500"), not numbers. Previously this
+    module read the plain "yes_bid"/"yes_ask"/"last_price"/"volume" keys, which
+    do not exist on this endpoint -- every value came back None, so no
+    conversion was needed and none existed. Reading the real *_dollars/*_fp keys
+    means the strings now have to be coerced or they reach the DB as text."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def fetch_racing_markets() -> list[dict]:
     """One row per open driver-market across the tracked racing series. Carries
     the RAW Kalshi price fields (cents 0-100) so poller_racing can write
@@ -66,9 +80,9 @@ def fetch_racing_markets() -> list[dict]:
                 "ticker": m.get("ticker"),
                 "close_time": m.get("close_time") or m.get("expiration_time"),
                 "status": m.get("status") or "active",
-                "last_price": m.get("last_price"),
-                "yes_bid": m.get("yes_bid"),
-                "yes_ask": m.get("yes_ask"),
-                "volume": m.get("volume"),
+                "last_price": _to_float(m.get("last_price_dollars")),
+                "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                "volume": _to_float(m.get("volume_fp")),
             })
     return out
