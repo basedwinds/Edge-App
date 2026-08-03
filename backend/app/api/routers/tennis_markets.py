@@ -420,9 +420,39 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     # what must never happen.
     today = now_utc.date()
 
-    def _match_date_passed(m: Market) -> bool:
+    def _start_time_untrusted(m: Market) -> bool:
+        """True when this match's stored start cannot be believed.
+
+        Kalshi NEVER revises occurrence_datetime (what we store as
+        estimated_start_time) when a match is rescheduled, but it DOES revise
+        expected_expiration_time. Verified on Fritz vs Jodar: occurrence stuck at
+        2026-08-02T21:30Z while the expiration had moved to 2026-08-03T21:50Z.
+
+        So a DATE disagreement between the two means the start is stale, and every
+        "has it started?" check above is reasoning from a wrong number. Those get
+        the conservative treatment. When the two agree -- the common case -- the
+        start is trustworthy and the match is NOT dropped, which is the whole
+        point: the earlier blunt version keyed on match_date alone and threw away
+        genuinely upcoming matches.
+
+        Falls back to the match_date check only when there is no expiration to
+        compare against, so behaviour never gets *less* safe than before.
+        """
         match = matches_by_id.get(m.tennis_match_id) if m.tennis_match_id else None
-        if match is None or not match.match_date:
+        if match is None:
+            return False
+        start, expiry = match.estimated_start_time, match.expected_expiration_time
+        if start and expiry:
+            try:
+                s_d = datetime.datetime.fromisoformat(start.replace("Z", "+00:00")).date()
+                e_d = datetime.datetime.fromisoformat(expiry.replace("Z", "+00:00")).date()
+            except ValueError:
+                return False
+            if s_d != e_d:
+                return True          # rescheduled: stored start is stale
+            return e_d < today       # trusted, and that day has passed
+        # No expiration to cross-check -- fall back to the independent date.
+        if not match.match_date:
             return False
         try:
             return datetime.date.fromisoformat(match.match_date[:10]) < today
@@ -439,7 +469,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         and not _match_ladder_resolved(m)
         and not _match_looks_live_by_trading(m)
         and not _match_pair_resolved(m)
-        and not _match_date_passed(m)
+        and not _start_time_untrusted(m)
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]

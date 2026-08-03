@@ -116,6 +116,14 @@ def update_match_estimated_start_time(match: TennisMatch | None, estimated_start
         match.estimated_start_time = estimated_start_time
 
 
+def update_match_expected_expiration(match: TennisMatch | None, expected_expiration_time: str | None) -> None:
+    """Kalshi revises expected_expiration_time on a reschedule but never
+    occurrence_datetime, so keeping both is what lets the router tell a trusted
+    start from a stale one."""
+    if match is not None and match.winner_key is None and expected_expiration_time:
+        match.expected_expiration_time = expected_expiration_time
+
+
 def upsert_kalshi_tennis_moneyline_market(session: Session, row: dict, tennis_match_id: int | None) -> Market:
     market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
     if market is None:

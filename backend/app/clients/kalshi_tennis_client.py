@@ -107,6 +107,8 @@ def get_moneyline_markets() -> list[dict]:
                     # estimated_start_time, genuinely per-match here too (not
                     # a flat per-event value).
                     "estimated_start_time": m.get("occurrence_datetime"),
+                    # Kalshi revises THIS on a reschedule but not occurrence_datetime.
+                    "expected_expiration_time": m.get("expected_expiration_time"),
                     "yes_bid": _to_float(m.get("yes_bid_dollars")),
                     "yes_ask": _to_float(m.get("yes_ask_dollars")),
                     "last_price": _to_float(m.get("last_price_dollars")),

@@ -81,6 +81,7 @@ _MISSING_COLUMNS_BY_TABLE = {
         ("estimated_start_time", "VARCHAR"),
     ],
     "tennis_matches": [
+        ("expected_expiration_time", "VARCHAR"),
         ("best_of", "INTEGER"),
         ("estimated_start_time", "VARCHAR"),
     ],

@@ -268,6 +268,12 @@ class TennisMatch(Base):
     best_of = Column(Integer, nullable=True)  # 3 or 5 -- only ATP Grand Slams are best-of-5, everything else (WTA at any level, Challenger/ITF) is best-of-3
     match_date = Column(String, nullable=False)  # ISO date
     estimated_start_time = Column(String, nullable=True)  # full ISO UTC instant -- Kalshi's occurrence_datetime / Polymarket's gameStartTime, whichever platform's poller sees it first (live rows only, see poller_tennis.py); a genuine ESTIMATE, kept fresh every poll while winner_key is still null, same "always overwrite while upcoming" pattern as MmaFight.estimated_start_time
+    # Kalshi's expected_expiration_time for this match's market. Kalshi does NOT
+    # revise occurrence_datetime when a match is rescheduled, but it DOES revise
+    # this. When the two disagree on the DATE, the stored start is stale and must
+    # not be trusted -- see tennis_markets.py. Verified on Fritz vs Jodar:
+    # occurrence 2026-08-02T21:30Z (stale) vs expiration 2026-08-03T21:50Z.
+    expected_expiration_time = Column(String, nullable=True)
     player_a_key = Column(String, nullable=False)  # normalized "surname i." -- see class docstring
     player_a_name = Column(String, nullable=False)  # display name as the source rendered it
     player_b_key = Column(String, nullable=False)

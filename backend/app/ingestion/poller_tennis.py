@@ -62,6 +62,7 @@ def refresh_kalshi_tennis_markets():
                     event_rows[0].get("competition", ""),
                 )
                 market_catalog_tennis.update_match_estimated_start_time(match, event_rows[0].get("estimated_start_time"))
+                market_catalog_tennis.update_match_expected_expiration(match, event_rows[0].get("expected_expiration_time"))
                 match_id_by_event[event_ticker] = match.id if match else None
                 suffix = kalshi_match_suffix(event_ticker)
                 if suffix:
@@ -149,6 +150,7 @@ def refresh_polymarket_tennis_markets():
                     event_rows[0].get("event_title", ""),
                 )
                 market_catalog_tennis.update_match_estimated_start_time(match, event_rows[0].get("estimated_start_time"))
+                market_catalog_tennis.update_match_expected_expiration(match, event_rows[0].get("expected_expiration_time"))
                 match_id_by_event[event_slug] = match.id if match else None
 
             matched = sum(1 for v in match_id_by_event.values() if v is not None)
