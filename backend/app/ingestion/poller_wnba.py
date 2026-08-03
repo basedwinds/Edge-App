@@ -161,26 +161,19 @@ def settle_placed_bets_wnba():
 def run_full_refresh_wnba():
     refresh_wnba_games()
     refresh_wnba_ratings()
-    # The season sim runs HERE, not after the Kalshi steps below.
-    #
-    # It only needs Elo (just refreshed) plus its own ESPN schedule fetch -- it
-    # does not depend on any Kalshi market data. Sitting at the end of the chain
-    # it was reliably starved: caught live with py-spy (2026-08-03) with this
-    # refresh still parked in refresh_wnba_games, which is ~124 sequential ESPN
-    # calls on its own, with three more Kalshi fetches (moneyline, spread/total,
-    # halves) still queued ahead of the sim. The result was all 45 win-total rows
-    # stuck on "Season simulation not warm yet" indefinitely -- not because the
-    # sim failed, but because nothing ever reached it.
-    #
-    # Ingestion of the win-total markets themselves still runs after the Kalshi
-    # steps; only the PRICING model is promoted, and the two are independent.
+    # NOTE: refresh_wnba_season_sim is deliberately NOT in this chain -- it runs
+    # as its own scheduler job (see scheduler.py). Moving it earlier within the
+    # chain was tried first and was not enough: py-spy showed this refresh still
+    # parked in refresh_wnba_games (~124 sequential ESPN calls) nine minutes into
+    # an undisturbed run, so anything downstream of that call was unreachable in
+    # practice. The sim fetches its own season schedule and needs only Elo, so
+    # chaining it behind an unrelated multi-minute fetch bought nothing.
     #
     # Steps are also individually guarded, matching run_full_refresh_cfb: a
     # straight-line chain meant one raising step (a Kalshi 429, say) silently
     # skipped everything after it -- including settlement -- with no log line
     # naming which step died.
-    for step in (refresh_wnba_season_sim,
-                 refresh_kalshi_wnba_moneyline,
+    for step in (refresh_kalshi_wnba_moneyline,
                  refresh_kalshi_wnba_spread_total,
                  refresh_kalshi_wnba_halves,
                  refresh_kalshi_wnba_win_totals,

@@ -17,7 +17,7 @@ from app.ingestion.poller_cs2 import run_full_refresh_cs2
 from app.ingestion.poller_lol import run_full_refresh_lol
 from app.ingestion.poller_racing import run_full_refresh_racing
 from app.ingestion.poller_cfb import run_full_refresh_cfb
-from app.ingestion.poller_wnba import run_full_refresh_wnba
+from app.ingestion.poller_wnba import refresh_wnba_season_sim, run_full_refresh_wnba
 from app.ingestion.poller_lock import serialized
 from app.models.dead_market_sanity_check import run_dead_market_sanity_check
 from app.models.snapshot_maintenance import prune_market_snapshots
@@ -282,6 +282,23 @@ def start():
         minutes=15,
         id="full_refresh_wnba",
         next_run_time=base_tick + timedelta(seconds=14 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # The WNBA season sim gets its OWN job rather than living inside
+    # run_full_refresh_wnba. It only needs Elo plus its own ESPN season fetch,
+    # and inside the chain it sat behind refresh_wnba_games -- ~124 sequential
+    # ESPN calls that py-spy caught still running nine minutes into an
+    # undisturbed boot, which left all 45 win-total rows unpriced indefinitely.
+    # Decoupled, a slow games fetch can no longer block pricing.
+    #
+    # 20min against the sim's own 1h cache TTL, so a failed run (which expires
+    # after _FAILURE_TTL) gets retried well before the hour is up.
+    scheduler.add_job(
+        refresh_wnba_season_sim,
+        "interval",
+        minutes=20,
+        id="wnba_season_sim",
+        next_run_time=datetime.now() + timedelta(seconds=90),
         replace_existing=True,
     )
     scheduler.add_job(
