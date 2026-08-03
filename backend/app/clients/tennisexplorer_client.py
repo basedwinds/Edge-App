@@ -102,11 +102,27 @@ class TennisExplorerClient:
 
 def parse_results_html(html: str, match_date: str | None = None) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
-    table = soup.select_one("table.result")
-    if not table:
+    # EVERY result table, not just the first. select_one() read only table 0 and
+    # silently discarded the rest -- the page carries 5 (confirmed live
+    # 2026-08-03), so most of the day's matches never reached the caller. That
+    # one call is why the results backlog sat at ~1,276 unfinished matches with
+    # past dates, and therefore why finished/in-play matches kept their
+    # winner=None and stayed eligible for recommendations: Tyler Zink was in
+    # table 1, already 2 sets up, and simply never parsed.
+    tables = soup.select("table.result")
+    if not tables:
         return []
 
     matches: list[dict] = []
+    for table in tables:
+        # State is reset PER TABLE inside the helper -- a tournament header must
+        # not carry across, and a half-built pending_row must never pair a player
+        # from one table with a player from the next.
+        _parse_result_table(table, match_date, matches)
+    return matches
+
+
+def _parse_result_table(table, match_date: str | None, matches: list[dict]) -> None:
     current_tourney: dict | None = None
     pending_row: dict | None = None
 
@@ -166,8 +182,6 @@ def parse_results_html(html: str, match_date: str | None = None) -> list[dict]:
         else:
             matches.append(_build_match(current_tourney, pending_row, player, match_date))
             pending_row = None
-
-    return matches
 
 
 _SCORE_OR_WALKOVER_RE = re.compile(
