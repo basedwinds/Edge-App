@@ -41,7 +41,25 @@ from app.ingestion.market_matcher_cs2 import match_by_names_only, team_names_mat
 
 def _load_upcoming_matches(session: Session) -> list[dict]:
     rows = session.query(Cs2Match).filter(Cs2Match.winner.is_(None)).all()
-    return [{"id": r.id, "team_a": r.team_a, "team_b": r.team_b, "team_a_display": None, "team_b_display": None} for r in rows]
+    return [{"id": r.id, "team_a": r.team_a, "team_b": r.team_b, "team_a_display": None, "team_b_display": None, "match_date": r.match_date} for r in rows]
+
+
+
+# See market_catalog_lol.py for the real bug this prevents: matching a rematch on
+# team names ALONE bound it to the earlier fixture's row and overwrote that row's
+# date, orphaning an already-played match so it could never settle.
+_SAME_FIXTURE_DAYS = 2
+
+
+def _within_rematch_window(a: str | None, b: str | None) -> bool:
+    if not a or not b:
+        return True
+    try:
+        da = datetime.date.fromisoformat(a[:10])
+        db = datetime.date.fromisoformat(b[:10])
+    except ValueError:
+        return True
+    return abs((da - db).days) <= _SAME_FIXTURE_DAYS
 
 
 def find_or_create_upcoming_match(
@@ -51,6 +69,7 @@ def find_or_create_upcoming_match(
     if not team_a_name or not team_b_name:
         return None
     upcoming = _load_upcoming_matches(session)
+    upcoming = [m for m in upcoming if _within_rematch_window(m.get("match_date"), match_date)]
     found = match_by_names_only(team_a_name, team_b_name, upcoming)
     if found is not None:
         return session.get(Cs2Match, found["id"])

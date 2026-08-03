@@ -21,7 +21,27 @@ from app.ingestion.market_matcher_lol import match_by_names_only, team_names_mat
 
 def _load_upcoming_matches(session: Session) -> list[dict]:
     rows = session.query(LolMatch).filter(LolMatch.winner.is_(None)).all()
-    return [{"id": r.id, "team_a": r.team_a, "team_b": r.team_b} for r in rows]
+    return [{"id": r.id, "team_a": r.team_a, "team_b": r.team_b, "match_date": r.match_date} for r in rows]
+
+
+# How far apart two fixtures between the SAME two teams may be and still be
+# treated as the same match. A single fixture's date can wobble by a day across
+# sources/timezones; a rematch is separated by many.
+_SAME_FIXTURE_DAYS = 2
+
+
+def _within_rematch_window(a: str | None, b: str | None) -> bool:
+    """True when two match_dates are close enough to be the same fixture. Unknown
+    dates fall back to True, preserving the old name-only behaviour rather than
+    silently splitting a row we cannot date."""
+    if not a or not b:
+        return True
+    try:
+        da = datetime.date.fromisoformat(a[:10])
+        db = datetime.date.fromisoformat(b[:10])
+    except ValueError:
+        return True
+    return abs((da - db).days) <= _SAME_FIXTURE_DAYS
 
 
 def find_or_create_upcoming_match(
@@ -30,7 +50,21 @@ def find_or_create_upcoming_match(
 ) -> LolMatch | None:
     if not team_a_name or not team_b_name:
         return None
-    upcoming = _load_upcoming_matches(session)
+    # REAL BUG (user-reported 2026-08-03): matching on team names ALONE meant a
+    # REMATCH bound to the earlier fixture's row and overwrote its date.
+    # Invictus Gaming vs LNG Esports was played 2026-08-02 and bet on; because
+    # the result had not been scraped the row still had winner=None, so it was
+    # still "upcoming", so the 2026-08-09 rematch matched it and moved its start
+    # forward. The played match was then orphaned -- never settled, and invisible
+    # to any "past its start" check, since its own row claimed a future date.
+    #
+    # Restricting candidates to fixtures near the incoming date keeps the
+    # legitimate case (several markets for ONE match reusing one row) while
+    # splitting genuine rematches into their own rows.
+    upcoming = [
+        m for m in _load_upcoming_matches(session)
+        if _within_rematch_window(m.get("match_date"), match_date)
+    ]
     found = match_by_names_only(team_a_name, team_b_name, upcoming)
     if found is not None:
         return session.get(LolMatch, found["id"])
