@@ -13,6 +13,7 @@ series: once via moneyline's own match_suffix -> tennis_match_id mapping,
 reused for every other series in the same refresh pass rather than
 re-matching names per series.
 """
+import datetime
 import logging
 
 from app.clients import kalshi_tennis_client, polymarket_tennis_client
@@ -23,6 +24,11 @@ from app.ingestion.market_matcher_tennis import kalshi_match_suffix
 from app.models.baseline import elo_service_tennis
 
 log = logging.getLogger("poller_tennis")
+
+# tennisexplorer's /matches/ page covers ONE day, so a correction taken from it
+# should be a same-day shift in the order of play. Anything larger means the pair
+# listed there is not the fixture our market is for -- see refresh_tennis_start_times.
+_MAX_START_CORRECTION = datetime.timedelta(hours=12)
 
 
 def refresh_tennis_ratings():
@@ -248,6 +254,7 @@ def refresh_tennis_start_times():
         session = SessionLocal()
         try:
             updated = 0
+            skipped = 0
             # Matched on the PLAYER PAIR, with no date scope. The earlier version
             # keyed on one surname and therefore had to restrict itself to
             # match_date == today so an old fixture sharing a player would not be
@@ -260,12 +267,31 @@ def refresh_tennis_start_times():
                 if not a or not b:
                     continue
                 fresh = times.get(frozenset((a, b)))
-                if fresh and fresh != match.estimated_start_time:
-                    match.estimated_start_time = fresh
-                    match.start_time_source = "tennisexplorer"
-                    updated += 1
+                if not fresh or fresh == match.estimated_start_time:
+                    continue
+                # SANITY WINDOW. /matches/ is a SINGLE day's order of play, so a
+                # correction from it should always be a same-day shift. If it
+                # disagrees with the platform by more than half a day, the two are
+                # not describing the same fixture -- the same pair is listed today
+                # while the market we hold is for another day -- and taking the
+                # site's time would move a genuine future match into the past and
+                # get it wrongly filtered out as "already started". Keep the
+                # platform value in that case; a stale time is recoverable on the
+                # next pass, a match silently dropped from Recommended is not.
+                if match.start_time_source != "tennisexplorer" and match.estimated_start_time:
+                    try:
+                        held = datetime.datetime.fromisoformat(match.estimated_start_time.replace("Z", "+00:00"))
+                        got = datetime.datetime.fromisoformat(fresh.replace("Z", "+00:00"))
+                    except ValueError:
+                        held = got = None
+                    if held and got and abs((got - held).total_seconds()) > _MAX_START_CORRECTION.total_seconds():
+                        skipped += 1
+                        continue
+                match.estimated_start_time = fresh
+                match.start_time_source = "tennisexplorer"
+                updated += 1
             session.commit()
-            log.info("tennis start times refreshed from tennisexplorer: %d updated", updated)
+            log.info("tennis start times refreshed from tennisexplorer: %d updated, %d rejected as cross-day", updated, skipped)
         finally:
             session.close()
 

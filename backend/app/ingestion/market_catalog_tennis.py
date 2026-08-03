@@ -82,12 +82,35 @@ def find_or_create_upcoming_match(
         return session.get(TennisMatch, found["id"])
 
     slam = _infer_slam_attributes(tour, tournament_text)
+    resolved_date = datetime.date.today().isoformat()
+    # REAL BUG this fixes (hit live 2026-08-03): the synthetic id carried no date,
+    # so once a live-created match FINISHED its row kept the key forever -- and the
+    # existence check above only looks at UNFINISHED matches (winner_key is NULL).
+    # The same pair appearing again therefore matched nothing, then died on
+    # "UNIQUE constraint failed: tennis_matches.source, tennis_matches.source_match_id",
+    # aborting the whole Polymarket tennis refresh so no prices updated at all.
+    # cs2/lol/soccer already date-stamp their synthetic ids for exactly this reason
+    # (see market_catalog_cs2.py); tennis and valorant were the two that never did.
+    #
+    # Dating the key also keeps a genuine rematch as its OWN row rather than
+    # overwriting the played fixture -- the failure the user hit on LoL, where a
+    # settled bet became unsettleable because its match_date moved to the rematch.
+    source_match_id = f"live:{tour}:{tier}:{player_a_name}:{player_b_name}:{resolved_date}"
+    # Re-check against the DB, not the snapshot above: a row created earlier in
+    # THIS run is invisible to it (same reasoning as the cs2 guard).
+    existing = (
+        session.query(TennisMatch)
+        .filter_by(source="live", source_match_id=source_match_id)
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
     match = TennisMatch(
-        source="live", source_match_id=f"live:{tour}:{tier}:{player_a_name}:{player_b_name}",
+        source="live", source_match_id=source_match_id,
         tour=tour, tier=tier, tourney_name=tournament_text,
         best_of=slam[0] if slam else None,
         surface=slam[1] if slam else None,
-        match_date=datetime.date.today().isoformat(),
+        match_date=resolved_date,
         # Stored in the SAME abbreviated "surname i." key space
         # normalize_player_key() builds from tennis-data.co.uk/tennisexplorer's
         # own historical rows (see full_name_to_abbreviated_key's docstring) --

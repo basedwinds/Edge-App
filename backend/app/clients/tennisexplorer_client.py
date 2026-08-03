@@ -122,32 +122,52 @@ class TennisExplorerClient:
         soup = BeautifulSoup(html, "html.parser")
         out: dict[frozenset, str] = {}
         for table in soup.select("table.result"):
-            current: tuple[int, int] | None = None
-            pending: tuple[str, str] | None = None
-            for row in table.select("tr"):
+            rows = table.select("tr")
+            for idx, row in enumerate(rows):
+                # A match occupies exactly two <tr>: the first carries the time in
+                # a rowspan=2 cell, the second carries only the opponent. So anchor
+                # on the time cell and read the opponent from the NEXT row.
+                #
+                # An earlier version instead walked every name in document order and
+                # paired them with an alternating toggle. That carried state ACROSS
+                # matches, so a single row without a name link desynced the toggle
+                # and every following match in that table was paired opponent-to-
+                # next-player -- with the previous match's clock. It stamped
+                # "Min Ho Ko vs Philippov" (a Kalshi market for tomorrow) with the
+                # 06:12 start of Philippov vs Krivoshchekov, played today. Anchoring
+                # each match to its own time cell cannot drift: nothing is carried
+                # between iterations.
                 cell = row.select_one("td.first.time") or row.select_one("td.time")
-                if cell:
-                    m = _re.match(r"(\d{1,2}):(\d{2})", cell.get_text(strip=True))
-                    current = (int(m.group(1)), int(m.group(2))) if m else None
-                link = row.select_one("td.t-name a")
-                if not link or current is None:
+                if cell is None:
                     continue
-                total = current[0] * 60 + current[1] - offset
+                m = _re.match(r"(\d{1,2}):(\d{2})", cell.get_text(strip=True))
+                nxt = rows[idx + 1] if idx + 1 < len(rows) else None
+                if m is None or nxt is None:
+                    continue
+                # The opponent row must NOT own a time cell -- if it does, this pair
+                # of rows is two different matches and the layout is not what we think.
+                if nxt.select_one("td.first.time") or nxt.select_one("td.time"):
+                    continue
+                # tennisexplorer numbers the halves rNNN / rNNNb. Where both ids are
+                # present, insist they match: a free structural check on the assumption above.
+                rid, nid = row.get("id"), nxt.get("id")
+                if rid and nid and nid != f"{rid}b":
+                    continue
+                a = [x.get_text(strip=True) for x in row.select("td.t-name a")]
+                b = [x.get_text(strip=True) for x in nxt.select("td.t-name a")]
+                # Doubles list both partners in one cell; they never map to a
+                # singles market, so anything other than one name a side is skipped.
+                if len(a) != 1 or len(b) != 1:
+                    continue
+                total = int(m.group(1)) * 60 + int(m.group(2)) - offset
                 start = now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(minutes=total)
-                iso = start.strftime("%Y-%m-%dT%H:%M:%SZ")
-                name = link.get_text(strip=True)
-                if pending is None:
-                    pending = (name, iso)
-                else:
-                    # Key on the PLAYER PAIR, order-independent. Keying on a single
-                    # surname forced a "today only" scope to avoid stamping old
-                    # fixtures that share a player -- and match_date is itself
-                    # unreliable, so Sorger vs Kopp (dated 2026-08-01 but played
-                    # today) was skipped entirely and kept a stale platform time
-                    # while already in its second set. A pair cannot collide that
-                    # way, so no date scope is needed.
-                    out[frozenset((pending[0], name))] = pending[1]
-                    pending = None
+                # Key on the PLAYER PAIR, order-independent. Keying on a single
+                # surname forced a "today only" scope to avoid stamping old
+                # fixtures that share a player -- and match_date is itself
+                # unreliable, so Sorger vs Kopp (dated 2026-08-01 but played
+                # today) was skipped entirely and kept a stale platform time
+                # while already in its second set.
+                out[frozenset((a[0], b[0]))] = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         return out
 
     def get_results_day(self, year: int, month: int, day: int) -> list[dict]:
