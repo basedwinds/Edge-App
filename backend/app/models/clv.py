@@ -29,6 +29,11 @@ def _implied_prob(snap: MarketSnapshot | None) -> float | None:
     return snap.last_price
 
 
+# How stale a pre-kickoff snapshot may be and still count as a CLOSING line.
+# See the long note at its use site in compute_bet_clv for the measurement.
+MAX_CLOSING_STALENESS = datetime.timedelta(hours=6)
+
+
 def _mlb_kickoff_utc(gameday: str, gametime: str, home_team: str) -> datetime.datetime | None:
     """REAL BUG fixed here (2026-07-17), same root cause and same fix as
     mlb_markets.py::_game_kickoff_local (found while wiring up the live
@@ -331,6 +336,25 @@ def compute_bet_clv(session: Session, bet: PlacedBet) -> dict:
     closing_snap = query.order_by(MarketSnapshot.ts.desc()).first()
     closing_prob = _implied_prob(closing_snap)
     if closing_prob is None:
+        return {"closing_prob": None, "clv_pp": None, "status": "unavailable"}
+
+    # A snapshot from days before the event is not a CLOSING line. The same
+    # "better no CLV than a contaminated one" rule as the kickoff check above,
+    # applied to the other end: having *a* pre-kickoff price isn't enough, it
+    # has to be a recent one.
+    #
+    # This is not hypothetical. The app was offline 2026-07-25 07:59 ->
+    # 2026-08-02 00:34 (7.7 days, machine off -- the poller heartbeat stops and
+    # resumes exactly there). Every event that started inside that window took
+    # its "closing" price from before the outage, and those bets silently
+    # dominated their buckets: soccer's median gap was 7.6 DAYS, and f1 (51
+    # bets) and mma (104) had NO uncontaminated closed rows at all.
+    #
+    # Measured when choosing 6h: it drops 100% of the outage-window rows in
+    # cs2/f1/mlb/mma/soccer/wnba while keeping 100% of the clean rows in every
+    # sport except tennis (91%). Clean medians sit at 2-47m, so 6h is far looser
+    # than normal operation needs and only bites on real gaps.
+    if (kickoff - closing_snap.ts) > MAX_CLOSING_STALENESS:
         return {"closing_prob": None, "clv_pp": None, "status": "unavailable"}
 
     return {
