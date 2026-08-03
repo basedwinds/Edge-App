@@ -248,25 +248,22 @@ def refresh_tennis_start_times():
         session = SessionLocal()
         try:
             updated = 0
-            # TODAY'S matches only. The schedule page is today's order of play, and
-            # the lookup key is just "Surname I." -- without this, an unfinished
-            # fixture from weeks ago involving the same player would be stamped
-            # with today's time.
-            today = datetime.date.today().isoformat()
-            candidates = (
-                session.query(TennisMatch)
-                .filter(TennisMatch.winner_key.is_(None), TennisMatch.match_date == today)
-                .all()
-            )
-            for match in candidates:
-                for name in (match.player_a_name, match.player_b_name):
-                    key = _key(name)
-                    fresh = times.get(key) if key else None
-                    if fresh and fresh != match.estimated_start_time:
-                        match.estimated_start_time = fresh
-                        match.start_time_source = "tennisexplorer"
-                        updated += 1
-                        break
+            # Matched on the PLAYER PAIR, with no date scope. The earlier version
+            # keyed on one surname and therefore had to restrict itself to
+            # match_date == today so an old fixture sharing a player would not be
+            # stamped. But match_date is itself unreliable: Sorger vs Kopp was
+            # dated 2026-08-01 while actually being played today, so it was
+            # skipped and kept a stale 20:00Z platform time while already in its
+            # second set. A pair cannot collide the way a lone surname can.
+            for match in session.query(TennisMatch).filter(TennisMatch.winner_key.is_(None)).all():
+                a, b = _key(match.player_a_name), _key(match.player_b_name)
+                if not a or not b:
+                    continue
+                fresh = times.get(frozenset((a, b)))
+                if fresh and fresh != match.estimated_start_time:
+                    match.estimated_start_time = fresh
+                    match.start_time_source = "tennisexplorer"
+                    updated += 1
             session.commit()
             log.info("tennis start times refreshed from tennisexplorer: %d updated", updated)
         finally:

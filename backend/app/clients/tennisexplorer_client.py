@@ -85,8 +85,8 @@ class TennisExplorerClient:
         return parse_draw_html(resp.text), parse_tournament_surface(resp.text)
 
 
-    def get_scheduled_times(self) -> dict[str, str]:
-        """{"Surname I.": ISO-UTC start} for every match on today's schedule.
+    def get_scheduled_times(self) -> dict[frozenset, str]:
+        """{frozenset({"Surname A.", "Surname B."}): ISO-UTC start} per match.
 
         WHY THIS EXISTS. Kalshi's occurrence_datetime is a scheduled estimate it
         NEVER revises, so as an order of play slips the app keeps showing the
@@ -120,9 +120,10 @@ class TennisExplorerClient:
         offset = round((page_now - now).total_seconds() / 60)
 
         soup = BeautifulSoup(html, "html.parser")
-        out: dict[str, str] = {}
+        out: dict[frozenset, str] = {}
         for table in soup.select("table.result"):
             current: tuple[int, int] | None = None
+            pending: tuple[str, str] | None = None
             for row in table.select("tr"):
                 cell = row.select_one("td.first.time") or row.select_one("td.time")
                 if cell:
@@ -133,7 +134,20 @@ class TennisExplorerClient:
                     continue
                 total = current[0] * 60 + current[1] - offset
                 start = now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(minutes=total)
-                out.setdefault(link.get_text(strip=True), start.strftime("%Y-%m-%dT%H:%M:%SZ"))
+                iso = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+                name = link.get_text(strip=True)
+                if pending is None:
+                    pending = (name, iso)
+                else:
+                    # Key on the PLAYER PAIR, order-independent. Keying on a single
+                    # surname forced a "today only" scope to avoid stamping old
+                    # fixtures that share a player -- and match_date is itself
+                    # unreliable, so Sorger vs Kopp (dated 2026-08-01 but played
+                    # today) was skipped entirely and kept a stale platform time
+                    # while already in its second set. A pair cannot collide that
+                    # way, so no date scope is needed.
+                    out[frozenset((pending[0], name))] = pending[1]
+                    pending = None
         return out
 
     def get_results_day(self, year: int, month: int, day: int) -> list[dict]:
