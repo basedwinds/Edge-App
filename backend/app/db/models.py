@@ -672,6 +672,12 @@ class PlacedBet(Base):
     nba_game_id = Column(String, nullable=True)  # present only for NBA game-tied market types
     wnba_game_id = Column(String, nullable=True)  # present only for WNBA game-tied market types
     cfb_game_id = Column(String, nullable=True)  # present only for CFB game-tied market types
+    # Sub-league / competition, snapshotted at placement like every other field
+    # here. "wnba" or "tennis" alone doesn't identify a row on the cross-sport
+    # Bet Tracker -- TENNIS could be a Grand Slam or an ITF futures match, and
+    # VALORANT a VCT international or a regional Challengers game. Nullable
+    # because most sports are a single league and legitimately have none.
+    league = Column(String, nullable=True)
     mlb_game_id = Column(String, nullable=True)  # present only for MLB game-tied market types
     mma_fight_id = Column(String, nullable=True)  # present only for MMA fight-tied market types
     tennis_match_id = Column(Integer, nullable=True)  # present only for Tennis match-tied market types

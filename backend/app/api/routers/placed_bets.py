@@ -157,6 +157,7 @@ class PlacedBetIn(BaseModel):
     nba_game_id: str | None = None
     wnba_game_id: str | None = None
     cfb_game_id: str | None = None
+    league: str | None = None
     mlb_game_id: str | None = None
     mma_fight_id: str | None = None
     tennis_match_id: int | None = None
@@ -179,6 +180,7 @@ class PlacedBetOut(BaseModel):
     market_type: str
     source: str
     sport: str
+    league: str | None = None
     team: str | None
     line: float | None
     side: str | None
@@ -328,6 +330,7 @@ class OpenBetOut(BaseModel):
     id: int
     market_id: int              # the underlying Market -- lets the tracker open reasoning + dedup placed
     sport: str
+    league: str | None = None
     source: str
     market_type: str
     label: str
@@ -356,6 +359,7 @@ class SettledBetOut(BaseModel):
     id: int
     market_id: int
     sport: str
+    league: str | None = None
     source: str
     market_type: str
     label: str
@@ -394,6 +398,7 @@ def _to_out(session: Session, row: PlacedBet) -> PlacedBetOut:
         nba_game_id=row.nba_game_id,
         wnba_game_id=row.wnba_game_id,
         cfb_game_id=row.cfb_game_id,
+        league=row.league,
         mlb_game_id=row.mlb_game_id,
         mma_fight_id=row.mma_fight_id,
         tennis_match_id=row.tennis_match_id,
@@ -746,7 +751,7 @@ def get_open_bets(session: Session = Depends(get_session)):
         # explicit 'Z' so the browser parses them as UTC, not local time -- else
         # a just-started game misreads as hours away (timezone-offset bug).
         out.append((start_dt, OpenBetOut(
-            id=r.id, market_id=r.market_id, sport=r.sport, source=r.source, market_type=r.market_type,
+            id=r.id, market_id=r.market_id, sport=r.sport, league=r.league, source=r.source, market_type=r.market_type,
             label=r.label, team=r.team, side=r.side, line=r.line,
             stake_pool=r.stake_pool,
             stake_dollars=r.stake_dollars, stake_units=r.stake_units,
@@ -808,7 +813,7 @@ def get_settled_bets(session: Session = Depends(get_session)):
         except Exception:
             final_score = None
         out.append(SettledBetOut(
-            id=r.id, market_id=r.market_id, sport=r.sport, source=r.source, market_type=r.market_type,
+            id=r.id, market_id=r.market_id, sport=r.sport, league=r.league, source=r.source, market_type=r.market_type,
             label=r.label, team=r.team, side=r.side, line=r.line,
             stake_pool=r.stake_pool, stake_dollars=r.stake_dollars, stake_units=r.stake_units,
             market_prob_at_placement=r.market_prob_at_placement,

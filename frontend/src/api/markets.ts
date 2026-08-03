@@ -2252,6 +2252,9 @@ export interface PlacedBetPayload {
   market_type: string;
   source: "kalshi" | "polymarket";
   sport: SportKey;
+  /** Sub-league (ATP/ITF, Premier League, VCT/Challengers). Null for
+   *  single-league sports. Snapshotted at placement, not re-joined. */
+  league: string | null;
   team: string | null;
   line: number | null;
   side: string | null;
@@ -2358,6 +2361,7 @@ export interface OpenBetPayload {
   id: number;
   market_id: number;
   sport: string;
+  league: string | null;
   source: string;
   market_type: string;
   label: string;
@@ -2392,6 +2396,7 @@ export interface SettledBetPayload {
   id: number;
   market_id: number;
   sport: string;
+  league: string | null;
   source: string;
   market_type: string;
   label: string;
@@ -2479,6 +2484,7 @@ export async function markBetPlaced(row: RecommendedBetRow): Promise<PlacedBetPa
     nba_game_id: row.nbaGameId,
     wnba_game_id: row.wnbaGameId ?? null,
     cfb_game_id: row.cfbGameId ?? null,
+    league: row.league ?? null,
     mlb_game_id: row.mlbGameId,
     mma_fight_id: row.mmaFightId,
     tennis_match_id: row.tennisMatchId,

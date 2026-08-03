@@ -68,6 +68,7 @@ _MISSING_COLUMNS_BY_TABLE = {
         ("paper", "BOOLEAN DEFAULT 0"),
         ("race_event_id", "INTEGER"),
         ("original_start_time", "VARCHAR"),
+        ("league", "VARCHAR"),
     ],
     "catalog_entries": [
         ("sport", "VARCHAR"),

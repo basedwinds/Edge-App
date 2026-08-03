@@ -204,7 +204,12 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                   ) : "—"}
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)]">{b.start_time ? gameResolution(b.start_time).label : (dateOnly ?? "—")}</td>
-                <td className="px-3 py-2 text-[var(--color-text-dim)]">{SPORT_LABEL[b.sport] ?? b.sport}</td>
+                <td className="px-3 py-2 text-[var(--color-text-dim)]">
+                  <span className="block">{SPORT_LABEL[b.sport] ?? b.sport}</span>
+                  {b.league && (
+                    <span className="block text-[10px] text-[var(--color-text-muted)] truncate max-w-[130px]" title={b.league}>{b.league}</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">{b.label}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
@@ -278,7 +283,12 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
             return (
               <tr key={b.id} className="hover:bg-[var(--color-surface)] align-top">
                 <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)]">{settledDate(b.settled_at)}</td>
-                <td className="px-3 py-2 text-[var(--color-text-dim)]">{SPORT_LABEL[b.sport] ?? b.sport}</td>
+                <td className="px-3 py-2 text-[var(--color-text-dim)]">
+                  <span className="block">{SPORT_LABEL[b.sport] ?? b.sport}</span>
+                  {b.league && (
+                    <span className="block text-[10px] text-[var(--color-text-muted)] truncate max-w-[130px]" title={b.league}>{b.league}</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">{b.label}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
@@ -322,7 +332,7 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
 function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]; settled: SettledBetPayload[]; onExplain: (t: ReasoningTarget) => void }) {
   if (open.length === 0 && settled.length === 0) return null;
   type FRow = {
-    id: number; market_id: number; sport: string; source: string; label: string; market_type: string;
+    id: number; market_id: number; sport: string; league: string | null; source: string; label: string; market_type: string;
     team: string | null; side: string | null; line: number | null;
     entry: number | null; model_prob: number | null; stake: number; status: string; profit: number | null;
     resolves: string; resolveKey: number;
@@ -330,7 +340,7 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
   const mk = (b: OpenBetPayload | SettledBetPayload, status: string, profit: number | null): FRow => {
     const r = futuresResolution(b.sport, b.market_type);
     return {
-      id: b.id, market_id: b.market_id, sport: b.sport, source: b.source, label: b.label, market_type: b.market_type,
+      id: b.id, market_id: b.market_id, sport: b.sport, league: b.league, source: b.source, label: b.label, market_type: b.market_type,
       team: b.team, side: b.side, line: b.line, entry: b.market_prob_at_placement, model_prob: b.model_prob_at_placement, stake: b.stake_dollars,
       status, profit, resolves: r.label, resolveKey: r.sortKey,
     };
@@ -375,7 +385,7 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
                     )}
                   </div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
-                    {futuresMarketName({ market_type: r.market_type, side: r.side, line: r.line, group_label: r.label })} · {SPORT_LABEL[r.sport] ?? r.sport}
+                    {futuresMarketName({ market_type: r.market_type, side: r.side, line: r.line, group_label: r.label })} · {SPORT_LABEL[r.sport] ?? r.sport}{r.league ? ` · ${r.league}` : ""}
                   </div>
                 </td>
                 <td className="px-3 py-2">
@@ -430,6 +440,7 @@ export function Tracker() {
   const [openCollapsed, setOpenCollapsed] = useState(false);
   const [openWindow, setOpenWindow] = useState<"today" | "2d" | "all">("all");
   const [reasoning, setReasoning] = useState<ReasoningTarget | null>(null);
+  const [search, setSearch] = useState("");
 
   const decided = (data?.wins ?? 0) + (data?.losses ?? 0);
   const winRate = decided > 0 ? (data!.wins / decided) * 100 : null;
@@ -437,8 +448,22 @@ export function Tracker() {
   // Split game vs futures so each lands only in its own section (a futures bet
   // has no kickoff, so it shouldn't sit in the game "Open positions" watchlist
   // or "Completed bets" list -- it gets its own compact list under Futures).
-  const allOpen = openQuery.data ?? [];
-  const allSettled = settledQuery.data ?? [];
+  // Free-text search across every section at once: team/fighter/player name, the
+  // bet label (which carries the matchup, e.g. "NYM @ PHI"), and the league. All
+  // three sections filter together so searching a team answers "what do I have
+  // riding on them" in one look, rather than per-section.
+  const q = search.trim().toLowerCase();
+  const matchesSearch = useMemo(() => {
+    if (!q) return () => true;
+    const terms = q.split(/\s+/);
+    return (b: { team: string | null; label: string; league?: string | null; sport: string }) => {
+      const hay = `${b.team ?? ""} ${b.label} ${b.league ?? ""} ${b.sport}`.toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    };
+  }, [q]);
+
+  const allOpen = (openQuery.data ?? []).filter(matchesSearch);
+  const allSettled = (settledQuery.data ?? []).filter(matchesSearch);
   const openBets = allOpen.filter((b) => b.stake_pool !== "futures");
   const settledBets = allSettled.filter((b) => b.stake_pool !== "futures");
   const futuresOpen = allOpen.filter((b) => b.stake_pool === "futures");
@@ -500,6 +525,30 @@ export function Tracker() {
               <span className="text-[var(--color-text-dim)]">${data.at_risk_dollars.toLocaleString()}</span> at risk (not yet settled, excluded from P/L and ROI above)
             </div>
           )}
+
+          {/* One search across Open / Completed / Futures at once. */}
+          <div className="flex items-center gap-2 mb-4">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search team, player, matchup or league…"
+              className="w-full max-w-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] whitespace-nowrap"
+              >
+                clear
+              </button>
+            )}
+            {search && (
+              <span className="text-xs text-[var(--color-text-muted)] whitespace-nowrap">
+                {allOpen.length} open · {allSettled.length} settled
+              </span>
+            )}
+          </div>
 
           {/* Open positions -- the "what's coming up that I've bet on" watchlist */}
           <CollapsibleHeader
