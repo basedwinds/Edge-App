@@ -400,6 +400,35 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     def _match_pair_resolved(m: Market) -> bool:
         return m.tennis_match_id in matches_pair_resolved
 
+    # EIGHTH gap (2026-08-03, user-reported: Toby Martin, Kayla Day set 1, and
+    # Miriam vs Calista Liu all recommended while already under way or finished).
+    #
+    # Every gate above ultimately trusts estimated_start_time, and for tennis that
+    # field runs LATE -- Kalshi's occurrence_datetime is a scheduled estimate it
+    # never revises. So mid-match the app believes the match has not started,
+    # while Kalshi keeps quoting it (snapshots 3 minutes old, status active), so
+    # it is neither stale nor decided nor ladder-resolved. Kayla Day vs Diane
+    # Parry: est_start 2026-08-03T17:00Z, match_date 2026-08-02, no winner
+    # scraped, snapshot 3 minutes old.
+    #
+    # match_date comes from a DIFFERENT source (tennisexplorer) and is the only
+    # independent signal available. A match whose own date is already past is not
+    # an upcoming bet, whatever the start estimate claims. Deliberately
+    # conservative: match_date can itself be a day early, so this may drop a few
+    # genuinely upcoming matches. That is the right direction to err -- a missed
+    # bet costs nothing, a bet placed into a live or finished match is exactly
+    # what must never happen.
+    today = now_utc.date()
+
+    def _match_date_passed(m: Market) -> bool:
+        match = matches_by_id.get(m.tennis_match_id) if m.tennis_match_id else None
+        if match is None or not match.match_date:
+            return False
+        try:
+            return datetime.date.fromisoformat(match.match_date[:10]) < today
+        except ValueError:
+            return False
+
     def _match_looks_live_by_trading(m: Market) -> bool:
         return m.tennis_match_id in matches_live_by_trading
 
@@ -410,6 +439,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         and not _match_ladder_resolved(m)
         and not _match_looks_live_by_trading(m)
         and not _match_pair_resolved(m)
+        and not _match_date_passed(m)
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]
