@@ -46,7 +46,8 @@ DEFAULT_CFB_ALLOCATION_PCT = 0.06
 # 944 of CFB's 974 markets are season-long, so a futures sub-pool is not optional
 # here the way it is for a game-dominated sport. Set to the 0.15 the other
 # non-core sports use rather than the 0.3 NFL/NBA/MLB carry: CFB futures have no
-# forward CLV at all yet, and three of its futures types are tracking-only.
+# forward CLV at all yet, and three of its futures types rest on a committee
+# proxy (badged approximate, though still staked so they can be measured).
 CFB_FUTURES_SUBPOOL_PCT_KEY = "cfb_futures_subpool_pct"
 DEFAULT_CFB_FUTURES_SUBPOOL_PCT = 0.15
 # Racing (F1/NASCAR/IndyCar share one pool). Small + no futures split -- it's

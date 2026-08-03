@@ -109,11 +109,16 @@ def list_cs2_futures(session: Session = Depends(get_session)):
     """CS2's own tournament_winner futures. Priced (2026-07-23) by the Elo-
     seeded single-elim Monte Carlo (esports_tournament_pricing.py) off the field
     named by the markets themselves -- model_prob/edge are shown so the numbers
-    are visible and can be tracked against the market. They are deliberately NOT
-    staked: the bracket is an APPROXIMATION (real CS2 events are double-elim/
-    Swiss, and this app has no real draw for them), the same posture the F1
-    championship Monte Carlo takes -- priced for tracking, not bet, until it
-    proves out. Season-long aggregate markets (e.g. a whole-year "win an
+    are visible and can be tracked against the market.
+
+    STAKED as of 2026-08-02, having previously been tracking-only. The bracket is
+    still an APPROXIMATION (real CS2 events are double-elim/Swiss and this app
+    has no real draw for them) -- but not staking it meant it never became a
+    paper bet, never accrued forward CLV, and could never be shown right or
+    wrong. Since forward CLV is the only thing this app trusts, the approximate
+    model is the one that most needs measuring. It is badged in the UI instead,
+    and the CLV-selection gate can retire it on real data. Season-long aggregate
+    markets (e.g. a whole-year "win an
     international") stay unpriced -- they're not a single bracket at all."""
     markets = session.query(Market).filter(Market.sport == "cs2", Market.market_type == "tournament_winner", Market.status == "active").all()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])

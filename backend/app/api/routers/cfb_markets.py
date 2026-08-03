@@ -95,7 +95,9 @@ class CfbMarketOut(BaseModel):
     updated_at: str | None
     model_prob: float | None
     model_validated: bool
-    # True where the model rests on a proxy (committee seeding) -- shown, not staked.
+    # True where the model rests on a proxy (committee seeding). These ARE
+    # staked -- the badge is a warning, not a suppression; see
+    # APPROXIMATE_MARKET_TYPES for why suppressing them was wrong.
     model_approximate: bool
     edge: float | None
     kelly_fraction: float | None
