@@ -264,6 +264,7 @@ def refresh_tennis_start_times():
                     fresh = times.get(key) if key else None
                     if fresh and fresh != match.estimated_start_time:
                         match.estimated_start_time = fresh
+                        match.start_time_source = "tennisexplorer"
                         updated += 1
                         break
             session.commit()

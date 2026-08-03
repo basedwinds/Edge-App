@@ -274,6 +274,12 @@ class TennisMatch(Base):
     # not be trusted -- see tennis_markets.py. Verified on Fritz vs Jodar:
     # occurrence 2026-08-02T21:30Z (stale) vs expiration 2026-08-03T21:50Z.
     expected_expiration_time = Column(String, nullable=True)
+    # Which source last set estimated_start_time. tennisexplorer tracks the real
+    # order of play and WINS over Kalshi's occurrence_datetime, which is never
+    # revised. Without this the two writers fought every poll -- tennisexplorer
+    # wrote the correct time, the Kalshi step overwrote it moments later, and
+    # matches flickered in and out of the recommended list.
+    start_time_source = Column(String, nullable=True)
     player_a_key = Column(String, nullable=False)  # normalized "surname i." -- see class docstring
     player_a_name = Column(String, nullable=False)  # display name as the source rendered it
     player_b_key = Column(String, nullable=False)

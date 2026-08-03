@@ -112,8 +112,15 @@ def update_match_estimated_start_time(match: TennisMatch | None, estimated_start
     reasoning as MmaFight.estimated_start_time (see poller_mma.py). Whichever
     platform's poller has a real value for this match wins; never touched
     once the match is decided (winner_key set)."""
-    if match is not None and match.winner_key is None and estimated_start_time:
-        match.estimated_start_time = estimated_start_time
+    if match is None or match.winner_key is not None or not estimated_start_time:
+        return
+    # Never overwrite a tennisexplorer time -- that is the real order of play,
+    # while this value is Kalshi's occurrence_datetime, which is never revised
+    # once set. Both writers running poll is what made matches flicker.
+    if match.start_time_source == "tennisexplorer":
+        return
+    match.estimated_start_time = estimated_start_time
+    match.start_time_source = "platform"
 
 
 def update_match_expected_expiration(match: TennisMatch | None, expected_expiration_time: str | None) -> None:
