@@ -225,14 +225,38 @@ def list_lol_markets(session: Session = Depends(get_session)):
 
     all_snapshots = _batch_latest_snapshots(session, [m.id for m in markets])
     now_for_staleness = datetime.datetime.now(datetime.timezone.utc)
-    STALE_AFTER = datetime.timedelta(minutes=20)
+    # MEASURED AGAINST THE FEED, NOT THE WALL CLOCK -- same fix as
+    # tennis_markets.py, applied here because this sport was measured to have the
+    # same defect. Over 6 hours of real snapshot history the poll gap for this
+    # sport reached 35 minutes against a 20-minute threshold, so every
+    # overrun tipped EVERY market over the staleness line at once and emptied the
+    # board until the next burst refilled it. Nothing was wrong with the markets;
+    # the poll was just late. (Tennis showed this as matches vanishing from
+    # Recommended and reappearing minutes later.)
+    #
+    # Comparing each market against the newest snapshot in the feed is
+    # self-calibrating: a late poll shifts everything together and drops nothing,
+    # while a market that stops updating WHILE its neighbours keep ticking -- the
+    # genuine "delisted, price frozen" case this gate exists for -- still stands
+    # out immediately. FEED_DEAD_AFTER keeps an absolute backstop so a feed that
+    # dies completely cannot keep frozen markets alive forever.
+    STALE_BEHIND_FEED = datetime.timedelta(minutes=20)
+    FEED_DEAD_AFTER = datetime.timedelta(hours=2)
+
+    _snap_times = [
+        (s.ts if s.ts.tzinfo else s.ts.replace(tzinfo=datetime.timezone.utc))
+        for s in all_snapshots.values() if s is not None and s.ts is not None
+    ]
+    feed_latest = max(_snap_times) if _snap_times else None
 
     def _market_stale(m: Market) -> bool:
         snap = all_snapshots.get(m.id)
         if snap is None or snap.ts is None:
             return False
         ts = snap.ts if snap.ts.tzinfo else snap.ts.replace(tzinfo=datetime.timezone.utc)
-        return now_for_staleness - ts > STALE_AFTER
+        if feed_latest is None or now_for_staleness - feed_latest > FEED_DEAD_AFTER:
+            return now_for_staleness - ts > STALE_BEHIND_FEED
+        return feed_latest - ts > STALE_BEHIND_FEED
 
     # REAL BUG this guards against (user-reported 2026-07-20: recommended
     # bets pricing off already-decided matches, e.g. "0.1%" prices) -- see

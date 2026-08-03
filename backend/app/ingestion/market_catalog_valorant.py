@@ -64,8 +64,24 @@ def find_or_create_upcoming_match(
         return session.get(ValorantMatch, found["id"])
 
     resolved_date = match_date or datetime.date.today().isoformat()
+    source_match_id = f"live:{team_a_name}:{team_b_name}:{resolved_date}"
+    # Same guard cs2/lol/soccer already carry, and the one sport still missing it
+    # (tennis got it on 2026-08-03 after this exact failure took its whole
+    # Polymarket refresh down). The existence check above reads a snapshot taken
+    # once at the start of the run AND only sees UNFINISHED matches, so a row
+    # created earlier in this same run -- or a finished row still holding the key
+    # -- is invisible to it, and the insert then dies on "UNIQUE constraint
+    # failed: valorant_matches.source, valorant_matches.source_match_id", aborting
+    # the entire refresh rather than skipping one match. Re-check the DB itself.
+    existing = (
+        session.query(ValorantMatch)
+        .filter_by(source="live", source_match_id=source_match_id)
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
     match = ValorantMatch(
-        source="live", source_match_id=f"live:{team_a_name}:{team_b_name}:{resolved_date}",
+        source="live", source_match_id=source_match_id,
         event_name=event_name or "", match_date=resolved_date,
         team_a=team_a_name, team_b=team_b_name,
     )
