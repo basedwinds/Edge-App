@@ -39,6 +39,8 @@ _SEASON_START = (4, 15)
 _SEASON_END = (9, 30)
 
 _TTL = 3600
+# Retry window for a FAILED run (empty distribution) -- see warm().
+_FAILURE_TTL = 120
 _lock = threading.Lock()
 _cache: dict = {}
 
@@ -154,11 +156,24 @@ def prob_wins_at_least(dist: dict[int, int] | None, threshold: float, trials: in
 
 def warm(trials: int = 4000) -> None:
     """Recompute + cache off the request path -- the season fetch is one ESPN
-    call per day across the season."""
+    call per day across the season.
+
+    A FAILED run must not latch. Caching an empty result under the normal _TTL
+    pins every win-total row to "Season simulation not warm yet" for a full hour
+    even though the next attempt would succeed -- observed live 2026-08-03: the
+    sim stayed cold for 15+ minutes while running warm() by hand in the same
+    checkout produced 15 teams and exact win conservation. The failure modes
+    here are transient by nature (the 168-call season fetch races 11 other
+    pollers at startup, and simulate() deliberately returns {} rather than a
+    fabricated distribution when too few games rate), so a short retry window
+    is right: keep good results for the full hour, retry a bad one on the next
+    poller cycle."""
     now = time.time()
     with _lock:
         hit = _cache.get("dist")
-        if hit and now - hit[0] < _TTL:
+        # hit[1] is the distribution -- an empty one means the last attempt
+        # failed, so it expires after _FAILURE_TTL instead of _TTL.
+        if hit and now - hit[0] < (_TTL if hit[1] else _FAILURE_TTL):
             return
     try:
         # Load the Elo cache first -- it starts empty, and without this every

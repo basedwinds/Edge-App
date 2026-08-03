@@ -43,6 +43,8 @@ _SEASON_START = (8, 15)
 _SEASON_END = (12, 15)
 
 _TTL = 3600
+# Retry window for a FAILED run (empty result) -- see warm().
+_FAILURE_TTL = 120
 _lock = threading.Lock()
 _cache: dict = {}
 
@@ -315,7 +317,11 @@ def warm(trials: int = 4000) -> None:
     now = time.time()
     with _lock:
         hit = _cache.get("dist")
-        if hit and now - hit[0] < _TTL:
+    # A FAILED run must not latch: caching an empty result under the normal
+    # _TTL would pin every season row to "not warm yet" for a full hour even
+    # though the next attempt would likely succeed. Same fix as
+    # season_sim_wnba.warm, where this was observed live (2026-08-03).
+        if hit and now - hit[0] < (_TTL if hit[1] else _FAILURE_TTL):
             return
     try:
         dist = simulate(trials=trials)
