@@ -61,8 +61,9 @@ def _add_rest_days(games: list[dict]) -> None:
         last[g["away_team"]] = g["gameday"]
 
 
-def fetch_games(start: datetime.date, end: datetime.date) -> list[dict]:
-    events = espn_wnba_client.fetch_scoreboard_events(start, end)
+def fetch_games(start: datetime.date, end: datetime.date,
+                respect_horizon: bool = True) -> list[dict]:
+    events = espn_wnba_client.fetch_scoreboard_events(start, end, respect_horizon=respect_horizon)
     games = [g for g in (_parse_event(e) for e in events) if g is not None]
     _add_rest_days(games)
     return games

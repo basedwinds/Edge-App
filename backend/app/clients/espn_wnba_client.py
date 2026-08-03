@@ -17,7 +17,8 @@ _UA = {"User-Agent": "Mozilla/5.0"}
 FORWARD_DAYS = 14
 
 
-def fetch_scoreboard_events(start: datetime.date, end: datetime.date) -> list[dict]:
+def fetch_scoreboard_events(start: datetime.date, end: datetime.date,
+                            respect_horizon: bool = True) -> list[dict]:
     """Raw ESPN event dicts across [start, end], one scoreboard call per day.
     WNBA plays ~mid-May through mid-Oct; callers pass a season-wide window.
 
@@ -36,7 +37,14 @@ def fetch_scoreboard_events(start: datetime.date, end: datetime.date) -> list[di
     fetch is one HTTP call per day, so honouring a season-wide end would add ~100
     calls per refresh for schedule that barely changes. Two weeks comfortably
     covers the window in which markets get listed."""
-    horizon = datetime.date.today() + datetime.timedelta(days=FORWARD_DAYS)
+    # respect_horizon=False is for the SEASON SIM, which needs the whole
+    # remaining schedule. The clamp is right for the poller (one HTTP call per
+    # day, and markets only list ~2 weeks out) but silently truncates anything
+    # asking a season-wide question: measured 2026-08-02, the clamp left teams
+    # with at most 38 of their 44 games, which understates every win total in a
+    # way nothing surfaces as an error.
+    horizon = (datetime.date.today() + datetime.timedelta(days=FORWARD_DAYS)
+               if respect_horizon else end)
     out = []
     with httpx.Client(timeout=30.0, headers=_UA) as client:
         day = start
