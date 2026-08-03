@@ -156,6 +156,7 @@ class PlacedBetIn(BaseModel):
     nfl_game_id: str | None = None
     nba_game_id: str | None = None
     wnba_game_id: str | None = None
+    cfb_game_id: str | None = None
     mlb_game_id: str | None = None
     mma_fight_id: str | None = None
     tennis_match_id: int | None = None
@@ -392,6 +393,7 @@ def _to_out(session: Session, row: PlacedBet) -> PlacedBetOut:
         nfl_game_id=row.nfl_game_id,
         nba_game_id=row.nba_game_id,
         wnba_game_id=row.wnba_game_id,
+        cfb_game_id=row.cfb_game_id,
         mlb_game_id=row.mlb_game_id,
         mma_fight_id=row.mma_fight_id,
         tennis_match_id=row.tennis_match_id,

@@ -2478,6 +2478,7 @@ export async function markBetPlaced(row: RecommendedBetRow): Promise<PlacedBetPa
     nfl_game_id: row.nflGameId,
     nba_game_id: row.nbaGameId,
     wnba_game_id: row.wnbaGameId ?? null,
+    cfb_game_id: row.cfbGameId ?? null,
     mlb_game_id: row.mlbGameId,
     mma_fight_id: row.mmaFightId,
     tennis_match_id: row.tennisMatchId,
