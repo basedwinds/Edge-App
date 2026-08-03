@@ -89,6 +89,13 @@ def is_weekly_market_type(market_type: str) -> bool:
     return market_type in WEEKLY_MARKET_TYPES
 
 
+# A market this far toward either extreme is priced as a near-certainty.
+EXTREME_MARKET_PRICE = 0.10
+# Disagreement with an extreme market beyond this is not an edge -- see the note
+# in kelly_fraction.
+IMPLAUSIBLE_EDGE = 0.25
+
+
 def kelly_fraction(
     model_prob: float | None,
     market_price: float | None,
@@ -118,6 +125,38 @@ def kelly_fraction(
     Recommended Bets list once caught (all 12 MLB weekly picks were untraded
     rows at the time this was found). Caller passes False when a source's
     snapshot has volume AND last_price both exactly 0."""
+    # IMPLAUSIBLE-EDGE GUARD (2026-08-03, after a real loss).
+    #
+    # A bet was recommended on Toby Martin at a market price of 0.05 while the
+    # model said 0.67 -- a "62pp edge". The market was at 0.05 because the match
+    # was already in play and he was losing; it settled LOST two minutes after
+    # being placed. Every start-time gate missed it, because Kalshi's
+    # occurrence_datetime claimed the match had not begun.
+    #
+    # This does not rely on any timestamp, which is the point -- those are the
+    # thing that keeps failing. It relies on the shape of the disagreement, and
+    # the outcome record backs it up. Placed bets bucketed by |edge|:
+    #
+    #     0-10pp   n=1923  win 38.3%  avg market price 0.408
+    #     10-20pp  n= 713  win 45.7%  avg market price 0.390
+    #     20-30pp  n= 328  win 44.8%  avg market price 0.320
+    #     30pp+    n= 604  win 55.0%  avg market price 0.087
+    #
+    # The first band behaves like a real market (bet at 40.8%, win 38.3% -- fair
+    # pricing minus spread). The 30pp+ band is betting at an average price of
+    # 8.7%: those are not underdogs the model found value on, they are markets
+    # priced low because the result was already being decided.
+    #
+    # So: refuse when the market has priced something as a heavy longshot AND the
+    # model wildly disagrees. A genuine pre-match edge of that size against a
+    # market that extreme does not exist -- it is a live price, a stale price, or
+    # a broken model, and none of those is a bet worth making.
+    if model_prob is not None and market_price is not None:
+        gap = abs(model_prob - market_price)
+        extreme = market_price <= EXTREME_MARKET_PRICE or market_price >= 1 - EXTREME_MARKET_PRICE
+        if gap >= IMPLAUSIBLE_EDGE and extreme:
+            return None
+
     if model_prob is None or market_price is None:
         return None
     if market_price <= 0.0 or market_price >= 1.0:
