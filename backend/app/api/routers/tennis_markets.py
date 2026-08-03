@@ -420,6 +420,10 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     # what must never happen.
     today = now_utc.date()
 
+    # A match does not run for half a day; an expiry this far past the stated
+    # start means the start was never revised (see _start_time_untrusted).
+    _RESCHEDULE_GAP = datetime.timedelta(hours=10)
+
     def _start_time_untrusted(m: Market) -> bool:
         """True when this match's stored start cannot be believed.
 
@@ -444,13 +448,22 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         start, expiry = match.estimated_start_time, match.expected_expiration_time
         if start and expiry:
             try:
-                s_d = datetime.datetime.fromisoformat(start.replace("Z", "+00:00")).date()
-                e_d = datetime.datetime.fromisoformat(expiry.replace("Z", "+00:00")).date()
+                s_dt = datetime.datetime.fromisoformat(start.replace("Z", "+00:00"))
+                e_dt = datetime.datetime.fromisoformat(expiry.replace("Z", "+00:00"))
             except ValueError:
                 return False
-            if s_d != e_d:
-                return True          # rescheduled: stored start is stale
-            return e_d < today       # trusted, and that day has passed
+            # Compare ELAPSED TIME, not calendar dates. Measured over 125 matches
+            # carrying both fields: the median gap is 0.0h (Kalshi normally sets
+            # expiration equal to occurrence) and only 6 exceed 6h -- those are
+            # the real reschedules. A date comparison instead flagged 6 matches
+            # that merely start late in the UTC day and expire after midnight,
+            # and its "expiry date has passed" arm excluded every remaining
+            # match outright, emptying the tennis list completely.
+            if (e_dt - s_dt) > _RESCHEDULE_GAP:
+                return True   # expiry far beyond the start: the start is stale
+            # Start is trustworthy -- say nothing here and let
+            # _match_already_started apply the normal instant comparison.
+            return False
         # No expiration to cross-check -- fall back to the independent date.
         if not match.match_date:
             return False
