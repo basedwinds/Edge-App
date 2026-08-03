@@ -24,7 +24,15 @@ from starlette.responses import Response
 # essentially always hit a warm entry, even for the intrinsically-slow
 # endpoints (tennis/markets is ~31s to compute over 3,600 rows). The TTL is the
 # fallback ceiling if the warmer misses a cycle.
-CACHE_TTL_SECONDS = 300
+# Lowered from 300s on 2026-08-03. The live-match gates (volume, decided,
+# started) are evaluated when the payload is BUILT and then frozen for the whole
+# TTL. A real case: Alejo Sanchez Quilez vs Rafael Izquierdo Luque was cached
+# while its market had traded only 2,890 -- correctly under the live-trading
+# ceiling at that instant -- then went live and traded up to 39,653, while the
+# cache kept serving it as a $20 recommendation. A stale PRICE is a minor
+# annoyance; a stale SAFETY DECISION recommends a bet on a match already in
+# play, so the window has to be short.
+CACHE_TTL_SECONDS = 60
 # The warmer sends this header to force a recompute+recache even when the
 # current entry is still fresh, so the cache never ages out from under a user.
 REFRESH_HEADER = "x-cache-refresh"
