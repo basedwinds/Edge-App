@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.data.mlb_ballparks import TEAM_TZ
-from app.db.models import CfbGame, Cs2Match, LolMatch, MarketSnapshot, MlbGame, NbaGame, NflGame, PlacedBet, RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame
+from app.db.models import CfbGame, Cs2Match, LolMatch, MmaFight, MarketSnapshot, MlbGame, NbaGame, NflGame, PlacedBet, RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame
 
 
 def _implied_prob(snap: MarketSnapshot | None) -> float | None:
@@ -127,6 +127,32 @@ def _lol_kickoff_utc(match: LolMatch) -> datetime.datetime | None:
         return None
 
 
+def _mma_kickoff_utc(fight: MmaFight) -> datetime.datetime | None:
+    """MmaFight.estimated_start_time is a full ISO UTC instant -- Kalshi's own
+    per-fight occurrence_datetime, STAGGERED across the card rather than one
+    flat event-level time (see the column's own docstring).
+
+    That per-fight staggering is what makes MMA CLV possible, and it is why the
+    old blanket exclusion here ("no single kickoff-equivalent moment on a UFC
+    card") is no longer true -- it was written before this field existed. All
+    164 MMA placed bets were returning status "not_applicable", so MMA could
+    never accrue the forward CLV this app treats as its only real evidence.
+
+    It is genuinely an ESTIMATE (fight order can reshuffle) and is refreshed
+    every poll, so the closing instant is approximate -- the same honest
+    compromise already accepted for RaceEvent.start_time. Fights without one
+    (75 of 109 today) return None and fall back to the degraded path exactly as
+    before, rather than being given a fabricated cutoff."""
+    if not fight.estimated_start_time:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(
+            fight.estimated_start_time.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
 def _game_kickoff_dt(game) -> datetime.datetime | None:
     """None if the kickoff/tip-off time isn't reliably known yet -- "00:00"
     is nflverse/ESPN's placeholder for "not yet announced" (see
@@ -147,6 +173,8 @@ def _game_kickoff_dt(game) -> datetime.datetime | None:
         return _cs2_kickoff_utc(game)
     if isinstance(game, LolMatch):
         return _lol_kickoff_utc(game)
+    if isinstance(game, MmaFight):
+        return _mma_kickoff_utc(game)
     if isinstance(game, RaceEvent):
         return game.start_time  # UTC race-start proxy (see _get_game note)
     if not game.gameday or not game.gametime or game.gametime == "00:00":
@@ -172,6 +200,10 @@ def _game_is_final(game) -> bool:
         return game.result_ft is not None
     if isinstance(game, (ValorantMatch, Cs2Match, LolMatch)):
         return game.winner is not None
+    # MmaFight has no home_score, so it must be handled before the fallback
+    # below -- winner_id is its null-until-fought result field.
+    if isinstance(game, MmaFight):
+        return game.winner_id is not None
     if isinstance(game, RaceEvent):
         # No finishing results tracked; the race is "final" (closing line exists)
         # once its start time has passed.
@@ -200,6 +232,8 @@ def _get_game(session: Session, bet: PlacedBet):
         return session.get(NbaGame, bet.nba_game_id) if bet.nba_game_id else None
     if bet.sport == "wnba":
         return session.get(WnbaGame, bet.wnba_game_id) if bet.wnba_game_id else None
+    if bet.sport == "mma":
+        return session.get(MmaFight, bet.mma_fight_id) if bet.mma_fight_id else None
     if bet.sport == "cfb":
         # Without this CFB fell through to the NFL lookup at the bottom, where
         # nfl_game_id is always None for a CFB bet -- so every CFB bet silently
@@ -259,7 +293,7 @@ def compute_bet_clv(session: Session, bet: PlacedBet) -> dict:
         else bet.cs2_match_id if bet.sport == "cs2"
         else bet.lol_match_id if bet.sport == "lol"
         else bet.race_event_id if bet.sport in ("f1", "irl", "nascar")
-        else None if bet.sport == "mma"
+        else bet.mma_fight_id if bet.sport == "mma"
         else bet.nfl_game_id
     )
     if bet.stake_pool != "weekly" or not has_game_id:
