@@ -14,6 +14,8 @@ from app.db.models import WnbaGame
 from app.ingestion import market_catalog_wnba, wnba_data
 from app.ingestion.market_matcher_wnba import build_game_index, match_kalshi_event_ticker
 from app.ingestion.poller_lock import db_write_lock
+from app.models import season_sim_wnba
+from app.models.baseline import elo_service_wnba
 
 log = logging.getLogger("poller_wnba")
 
@@ -160,20 +162,25 @@ def settle_placed_bets_wnba():
 
 def run_full_refresh_wnba():
     refresh_wnba_games()
-    refresh_wnba_ratings()
-    # NOTE: refresh_wnba_season_sim is deliberately NOT in this chain -- it runs
-    # as its own scheduler job (see scheduler.py). Moving it earlier within the
-    # chain was tried first and was not enough: py-spy showed this refresh still
-    # parked in refresh_wnba_games (~124 sequential ESPN calls) nine minutes into
-    # an undisturbed run, so anything downstream of that call was unreachable in
-    # practice. The sim fetches its own season schedule and needs only Elo, so
-    # chaining it behind an unrelated multi-minute fetch bought nothing.
+    # refresh_wnba_season_sim is NOT in this chain -- it runs as its own
+    # scheduler job (see scheduler.py). It fetches its own season schedule and
+    # needs only Elo, and refresh_wnba_games ahead of it is ~124 sequential ESPN
+    # calls, so keeping pricing off that critical path is worth it on its own.
+    #
+    # For the record, since the comment here previously claimed otherwise: that
+    # queueing was NOT why the win totals went unpriced. The real cause was a
+    # missing module import in this file -- both elo_service_wnba and
+    # season_sim_wnba were referenced but never imported, so refresh_wnba_ratings
+    # and refresh_wnba_season_sim both raised NameError on every run. In the
+    # original straight-line chain that killed the whole refresh at step 2, which
+    # is why no WNBA market ever refreshed either.
     #
     # Steps are also individually guarded, matching run_full_refresh_cfb: a
     # straight-line chain meant one raising step (a Kalshi 429, say) silently
     # skipped everything after it -- including settlement -- with no log line
     # naming which step died.
-    for step in (refresh_kalshi_wnba_moneyline,
+    for step in (refresh_wnba_ratings,
+                 refresh_kalshi_wnba_moneyline,
                  refresh_kalshi_wnba_spread_total,
                  refresh_kalshi_wnba_halves,
                  refresh_kalshi_wnba_win_totals,
