@@ -577,4 +577,27 @@ def settle_finished_games(session: Session) -> int:
     if settled:
         session.commit()
         log.info("auto-settled %d placed bets from final scores", settled)
+
+    # Fallback for bets the result scrapers haven't caught up on: ask Kalshi
+    # for its own market result. Only for bets already past their scheduled
+    # start, so this is a few single-market lookups, not a crawl. See
+    # kalshi_settlement.py for why it is deliberately narrow.
+    settled += _settle_stragglers_from_kalshi(session)
     return settled
+
+
+def _settle_stragglers_from_kalshi(session: Session) -> int:
+    import datetime
+
+    from app.models.clv import _game_kickoff_dt, _get_game
+    from app.models.kalshi_settlement import settle_pending_from_kalshi
+
+    now = datetime.datetime.utcnow()
+    stuck = []
+    for bet in session.query(PlacedBet).filter(PlacedBet.status == "pending").all():
+        game = _get_game(session, bet)
+        kickoff = _game_kickoff_dt(game) if game is not None else None
+        if kickoff is None or (now - kickoff).total_seconds() < 4 * 3600:
+            continue
+        stuck.append(bet)
+    return settle_pending_from_kalshi(session, stuck) if stuck else 0
