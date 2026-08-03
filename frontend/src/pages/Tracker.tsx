@@ -117,7 +117,7 @@ function EquityCurve({ points, mode }: { points: PortfolioPointPayload[]; mode: 
 // "in 3h", "in 12m", "in play", or "delayed?" — the last when a bet's scheduled
 // start is well in the past but it's still pending (the game hasn't produced a
 // result, so it was probably delayed/postponed, or just needs settling).
-function startLabel(iso: string | null): { text: string; soon: boolean; late: boolean } {
+function startLabel(iso: string | null, marketStatus?: string | null): { text: string; soon: boolean; late: boolean } {
   if (!iso) return { text: "—", soon: false, late: false };
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return { text: "—", soon: false, late: false };
@@ -130,7 +130,18 @@ function startLabel(iso: string | null): { text: string; soon: boolean; late: bo
     return { text: `in ${Math.round(hrs / 24)}d`, soon: false, late: false };
   }
   const hoursPast = -diff / 3600000;
-  if (hoursPast > 4) return { text: "delayed?", soon: false, late: true }; // long past scheduled start, still unsettled
+  if (hoursPast > 4) {
+    // "delayed?" used to fire on everything past its estimate, which overstated
+    // the problem: checked against Kalshi (2026-08-03), 4 of 6 such bets had
+    // markets still ACTIVE -- the matches genuinely had not happened, because
+    // Kalshi's occurrence_datetime is a scheduled estimate it never revises.
+    // A still-trading market means we are simply waiting; only a market that
+    // has gone away while the bet stays pending is actually stuck.
+    const stillTrading = marketStatus === "active" || marketStatus == null;
+    return stillTrading
+      ? { text: "awaiting", soon: false, late: false }
+      : { text: "delayed?", soon: false, late: true };
+  }
   return { text: "in play", soon: false, late: false };
 }
 
@@ -177,7 +188,7 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
         </thead>
         <tbody className="divide-y divide-[var(--color-border)]">
           {bets.map((b) => {
-            const s = startLabel(b.start_time);
+            const s = startLabel(b.start_time, b.market_status);
             // MMA (and any bet) with only a date, no precise time.
             const dateOnly = !b.start_time && b.start_date
               ? new Date(b.start_date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })

@@ -2369,6 +2369,9 @@ export interface OpenBetPayload {
   market_id: number;
   sport: string;
   league: string | null;
+  /** Market.status as last polled. 'active' = the platform still has it
+   *  trading, so a bet past its start is awaiting, not stuck. */
+  market_status: string | null;
   source: string;
   market_type: string;
   label: string;

@@ -331,6 +331,9 @@ class OpenBetOut(BaseModel):
     market_id: int              # the underlying Market -- lets the tracker open reasoning + dedup placed
     sport: str
     league: str | None = None
+    # Market.status as we last saw it. 'active' means the platform still has it
+    # trading, so a bet past its scheduled start is merely AWAITING, not stuck.
+    market_status: str | None = None
     source: str
     market_type: str
     label: str
@@ -708,9 +711,16 @@ def get_open_bets(session: Session = Depends(get_session)):
         .filter(PlacedBet.status == "pending", PlacedBet.paper == False)  # noqa: E712
         .all()
     )
-    from app.db.models import MmaFight
+    from app.db.models import Market, MmaFight
 
     out: list[tuple[datetime.datetime | None, OpenBetOut]] = []
+    # One lookup for every market these bets point at, so the tracker can tell
+    # "platform still has it trading" from "market gone but bet unsettled".
+    _market_ids = [b.market_id for b in rows if b.market_id]
+    market_status_by_id = {
+        m.id: m.status
+        for m in (session.query(Market).filter(Market.id.in_(_market_ids)).all() if _market_ids else [])
+    }
     for r in rows:
         start_dt: datetime.datetime | None = None
         start_date: str | None = None
@@ -751,6 +761,7 @@ def get_open_bets(session: Session = Depends(get_session)):
         # explicit 'Z' so the browser parses them as UTC, not local time -- else
         # a just-started game misreads as hours away (timezone-offset bug).
         out.append((start_dt, OpenBetOut(
+            market_status=market_status_by_id.get(r.market_id),
             id=r.id, market_id=r.market_id, sport=r.sport, league=r.league, source=r.source, market_type=r.market_type,
             label=r.label, team=r.team, side=r.side, line=r.line,
             stake_pool=r.stake_pool,
