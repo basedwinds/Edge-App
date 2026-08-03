@@ -80,6 +80,53 @@ def _resolved_outcomes(condition_id: str) -> dict[str, float] | None:
     return dict(zip(names, vals))
 
 
+def _match_outcome(stored: str, resolved: dict[str, float]) -> float | None:
+    """Find the stored leg in Polymarket's resolved outcome vector.
+
+    REAL BUG this fixes (measured 2026-08-03). An exact `resolved.get(stored)`
+    matched NOTHING. Sampling 40 pending Polymarket tennis bets, 10 had markets
+    that were genuinely resolved and ZERO of those matched exactly: 9 differed
+    only in case (we store "over", Polymarket publishes "Over") and 1 stored a
+    full name against a surname ("Matt Hulme" vs ["Bouzige", "Hulme"]). So every
+    Polymarket tennis bet that COULD have auto-settled was instead logged as a
+    drifted outcome and left pending -- 1,994 were sitting unsettled.
+
+    Three passes, each stricter about ambiguity than the last:
+      1. exact
+      2. case-insensitive
+      3. surname (last token), and ONLY when exactly one outcome matches
+
+    The ambiguity guard on pass 3 matters: an outcome vector of two players who
+    share a surname must not be resolved by guessing. Same reasoning as the
+    Flashscore matcher refusing surname-only pairing after it would have
+    conflated the Tsitsipas brothers -- settling the wrong leg pays out the
+    wrong side of a real bet, which is worse than settling late.
+    """
+    if stored in resolved:
+        return resolved[stored]
+    lowered = {name.lower(): price for name, price in resolved.items()}
+    if stored.lower() in lowered:
+        return lowered[stored.lower()]
+    parts = stored.split()
+    if not parts:
+        return None
+    surname = parts[-1].lower()
+    hits = []
+    for name, price in resolved.items():
+        other = name.split()
+        if not other or other[-1].lower() != surname:
+            continue
+        # Only fall back to the surname when the other side has NO given name to
+        # contradict it ("Hulme" for our "Matt Hulme"). If both carry a given
+        # name they must agree on the initial, otherwise this happily matches
+        # "Stefanos Tsitsipas" to "Petros Tsitsipas" -- a real pair of brothers
+        # on the same tour, and settling the wrong leg pays out the wrong side.
+        if len(other) > 1 and len(parts) > 1 and other[0][:1].lower() != parts[0][:1].lower():
+            continue
+        hits.append(price)
+    return hits[0] if len(hits) == 1 else None
+
+
 def settle_pending_from_polymarket(session: Session, bets: list[PlacedBet]) -> int:
     """Grade `bets` from Polymarket's resolution. Returns how many settled."""
     import datetime
@@ -95,7 +142,7 @@ def settle_pending_from_polymarket(session: Session, bets: list[PlacedBet]) -> i
         resolved = _resolved_outcomes(parts[0])
         if not resolved:
             continue
-        price = resolved.get(parts[1])
+        price = _match_outcome(parts[1], resolved)
         if price is None:
             # Outcome name drifted from what we stored -- do not guess which leg
             # this bet was on.
