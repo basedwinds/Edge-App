@@ -50,7 +50,7 @@ AUTO_SETTLE_MARKET_TYPES = {
     # esports (cs2/valorant/lol)
     "series_winner", "series_total",
     # tennis (moneyline shared above); set/game markets
-    "set_winner", "set_total", "exact_score",
+    "set_winner", "set_total", "exact_score", "set_spread",
     # racing
     "race_winner", "top_n", "pole", "h2h",
 }
@@ -322,6 +322,47 @@ def _tennis_side(bet: PlacedBet, match: TennisMatch) -> "str | None":
     return None
 
 
+def _grade_tennis_set_spread(bet: PlacedBet, match: TennisMatch) -> "str | None":
+    """Polymarket's "Set Handicap +/-1.5" -- a SET margin, not a games margin.
+
+    Measured, not assumed: across 120 resolved markets on real 3-set matches
+    every -1.5 side resolved to 0 and every +1.5 side to 1, which is the set
+    handicap's defining behaviour and not the games handicap's (one bet covered
+    +1 on games and still resolved 0). See _grade_tennis_game_spread for the
+    Kalshi games version this was wrongly folded into.
+
+    Same refuse-to-guess policy as every other tennis grader: an unparseable
+    score, an unknown side, or a parse that disagrees with the recorded winner
+    all return None rather than risk misgrading real money.
+    """
+    if bet.line is None:
+        return None
+    side = _tennis_side(bet, match)
+    if side is None:
+        return None
+    sets = _parse_sets(match.score)
+    if not sets:
+        return None
+    sets_a = sum(1 for a, b in sets if a > b)
+    sets_b = sum(1 for a, b in sets if b > a)
+    winner = _tennis_winner_name(match)
+    if winner is None or sets_a == sets_b:
+        return None
+    parsed_winner = match.player_a_name if sets_a > sets_b else match.player_b_name
+    if not _names_eq(parsed_winner, winner):
+        return None
+    margin = (sets_a - sets_b) if side == "a" else (sets_b - sets_a)
+    # SIGNED LINE, unlike the Kalshi games version. Polymarket states the
+    # handicap from each player's own side: -1.5 means "must win by more than
+    # 1.5 sets", +1.5 means "must not lose by more than 1.5". Both are therefore
+    # `margin > -line`, NOT `margin > line` -- copying the games grader's
+    # comparison graded a 2-1 win as covering -1.5, which it does not.
+    threshold = -bet.line
+    if margin == threshold:
+        return "push"
+    return "won" if margin > threshold else "lost"
+
+
 def _grade_tennis_game_spread(bet: PlacedBet, match: TennisMatch) -> "str | None":
     """Games-differential handicap. Convention is pinned by the ingestion layer
     (market_catalog_tennis.upsert_kalshi_tennis_game_spread_market /
@@ -329,9 +370,14 @@ def _grade_tennis_game_spread(bet: PlacedBet, match: TennisMatch) -> "str | None
     (game_lines_tennis.prob_game_spread_cover): `bet.team` is the player the YES
     side favors and `bet.line` is a "wins by MORE than this many games" threshold
     -- so a positive line means team must win by more than it, and a negative line
-    means team must not lose by more than |line|. Polymarket names its version
-    "Set Handicap" but it was confirmed live to resolve on the same games
-    differential, so both sources grade identically here.
+    means team must not lose by more than |line|.
+
+    KALSHI ONLY. This used to claim Polymarket's "Set Handicap" resolved on the
+    same games differential "confirmed live". That was wrong, and it misgraded
+    real P/L. Tested against 120 resolved Polymarket markets on 3-set matches --
+    where the two readings disagree, since nobody wins 2-0 in three sets -- the
+    SET reading was correct 120/120 and the games reading 73/120. Those markets
+    are now market_type "set_spread" and grade in _grade_tennis_set_spread.
 
     Left ungraded (returns None) rather than guessed whenever anything is
     uncertain -- an unparseable/incomplete score, an unknown player side, or a
@@ -514,6 +560,7 @@ _TENNIS_GRADERS = {
     # grader still refuses to guess (returns None) when the score can't be
     # parsed or disagrees with the recorded winner.
     "game_spread": _grade_tennis_game_spread,
+    "set_spread": _grade_tennis_set_spread,
     # set_total still deliberately absent: its side semantics remain ambiguous,
     # and misgrading real P/L is worse than leaving it pending.
 }

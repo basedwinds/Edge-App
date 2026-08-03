@@ -341,7 +341,7 @@ def upsert_polymarket_tennis_match_total_row(session: Session, row: dict, tennis
 
 
 def upsert_polymarket_tennis_set_handicap_row(session: Session, row: dict, tennis_match_id: int | None) -> Market:
-    """Same market_type ("game_spread") as Kalshi's KXATPGSPREAD -- confirmed
+    """Same market_type ("set_spread") as Kalshi's KXATPGSPREAD -- confirmed
     live to be the same real concept (games differential for the whole
     match), just named "Set Handicap" by Polymarket and structured as a
     single +/-1.5 line rather than a ladder."""
@@ -350,7 +350,7 @@ def upsert_polymarket_tennis_set_handicap_row(session: Session, row: dict, tenni
     if market is None:
         market = Market(
             source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
-            market_type="game_spread", sport="tennis",
+            market_type="set_spread", sport="tennis",
         )
         session.add(market)
     market.tennis_match_id = tennis_match_id

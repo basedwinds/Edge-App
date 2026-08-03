@@ -35,8 +35,8 @@ from app.models.clv_selection import bucket_clv_stats, gate_kelly
 router = APIRouter(prefix="/tennis", tags=["tennis"])
 
 GAME_MARKET_TYPES = {
-    "moneyline", "set_winner", "game_spread", "game_total", "exact_score",
-    "set_total", "total_sets",
+    "moneyline", "set_winner", "game_spread", "set_spread", "game_total",
+    "exact_score", "set_total", "total_sets",
 }
 
 NO_BASELINE_REASON = (
@@ -158,7 +158,77 @@ def _exact_score_model_prob(market: Market, match: TennisMatch | None) -> float 
     if table is None:
         return None
     prob = table.get((player_sets, opponent_sets))
-    return round(prob, 4) if prob is not None else None
+    if prob is None:
+        return None
+    # THE TABLE IS CONDITIONAL ON THAT PLAYER WINNING, so it must be scaled by
+    # the probability they win at all. Proven, not assumed: its entries sum to
+    # 1.0 across winner-side scorelines only (2-0 and 2-1 for a Bo3, with no
+    # 0-2/1-2 mass at all), and its straight-sets values of 0.670-0.774 line up
+    # with the 0.705 straight-sets rate measured over 1,089 real completed Bo3
+    # matches in this app's own cache -- i.e. it is P(scoreline | this player
+    # wins), which is exactly how derive_tennis_game_line_constants.py bucketed
+    # it ("favorite_sets-underdog_sets" by favourite win-prob decile).
+    #
+    # Returning it raw claimed a 67% chance of "Player A wins 2-0" in an evenly
+    # matched game, where the real unconditional figure is about 34%. That
+    # roughly doubled the model probability on every exact-score market and
+    # manufactured edge against perfectly sane prices.
+    p_player_wins = p_a_moneyline if player_sets > opponent_sets else 1.0 - p_a_moneyline
+    return round(prob * p_player_wins, 4)
+
+
+def _set_spread_model_prob(market: Market, match: TennisMatch | None) -> float | None:
+    """Polymarket's "Set Handicap +/-1.5" -- a SET handicap, measured not assumed.
+
+    This market used to be stored as `game_spread` and priced with the GAMES
+    model, on the strength of a client docstring asserting it was "confirmed
+    live to be a GAMES differential". It is not. Tested against 120 resolved
+    markets on real 3-set matches -- the cases where the two readings disagree,
+    since nobody wins 2-0 in a three-setter -- the set reading was right 120/120
+    and the games reading 73/120. Every -1.5 side resolved to 0 and every +1.5
+    side to 1, which is the set handicap's defining behaviour and not the games
+    handicap's (Jay Clarke covered +1 on games yet resolved 0).
+
+    So -1.5 means "wins by 2+ SETS": 2-0 in a Bo3, 3-0 or 3-1 in a Bo5. That is
+    read straight off the exact-score distribution rather than approximated,
+    scaled by the win probability for the same conditional-table reason as
+    _exact_score_model_prob above.
+    """
+    sides = _resolve_side(market.team, match)
+    if sides is None or match is None or market.line is None:
+        return None
+    player_key, opponent_key = sides
+    elo_diff = _elo_diff(player_key, opponent_key, match.surface)
+    p_win = elo_service_tennis.get_match_win_prob(player_key, opponent_key, match.surface)
+    if elo_diff is None or p_win is None:
+        return None
+    best_of = _match_best_of(match)
+    table = game_lines_tennis.prob_exact_score(elo_diff, best_of, p_win)
+    if table is None:
+        return None
+    margin = abs(market.line)
+    # CAREFUL WITH THIS TABLE. It is conditional on the FAVOURITE winning --
+    # expressed in the calling player's coordinates, but every entry is a
+    # favourite-win scoreline. A first version of this function summed only the
+    # entries where the calling player wins, which silently returned 0 for the
+    # underdog's -1.5 side and therefore 1.0 for every +1.5 side. The mass for
+    # "underdog wins 2-0" is not in this table at all.
+    #
+    # So take from it only what it actually knows: the WINNER'S margin
+    # distribution, which is perspective-free. `blowout` is P(the winner, whoever
+    # that turns out to be, wins by more than `margin` sets) -- about 0.67 at
+    # even strength rising to 0.77 for a strong favourite, matching the 0.705
+    # straight-sets rate measured over 1,089 real completed Bo3 matches.
+    blowout = sum(
+        prob for (mine, theirs), prob in table.items()
+        if abs(mine - theirs) > margin
+    )
+    if market.line < 0:
+        return round(p_win * blowout, 4)
+    # The +margin side loses only when the OPPONENT wins by more than margin.
+    # Written this way the two sides of one market sum to exactly 1 by
+    # construction, which the previous version did not.
+    return round(1.0 - (1.0 - p_win) * blowout, 4)
 
 
 def _set_total_model_prob(market: Market, match: TennisMatch | None) -> float | None:
@@ -199,6 +269,8 @@ def _model_prob(m: Market, match: TennisMatch | None) -> float | None:
         return _set_winner_model_prob(m, match)
     if m.market_type == "game_spread":
         return _game_spread_model_prob(m, match)
+    if m.market_type == "set_spread":
+        return _set_spread_model_prob(m, match)
     if m.market_type == "game_total":
         return _game_total_model_prob(m, match)
     if m.market_type == "exact_score":
@@ -739,6 +811,7 @@ def get_tennis_market_reasoning(
         ]
         methodology = {
             "set_winner": "Per-set win probability, logistic regression fit against walk-forward Elo diff across every real set outcome in this app's merged match cache.",
+            "set_spread": "Set handicap (+/-1.5 sets) read directly off the empirical exact-scoreline distribution -- P(win by 2+ sets), scaled by the match win probability. Verified against 120 resolved markets on real 3-set matches: the set reading was correct 120/120, the games reading 73/120.",
             "game_spread": "Game differential (games won by each player) regressed against Elo diff, Normal-approximation cover probability -- same shape as this app's NFL/NBA/MLB spread models.",
             "game_total": "Total match games regressed against |Elo diff|, split by best-of-3 vs best-of-5 (a Bo5 match averages ~36 games vs Bo3's ~23 -- pooling these would bias every Grand Slam prediction), Normal-approximation over probability.",
             "exact_score": "Empirical scoreline frequency, bucketed by the favorite's own win-probability decile and best_of -- a direct nonparametric fit from real historical scorelines, not derived from an independent-sets assumption (checked separately and found to make moneyline WORSE when forced that way, see Backtests).",
@@ -759,6 +832,8 @@ def get_tennis_market_reasoning(
         factors.append(ReasoningFactorOut(label="Tier", detail=match.tier))
         if m.market_type == "set_winner" and m.line is not None:
             factors.append(ReasoningFactorOut(label="Set", detail=str(int(m.line))))
+        elif m.market_type == "set_spread" and m.line is not None:
+            factors.append(ReasoningFactorOut(label="Set handicap", detail=f"{m.line:+g} sets"))
         elif m.market_type == "game_spread" and m.line is not None:
             factors.append(ReasoningFactorOut(label="Line", detail=f"{m.team} {'+' if m.line >= 0 else ''}{m.line} games"))
         elif m.market_type == "game_total" and m.line is not None:
