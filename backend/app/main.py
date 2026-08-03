@@ -39,6 +39,18 @@ STARTUP_POLLER_STAGGER_SECONDS = 20
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+
+    # Every background timer started here goes through _schedule so it is DAEMON
+    # and gets cancelled on shutdown -- see the long note at the poller loop
+    # below for the hang this prevents. Defined up front because the Elo warm
+    # timer fires before the pollers are scheduled.
+    startup_timers: list[threading.Timer] = []
+
+    def _schedule(delay: float, fn):
+        timer = threading.Timer(delay, fn)
+        timer.daemon = True
+        timer.start()
+        startup_timers.append(timer)
     # Load every sport's Elo/rating cache straight from the DB FIRST, on its
     # own background thread firing immediately (t=0), before the staggered
     # market pollers below and long before the response-cache warmer's first
@@ -50,7 +62,7 @@ async def lifespan(app: FastAPI):
     # whose Elo hadn't loaded yet. Esports picks (cs2/valorant) silently
     # vanished after every restart until a later warm cycle happened to
     # recompute. See warm_all.py's own docstring for the full story.
-    threading.Timer(0, warm_all_elo).start()
+    _schedule(0, warm_all_elo)
     scheduler_module.start()
     # Kick off the first refresh in background threads so app startup isn't
     # blocked on network calls to Kalshi/Polymarket/nflverse. Staggered via
@@ -82,17 +94,37 @@ async def lifespan(app: FastAPI):
         run_full_refresh_cs2, run_full_refresh_lol, run_full_refresh_racing,
         run_full_refresh_cfb,
     ]
+    # EVERY startup timer MUST be daemon, and must be cancelled on shutdown.
+    #
+    # threading.Timer inherits daemon status from the thread that CREATES it,
+    # and this lifespan runs on the non-daemon MainThread -- so these were all
+    # non-daemon, and threading._shutdown() joined every one of them on the way
+    # out. Diagnosed live with py-spy (2026-08-03): after a reload or redeploy
+    # the worker sat in _shutdown() waiting on a Timer thread parked inside a
+    # Leaguepedia cargoquery (poller_lol.refresh_lol_results), which
+    # poller_lock's own docstring already documents can burn 100+ seconds on
+    # that API's rate limit. Meanwhile uvicorn's reloader PARENT still held the
+    # listening socket, so connections were accepted instantly and then never
+    # answered: every endpoint, /health included, hung for minutes while the
+    # process sat at 0% CPU looking alive.
+    #
+    # Daemon threads are not joined at interpreter exit, so the process can die
+    # immediately. cancel() additionally stops timers whose delay has not
+    # elapsed yet -- without it a fresh worker's pollers would still fire out of
+    # the dying process, doing pointless network I/O and DB writes.
     for i, poller in enumerate(pollers):
-        threading.Timer(i * STARTUP_POLLER_STAGGER_SECONDS, poller).start()
+        _schedule(i * STARTUP_POLLER_STAGGER_SECONDS, poller)
     # Same reasoning for the catalog scan -- also establishes the "known
     # markets" baseline on a fresh DB right away rather than waiting up to
     # 24h for the first scheduled run (see scheduler.py::run_catalog_scan).
-    threading.Timer(len(pollers) * STARTUP_POLLER_STAGGER_SECONDS, serialized(scheduler_module.run_catalog_scan)).start()
+    _schedule(len(pollers) * STARTUP_POLLER_STAGGER_SECONDS, serialized(scheduler_module.run_catalog_scan))
     # Dead-market sanity check (see dead_market_sanity_check.py) -- extra
     # delay beyond the last poller's own stagger slot so its network calls
     # have actually had time to finish, not just start.
-    threading.Timer((len(pollers) + 2) * STARTUP_POLLER_STAGGER_SECONDS, serialized(scheduler_module.run_sanity_check)).start()
+    _schedule((len(pollers) + 2) * STARTUP_POLLER_STAGGER_SECONDS, serialized(scheduler_module.run_sanity_check))
     yield
+    for timer in startup_timers:
+        timer.cancel()
     scheduler_module.stop()
 
 
