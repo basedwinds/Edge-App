@@ -119,7 +119,7 @@ def _moneyline_model_prob(m: Market, game: CfbGame) -> float | None:
     if p_home is None:
         return None
     # CFB is the ONLY sport in this app carrying a non-identity temperature
-    # (T=0.83, measured ECE 0.033 -- real under-confidence from those same talent
+    # (T=1.26, measured ECE 0.033 -- real OVER-confidence from those same talent
     # gaps). Applied on the home-perspective prob before flipping to the market's
     # side, same order as every other sport.
     p_home = calibration_temp.apply("cfb", p_home)
@@ -354,7 +354,7 @@ def get_cfb_market_reasoning(
             "Walk-forward team Elo (K=100, home-field +80, NO season regression), derived from 4,836 FBS "
             "games 2021-2025 and confirmed on held-out 2024 and 2025 seasons: Brier 0.186 / 71.4%. K is "
             "high by pro-league standards because ~130 teams play only ~12 games each across a huge talent "
-            "range. A measured temperature (T=0.83) corrects real under-confidence -- CFB is the only sport "
+            "range. A measured temperature (T=1.26) corrects real OVER-confidence -- CFB is the only sport "
             "here needing one. No injury/news layer is wired."
         ),
         factors=factors,

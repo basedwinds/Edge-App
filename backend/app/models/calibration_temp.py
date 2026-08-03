@@ -30,7 +30,25 @@ import math
 
 # Sport key (matches Market.sport) -> fitted temperature. Absent = 1.0 (identity).
 TEMPERATURE: dict[str, float] = {
-    "cfb": 0.83,  # validated OOS; applied once CFB is integrated at its season
+    # 2026-08-03: was 0.83, which was BACKWARDS -- it sharpened an already
+    # overconfident model and scored WORSE than no calibration at all on
+    # held-out seasons (logloss 0.56308 vs 0.55019 raw). Refit walk-forward on
+    # 3,860 games (2022-2025, 2021 dropped as Elo burn-in), trained on
+    # 2022-2023 and scored on 2024-2025: T=1.26 wins on both metrics
+    # (brier 0.18507 / logloss 0.54657 vs raw 0.18626 / 0.55019).
+    #
+    # T>1 SOFTENS. Favourite-side calibration on the held-out seasons, by Elo
+    # gap, is why -- the old value made every band worse:
+    #     gap        T=0.83 err    T=1.26 err
+    #     0-100        +0.044        +0.016
+    #     100-200      +0.050        -0.022
+    #     200-300      +0.120        +0.030
+    #     300-500      +0.055        -0.026
+    #     500+         +0.027        -0.016
+    # T=1.26's errors are small and alternate in sign; T=0.83's are uniformly
+    # positive, i.e. systematically overconfident. See
+    # scripts/cfb_calibration_audit.py to reproduce.
+    "cfb": 1.26,
 }
 
 _EPS = 1e-6

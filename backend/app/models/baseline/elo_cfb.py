@@ -45,9 +45,15 @@ gaps making many games near-certain -- it is NOT evidence of an edge over a
 market. Ships model_validated=False like every other model here; forward CLV
 remains the only judge.
 
-A measured temperature calibration already exists for this sport in
-calibration_temp.py (T=0.83, CFB is the only sport in the app needing one -- ECE
-0.033, real systematic under-confidence from those same talent gaps).
+A measured temperature calibration exists for this sport in calibration_temp.py
+(T=1.26, CFB is the only sport in the app needing one). Note the DIRECTION: this
+model is systematically OVER-confident -- on held-out seasons the favourite wins
+less often than the raw curve says, at every Elo gap. T>1 softens.
+
+That value replaced a T=0.83 on 2026-08-03. The old one sharpened, which was
+backwards: it scored worse than applying no calibration at all, and roughly
+doubled the favourite-side error in the 200-300 gap band. See
+scripts/cfb_calibration_audit.py, which reproduces the whole comparison.
 """
 from dataclasses import dataclass, field
 
