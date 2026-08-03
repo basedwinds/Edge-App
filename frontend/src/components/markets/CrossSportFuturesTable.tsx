@@ -7,8 +7,8 @@ import { futuresMarketName, futuresThreshold } from "../../utils/futuresLabel";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import { BetReasoningModal } from "./BetReasoningModal";
+import type { SportKey } from "../../lib/sports";
 
-type SportKey = "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
 export type CrossSportFuturesRow = FuturesMarketRow & { sport: SportKey };
 
 // Identifies a future by the real-world proposition, NOT the market id -- so a

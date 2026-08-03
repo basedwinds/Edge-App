@@ -5,6 +5,7 @@ import {
   fetchSettings, updateSettings, perGamePoolLabel,
   fetchAlertConfig, updateAlertConfig,
 } from "../api/markets";
+import type { SportKey } from "../lib/sports";
 
 const NUM = "w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]";
 const CELL_NUM = "w-16 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm tabular-nums text-right focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]";
@@ -269,7 +270,7 @@ export function Settings() {
   // Per-sport allocation rows, config-driven so the 10 sports render as one
   // clean table (alloc %, futures %, and the resulting $ pools inline) instead
   // of 20 stacked inputs plus a separate wall of pool read-outs.
-  const sportRows: { key: string; label: string; alloc: string; setAlloc: (v: string) => void; fut: string; setFut: (v: string) => void; noFutures?: boolean }[] = [
+  const sportRows: { key: SportKey; label: string; alloc: string; setAlloc: (v: string) => void; fut: string; setFut: (v: string) => void; noFutures?: boolean }[] = [
     { key: "nfl", label: "NFL", alloc: nflAllocInput, setAlloc: setNflAllocInput, fut: futuresSubpoolInput, setFut: setFuturesSubpoolInput },
     { key: "nba", label: "NBA", alloc: nbaAllocInput, setAlloc: setNbaAllocInput, fut: nbaFuturesSubpoolInput, setFut: setNbaFuturesSubpoolInput },
     { key: "wnba", label: "WNBA", alloc: wnbaAllocInput, setAlloc: setWnbaAllocInput, fut: wnbaFuturesSubpoolInput, setFut: setWnbaFuturesSubpoolInput, noFutures: true },

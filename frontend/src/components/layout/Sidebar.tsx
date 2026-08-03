@@ -6,7 +6,6 @@ import clsx from "clsx";
 import { fetchNewCatalogEntries } from "../../api/markets";
 import { sportFromPath } from "../../lib/sports";
 
-type Sport = "nfl" | "nba" | "wnba" | "cfb" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
 
 // Sport scope pills, grouped into labeled categories instead of one flat wrap
 // of 10 -- `to` is each sport's landing route (NFL is the root dashboard; WNBA

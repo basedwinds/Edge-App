@@ -8,9 +8,10 @@ import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
 import { futuresResolution, gameResolution } from "../utils/resolution";
 import { futuresMarketName, futuresThreshold } from "../utils/futuresLabel";
+import type { SportKey } from "../lib/sports";
 
 // Sports whose /reasoning endpoint exists (racing has no reasoning route yet).
-type ReasoningSport = "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
+type ReasoningSport = SportKey;
 const REASONING_SPORTS = new Set<string>(["nfl", "nba", "wnba", "mlb", "mma", "tennis", "soccer", "valorant", "cs2", "lol"]);
 type ReasoningTarget = { marketId: number; sport: ReasoningSport; modelProb: number | null; marketProb: number | null };
 

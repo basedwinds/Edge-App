@@ -14,8 +14,8 @@ import { fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import { BetReasoningModal } from "./BetReasoningModal";
+import type { SportKey } from "../../lib/sports";
 
-type SportKey = "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
 
 export const MARKET_TYPE_LABELS: Record<string, string> = {
   division_winner: "Division Winner",

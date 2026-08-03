@@ -1,6 +1,7 @@
 import { apiGet, apiPost, apiPut, apiDelete } from "./client";
 import { gameIdForRow } from "../lib/sports";
 import type { CfbMarketRow, Cs2MarketRow, FuturesMarketRow, GameMarketRow, LolMarketRow, MarketRow, MlbMarketRow, MmaMarketRow, NbaMarketRow, SoccerMarketRow, TennisMarketRow, ValorantMarketRow, WnbaMarketRow } from "../types/market";
+import type { SportKey } from "../lib/sports";
 
 /** Season-readiness config from the backend (same rule the Discord alerts use).
  * Lets the Recommended + Futures views hide "not ready yet" markets: a
@@ -280,7 +281,7 @@ export async function fetchMarketReasoning(
   marketId: number,
   modelProb: number | null,
   marketProb: number | null,
-  sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" | "f1" | "nascar" | "irl" = "nfl"
+  sport: SportKey = "nfl"
 ): Promise<ReasoningPayload> {
   const params = new URLSearchParams();
   if (modelProb !== null) params.set("model_prob", String(modelProb));
@@ -322,6 +323,9 @@ export interface SettingsPayload {
   wnba_pool_dollars: number;
   wnba_futures_pool_dollars: number;
   wnba_weekly_pool_dollars: number;
+  cfb_pool_dollars: number;
+  cfb_futures_pool_dollars: number;
+  cfb_weekly_pool_dollars: number;
   total_allocation_pct: number;
   mlb_allocation_pct: number;
   mlb_futures_subpool_pct: number;
@@ -523,7 +527,7 @@ export interface RecommendedBetRow {
    * settings.py::VALORANT_ALLOCATION_PCT_KEY), same as every other sport.
    * Threaded through to markBetPlaced so it knows which game-id field to
    * send. */
-  sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" | "f1" | "nascar" | "irl";
+  sport: SportKey;
   nbaGameId: string | null;
   /** Optional so only the WNBA builder sets it -- every other sport's builder
    * omits it (undefined), avoiding a churn edit across all ~9 builders. */
@@ -711,7 +715,7 @@ function computeMlbWaitReason(m: MlbMarketRow): string | null {
  * cards) -- caught via user feedback 2026-07-18. Renaming the stored
  * enum would need a data migration across every historical PlacedBet row
  * for zero functional gain, so this only changes what's SHOWN. */
-export function perGamePoolLabel(sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol"): string {
+export function perGamePoolLabel(sport: SportKey): string {
   if (sport === "nba" || sport === "wnba" || sport === "mlb") return "Daily";
   if (sport === "mma") return "Per-fight";
   if (sport === "tennis" || sport === "soccer" || sport === "valorant" || sport === "cs2" || sport === "lol") return "Per-match";
@@ -1909,7 +1913,7 @@ export function buildSoccerRecommendedBets(
  * title's own market_type set is passed in as `ladderTypes` since it
  * differs slightly per title (e.g. series_handicap only exists for
  * Valorant) -- see each title's own GAME_MARKET_TYPES in its router. */
-function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: string; source: "kalshi" | "polymarket"; kelly_fraction: number | null; suggested_stake_dollars: number | null; suggested_stake_units: number | null; stake_pool: "weekly" | "futures" | null; team: string | null; line: number | null; side: string | null; match_date: string | null; estimated_start_time: string | null; implied_prob: number | null; model_prob: number | null; edge: number | null; volume: number | null; match_label?: string | null; group_label?: string | null }>(
+function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: string; source: "kalshi" | "polymarket"; kelly_fraction: number | null; suggested_stake_dollars: number | null; suggested_stake_units: number | null; stake_pool: "weekly" | "futures" | null; team: string | null; line: number | null; side: string | null; match_date: string | null; estimated_start_time: string | null; implied_prob: number | null; model_prob: number | null; edge: number | null; volume: number | null; match_label?: string | null; group_label?: string | null; event_name?: string | null }>(
   sport: "valorant" | "cs2" | "lol",
   markets: M[],
   matchIdOf: (m: M) => number | null,
@@ -2237,7 +2241,7 @@ export interface PlacedBetPayload {
   market_id: number;
   market_type: string;
   source: "kalshi" | "polymarket";
-  sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol";
+  sport: SportKey;
   team: string | null;
   line: number | null;
   side: string | null;
@@ -2430,17 +2434,17 @@ export interface BetStatsPayload {
   calibration_buckets: CalibrationBucketPayload[];
 }
 
-export async function fetchPlacedBets(status?: string, sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" = "nfl"): Promise<PlacedBetPayload[]> {
+export async function fetchPlacedBets(status?: string, sport: SportKey = "nfl"): Promise<PlacedBetPayload[]> {
   const params = new URLSearchParams({ sport });
   if (status) params.set("status", status);
   return apiGet<PlacedBetPayload[]>(`/placed-bets?${params.toString()}`);
 }
 
-export async function fetchLockedPools(sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" = "nfl"): Promise<LockedPoolsPayload> {
+export async function fetchLockedPools(sport: SportKey = "nfl"): Promise<LockedPoolsPayload> {
   return apiGet<LockedPoolsPayload>(`/placed-bets/locked?sport=${sport}`);
 }
 
-export async function fetchBetStats(sport: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" = "nfl"): Promise<BetStatsPayload> {
+export async function fetchBetStats(sport: SportKey = "nfl"): Promise<BetStatsPayload> {
   return apiGet<BetStatsPayload>(`/placed-bets/stats?sport=${sport}`);
 }
 

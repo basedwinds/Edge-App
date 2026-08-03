@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X, TriangleAlert, ChevronDown, ChevronUp } from "lucide-react";
 import { fetchMarketReasoning } from "../../api/markets";
 import { EdgeBadge } from "./EdgeBadge";
+import type { SportKey } from "../../lib/sports";
 
 function formatPct(v: number | null) {
   return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -18,7 +19,7 @@ export function BetReasoningModal({
   marketId: number;
   modelProb: number | null;
   marketProb: number | null;
-  sport?: "nfl" | "nba" | "wnba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol" | "f1" | "nascar" | "irl";
+  sport?: SportKey;
   onClose: () => void;
 }) {
   const { data, isLoading, isError } = useQuery({

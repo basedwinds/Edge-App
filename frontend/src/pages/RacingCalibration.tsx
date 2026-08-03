@@ -4,6 +4,7 @@ import { PageShell } from "../components/layout/PageShell";
 import { StatTile } from "../components/markets/StatTile";
 import { StatTilesSkeleton } from "../components/ui/Skeleton";
 import { fetchBetStats } from "../api/markets";
+import { isRacingSeries } from "../lib/sports";
 
 const SERIES_LABEL: Record<string, string> = { f1: "Formula 1", irl: "IndyCar", nascar: "NASCAR" };
 
@@ -12,7 +13,9 @@ function formatPct(v: number | null) {
 }
 
 export function RacingCalibration() {
-  const { series = "f1" } = useParams<{ series?: string }>();
+  const { series: seriesParam } = useParams<{ series?: string }>();
+  // Narrowed, not cast: the param is whatever is in the URL.
+  const series = isRacingSeries(seriesParam) ? seriesParam : "f1";
   const { data, isLoading, isError } = useQuery({
     queryKey: ["bet-stats", series],
     queryFn: () => fetchBetStats(series),

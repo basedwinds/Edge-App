@@ -6,11 +6,14 @@ import { StatTile } from "../components/markets/StatTile";
 import { PlacedBetsTable } from "../components/markets/PlacedBetsTable";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchPlacedBets, settlePlacedBet, deletePlacedBet } from "../api/markets";
+import { isRacingSeries } from "../lib/sports";
 
 const SERIES_LABEL: Record<string, string> = { f1: "Formula 1", irl: "IndyCar", nascar: "NASCAR" };
 
 export function RacingPlaced() {
-  const { series = "f1" } = useParams<{ series?: string }>();
+  const { series: seriesParam } = useParams<{ series?: string }>();
+  // Narrowed, not cast: the param is whatever is in the URL.
+  const series = isRacingSeries(seriesParam) ? seriesParam : "f1";
   const queryClient = useQueryClient();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["placed-bets", series],

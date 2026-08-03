@@ -42,6 +42,7 @@ const EMPTY_PLACED: Set<string> = new Set();
 import { MARKET_TYPE_LABELS } from "./FuturesTable";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
+import type { SportKey } from "../../lib/sports";
 
 const GAME_MARKET_TYPE_LABELS: Record<string, string> = {
   moneyline: "Moneyline",
@@ -140,7 +141,7 @@ function mlbKickoffInstant(gameday: string, gametime: string, homeTeam: string):
 
 function formatGameDate(
   gameday: string | null, gametime: string | null,
-  sport: "nfl" | "nba" | "mlb" | "mma" | "tennis" | "soccer" | "valorant" | "cs2" | "lol", homeTeam: string | null,
+  sport: SportKey, homeTeam: string | null,
   estimatedStartTime?: string | null
 ) {
   if (!gameday) return <span className="text-[var(--color-text-muted)] italic">Season-long</span>;

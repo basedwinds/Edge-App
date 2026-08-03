@@ -13,8 +13,37 @@
  *
  *  Derive from SPORTS below rather than retyping a list. */
 
+/** Every sport key that can appear on a bet row, as a const tuple so the union
+ *  below derives from it. THIS IS THE ONLY PLACE THE LIST IS WRITTEN.
+ *
+ *  There were 14 hand-copied versions of this union across 10 files, in four
+ *  different shapes -- some missing "cfb", some missing the racing series, one
+ *  missing "wnba". None of them agreed, and the drift only surfaced as a broken
+ *  `npm run build` (vite dev does not typecheck, so the app ran fine meanwhile).
+ *
+ *  The racing series (f1/irl/nascar) are bet-row sports but are NOT in SPORTS
+ *  below: they share one /racing route, so they have no per-sport nav entry and
+ *  no game-id field. That is why this list is broader than SPORTS. */
+export const SPORT_KEYS = [
+  "nfl", "nba", "wnba", "cfb", "mlb", "soccer", "mma", "tennis",
+  "valorant", "cs2", "lol", "f1", "irl", "nascar",
+] as const;
+
+export type SportKey = (typeof SPORT_KEYS)[number];
+
+/** The three racing series. They share the /racing/:series route, so the series
+ *  arrives as a raw URL string and has to be narrowed before it can be used as a
+ *  SportKey -- an unrecognised /racing/xyz would otherwise query the backend with
+ *  whatever the URL said. */
+export const RACING_SERIES = ["f1", "irl", "nascar"] as const;
+export type RacingSeries = (typeof RACING_SERIES)[number];
+
+export function isRacingSeries(v: string | undefined): v is RacingSeries {
+  return v !== undefined && (RACING_SERIES as readonly string[]).includes(v);
+}
+
 export interface SportMeta {
-  key: string;
+  key: SportKey;
   label: string;
   /** Route prefix. NFL is the root dashboard, so its prefix is "" . */
   routePrefix: string;
