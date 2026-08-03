@@ -17,6 +17,7 @@ from app.ingestion.poller_cs2 import run_full_refresh_cs2
 from app.ingestion.poller_lol import run_full_refresh_lol
 from app.ingestion.poller_racing import run_full_refresh_racing
 from app.ingestion.poller_cfb import run_full_refresh_cfb
+from app.ingestion.poller_wnba import run_full_refresh_wnba
 from app.ingestion.poller_lock import serialized
 from app.models.dead_market_sanity_check import run_dead_market_sanity_check
 from app.models.snapshot_maintenance import prune_market_snapshots
@@ -260,6 +261,27 @@ def start():
         minutes=15,
         id="full_refresh_cfb",
         next_run_time=base_tick + timedelta(seconds=12 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # WNBA had NO recurring job at all until 2026-08-03 -- every other sport has
+    # one, and this was simply never added when WNBA was integrated. The sport
+    # refreshed exactly ONCE, from main.py's startup timer, and then never again:
+    # market prices went stale immediately (so no closing-line capture, hence no
+    # CLV), placed bets never auto-settled, and the season sim was attempted a
+    # single time. That last one is how this was found -- the win-total rows sat
+    # on "Season simulation not warm yet" indefinitely, and the retry added to
+    # season_sim_wnba.warm() could never fire because nothing ever called warm()
+    # a second time.
+    #
+    # 15min rather than 5min for the same reason as CFB above: refresh_wnba_games
+    # is ~124 sequential ESPN calls (one per day of the season window), which is
+    # far too heavy to repeat every 5 minutes for a schedule that barely changes.
+    scheduler.add_job(
+        run_full_refresh_wnba,
+        "interval",
+        minutes=15,
+        id="full_refresh_wnba",
+        next_run_time=base_tick + timedelta(seconds=14 * JOB_STAGGER_SECONDS),
         replace_existing=True,
     )
     scheduler.add_job(
