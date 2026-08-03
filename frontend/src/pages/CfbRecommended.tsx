@@ -36,7 +36,9 @@ export function CfbRecommended() {
       buildCfbRecommendedBets(
         marketsQuery.data ?? [],
         settingsQuery.data?.cfb_weekly_pool_dollars ?? 0,
-        lockedQuery.data?.weekly_locked_dollars ?? 0
+        settingsQuery.data?.cfb_futures_pool_dollars ?? 0,
+        lockedQuery.data?.weekly_locked_dollars ?? 0,
+        lockedQuery.data?.futures_locked_dollars ?? 0
       ),
     [marketsQuery.data, settingsQuery.data, lockedQuery.data]
   );

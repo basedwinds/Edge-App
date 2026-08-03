@@ -1321,7 +1321,9 @@ export function buildWnbaRecommendedBets(
 export function buildCfbRecommendedBets(
   markets: CfbMarketRow[],
   weeklyPoolDollars: number,
-  lockedWeeklyDollars = 0
+  futuresPoolDollars = 0,
+  lockedWeeklyDollars = 0,
+  lockedFuturesDollars = 0
 ): RecommendedBetsResult {
   const candidates: RecommendedBetRow[] = [];
   for (const m of markets) {
@@ -1384,12 +1386,20 @@ export function buildCfbRecommendedBets(
   const deduped = Array.from(crossPlatformCollapsed.values()).sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
   const gameCapped = capToOneRowPerGame(deduped);
 
-  const weeklyCeiling = Math.max(0, weeklyPoolDollars * PORTFOLIO_CEILING_PCT - lockedWeeklyDollars);
-  let cumulative = 0;
+  // Two pools. CFB season markets (win totals, conference/playoff futures --
+  // SEASON_MARKET_TYPES in the backend router) carry stake_pool "futures", but
+  // this capped everything against the WEEKLY ceiling. With far more season rows
+  // than game rows out of season, futures ate the game budget and the two
+  // competed for one pot that was never meant to hold both.
+  const poolCeilings = {
+    weekly: Math.max(0, weeklyPoolDollars * PORTFOLIO_CEILING_PCT - lockedWeeklyDollars),
+    futures: Math.max(0, futuresPoolDollars * PORTFOLIO_CEILING_PCT - lockedFuturesDollars),
+  };
+  const cumulative = { weekly: 0, futures: 0 };
   const shown: RecommendedBetRow[] = [];
   for (const row of gameCapped) {
-    if (cumulative + row.suggestedStakeDollars > weeklyCeiling) continue;
-    cumulative += row.suggestedStakeDollars;
+    if (cumulative[row.stakePool] + row.suggestedStakeDollars > poolCeilings[row.stakePool]) continue;
+    cumulative[row.stakePool] += row.suggestedStakeDollars;
     shown.push(row);
   }
 
