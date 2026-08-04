@@ -167,7 +167,7 @@ def list_lol_futures(session: Session = Depends(get_session)):
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         _traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         _kelly = gate_kelly(
-            kelly_fraction(model_prob, implied, _fk, _msf, _mineg, _traded),
+            kelly_fraction(model_prob, implied, _fk, _msf, _mineg, _traded, snap.yes_ask if snap else None),
             _clv, "lol", m.market_type,
         )
         _stake = size_stake_dollars(_mode, _kelly, _futures_pool, model_prob, implied, _unit, _fm, _ff,
@@ -323,7 +323,7 @@ def list_lol_markets(session: Session = Depends(get_session)):
         no_baseline_reason = None if model_prob is not None else NO_BASELINE_REASON
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "lol", m.market_type)
+        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "lol", m.market_type)
         pool = futures_pool if m.market_type == "tournament_winner" else weekly_pool
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)

@@ -200,7 +200,7 @@ def list_nba_futures(session: Session = Depends(get_session)):
         implied = _implied_prob(snap)
         model_prob = _futures_model_prob(m, sim_results)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "nba", m.market_type)
+        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "nba", m.market_type)
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE)  # every FUTURES_MARKET_TYPES entry is a futures-pool market
         out.append(
             FuturesMarketOut(
@@ -346,7 +346,7 @@ def list_nba_markets(session: Session = Depends(get_session)):
                     model_prob = _half_total_model_prob(m, game, 1 if m.market_type == "total_1h" else 2)
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "nba", m.market_type)
+        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "nba", m.market_type)
         pool = weekly_pool if is_weekly_market_type(m.market_type) else futures_pool
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)
 

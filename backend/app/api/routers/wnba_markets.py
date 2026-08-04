@@ -254,7 +254,7 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 model_prob = _half_model_prob(m, game, scoring)
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)
+        kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None)
         # Suppress the whole bucket if forward CLV says it doesn't work (no-op
         # until the bucket is well-sampled -- see clv_selection.py).
         if kelly is not None and not is_bucket_enabled(clv_stats, "wnba", m.market_type):

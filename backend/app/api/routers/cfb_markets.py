@@ -240,7 +240,7 @@ def list_cfb_markets(session: Session = Depends(get_session)):
                 no_baseline_reason = "No baseline -- at least one team has no rating history (likely a non-FBS opponent)."
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded)
+        kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None)
         if kelly is not None and not is_bucket_enabled(clv_stats, "cfb", m.market_type):
             kelly = None
         pool = futures_pool if m.market_type in FUTURES_MARKET_TYPES else weekly_pool

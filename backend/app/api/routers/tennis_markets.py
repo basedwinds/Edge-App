@@ -646,7 +646,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
             no_baseline_reason = None if model_prob is not None else NO_BASELINE_REASON
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "tennis", m.market_type)
+        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "tennis", m.market_type)
         stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)
         out.append(
             TennisMarketOut(
@@ -800,7 +800,7 @@ def list_tennis_futures(session: Session = Depends(get_session)):
         sim_result = sim_by_tournament.get((m.group_label or "", m.side or "atp"))
         model_prob = _match_player_to_sim(m.team, sim_result) if (sim_result and m.team) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded), clv_stats, "tennis", m.market_type)
+        kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "tennis", m.market_type)
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         out.append(

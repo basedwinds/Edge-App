@@ -103,6 +103,7 @@ def kelly_fraction(
     max_stake_fraction: float = MAX_STAKE_FRACTION,
     min_edge_to_bet: float = MIN_EDGE_TO_BET,
     has_traded: bool = True,
+    execution_price: float | None = None,
 ) -> float | None:
     """Returns the suggested stake as a fraction of bankroll (already
     scaled by fractional_kelly and capped at max_stake_fraction), or None if
@@ -163,6 +164,31 @@ def kelly_fraction(
         return None
     if not has_traded:
         return None
+
+    # THE EDGE HAS TO SURVIVE THE PRICE YOU ACTUALLY PAY.
+    #
+    # market_price here is the MID of the book. You do not get the mid -- betting
+    # the YES side of a market costs the ASK. On a tight book that distinction is
+    # noise; on a wide one it is the whole bet. Measured live 2026-08-04 over 226
+    # staked rows carrying a two-sided book, 16 had an edge that did not merely
+    # shrink at the ask but INVERTED: a real $20 LoL recommendation on Team WE
+    # read +8.6pp against the mid of 0.500 and -33.4pp against its ask of 0.92.
+    # $230 was staked across those rows.
+    #
+    # The bar applied here is min_edge_to_bet, the same one the mid has to clear,
+    # not merely "positive". min_edge_to_bet exists to demand a margin of safety;
+    # demanding it only of a price you cannot transact at defeats the point.
+    # Measured cost of using the stricter bar rather than "> 0": 41 rows / $510
+    # instead of 16 rows / $230.
+    #
+    # Only applies when an ask is actually known. Rows with no two-sided quote
+    # behave exactly as before, so this cannot silently empty a sport whose
+    # platform does not publish a book.
+    if execution_price is not None:
+        if execution_price <= 0.0 or execution_price >= 1.0:
+            return None
+        if (model_prob - execution_price) < min_edge_to_bet:
+            return None
 
     edge = model_prob - market_price
     if edge < min_edge_to_bet:
