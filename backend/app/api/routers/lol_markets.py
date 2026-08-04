@@ -215,8 +215,26 @@ def list_lol_markets(session: Session = Depends(get_session)):
 
     def _match_already_started(m: Market) -> bool:
         match = matches_by_id.get(m.lol_match_id) if m.lol_match_id else None
-        if match is None or not match.estimated_start_time:
+        if match is None:
             return False
+        if not match.estimated_start_time:
+            # FALL BACK TO THE DATE. A row can legitimately carry no start time:
+            # the platform may never publish one, and the repair for an ORPHANED
+            # fixture is to clear a bogus future start rather than invent a time
+            # of day nobody recorded. Without this fallback those rows read as
+            # "not started" forever and a match played days ago keeps showing up
+            # as recommendable -- which is exactly what happened to Invictus
+            # Gaming vs LNG Esports (played 2026-08-02) right after that repair.
+            #
+            # Strictly BEFORE today, so a match dated today whose time is unknown
+            # is still offered rather than hidden on a guess.
+            if not match.match_date:
+                return False
+            try:
+                day = datetime.date.fromisoformat(match.match_date[:10])
+            except ValueError:
+                return False
+            return day < now_utc.date()
         try:
             start = datetime.datetime.fromisoformat(match.estimated_start_time.replace("Z", "+00:00"))
         except ValueError:
