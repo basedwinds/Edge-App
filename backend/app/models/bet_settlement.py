@@ -26,10 +26,10 @@ already sport-agnostic in practice, just never given a non-NFL game to grade.
 """
 import logging
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.db.models import (
-    CfbGame, Cs2Match, LolMatch, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
+    CfbGame, Cs2Match, LolMap, LolMatch, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
     RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame,
 )
 
@@ -47,8 +47,10 @@ AUTO_SETTLE_MARKET_TYPES = {
     "moneyline", "spread", "total", "team_total", "moneyline_3way", "game_spread", "game_total", "btts",
     # mma
     "distance", "rounds", "method_of_finish",
-    # esports (cs2/valorant/lol)
-    "series_winner", "series_total",
+    # esports (cs2/valorant/lol). map_winner grades for LoL ONLY -- see
+    # _grade_esports_map_winner; CS2/Valorant have no per-map source, and
+    # their bets return None (stay pending) rather than being guessed.
+    "series_winner", "series_total", "map_winner",
     # tennis (moneyline shared above); set/game markets
     "set_winner", "set_total", "exact_score", "set_spread",
     # racing
@@ -541,11 +543,41 @@ _MMA_GRADERS = {
     "method_of_finish": _grade_mma_method,
 }
 
+def _grade_esports_map_winner(bet: PlacedBet, match) -> "str | None":
+    """"Who wins map N", graded off the per-map rows lol_map_results writes.
+
+    map_winner was previously ungradeable for the reason this file used to note
+    here: only the SERIES score was stored. LolMap now carries a winner per map
+    for LoL (gol.gg publishes one page per game), so the note no longer holds --
+    but ONLY for LoL. CS2's source is Cloudflare-gated and Valorant's match list
+    renders just the series score, so their map rows never exist and those bets
+    return None (ungraded) rather than being guessed at.
+
+    bet.line is the MAP NUMBER, not a handicap (see paper_logger's own note on
+    the same field).
+    """
+    if bet.sport != "lol" or bet.line is None:
+        return None
+    side = _esports_side(bet, match)
+    if side is None:
+        return None
+    session = object_session(match)
+    if session is None:
+        return None
+    row = (
+        session.query(LolMap)
+        .filter(LolMap.lol_match_id == match.id, LolMap.map_number == int(bet.line))
+        .one_or_none()
+    )
+    if row is None or row.winner is None:
+        return None
+    return "won" if row.winner == side else "lost"
+
+
 _ESPORTS_GRADERS = {
     "series_winner": _grade_esports_series_winner,
     "series_total": _grade_esports_series_total,
-    # map_winner deliberately absent: we store only the SERIES map score
-    # (maps_won_a/b), never per-map winners, so "who wins map N" isn't gradeable.
+    "map_winner": _grade_esports_map_winner,
 }
 
 _TENNIS_GRADERS = {

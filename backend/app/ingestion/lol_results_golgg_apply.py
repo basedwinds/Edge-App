@@ -64,6 +64,41 @@ def _day(value: str | None) -> datetime.date | None:
         return None
 
 
+def _write_maps(session: Session, match, picked: dict, series_maps: dict, alias_index) -> bool:
+    """Store per-map winners for an already-matched series (see lol_map_results).
+
+    Orients each map's winner onto THIS row's team_a/team_b by name, and writes
+    nothing at all if any map's winner cannot be attributed to one of the two --
+    a partially-written series would leave some map bets graded and others not,
+    off inconsistent assumptions.
+    """
+    from app.ingestion.lol_map_results import maps_for_series
+    from app.ingestion.lol_team_aliases import resolve as _resolve_name
+    from app.ingestion.market_catalog_lol import upsert_lol_map
+
+    maps = maps_for_series(series_maps, picked.get("match_date"),
+                           picked.get("team_a"), picked.get("team_b"))
+    if not maps:
+        return False
+
+    own_a = _norm(_resolve_name(match.team_a, alias_index) or match.team_a)
+    own_b = _norm(_resolve_name(match.team_b, alias_index) or match.team_b)
+    resolved = []
+    for row in maps:
+        w = _norm(row.get("winner_name"))
+        if w in (own_a, _norm(match.team_a)):
+            side = "team_a"
+        elif w in (own_b, _norm(match.team_b)):
+            side = "team_b"
+        else:
+            return False  # unattributable winner -> write nothing for this series
+        resolved.append((row["map_number"], side))
+
+    for map_number, side in resolved:
+        upsert_lol_map(session, lol_match_id=match.id, map_number=map_number, winner=side)
+    return True
+
+
 def apply_golgg_results(session: Session, rows: list[dict],
                         tolerance_days: int = DATE_TOLERANCE_DAYS) -> int:
     """Fill winner + maps_won_a/b on ungraded, already-started LolMatch rows.
@@ -89,15 +124,29 @@ def apply_golgg_results(session: Session, rows: list[dict],
     alias_index = build_alias_index(
         {n for r in rows for n in (r.get("team_a"), r.get("team_b")) if n}
     )
+    from app.ingestion.lol_map_results import golgg_series_maps
 
+    series_maps = golgg_series_maps()
+
+    # Rows needing EITHER a winner or per-map rows. Widened when map settlement
+    # landed: matches graded before that existed already have a winner, so a
+    # winner-only filter would leave them permanently without map rows and their
+    # map_winner bets permanently pending. The winner itself is still only ever
+    # written when it is currently None (see below), so re-visiting a graded row
+    # cannot overwrite a result -- including one settled by hand.
+    from app.db.models import LolMap
+
+    have_maps = {mid for (mid,) in session.query(LolMap.lol_match_id).distinct().all()}
     today = datetime.date.today()
     pending = [
-        m for m in session.query(LolMatch).filter(LolMatch.winner.is_(None)).all()
-        if (_day(m.match_date) or today) < today
+        m for m in session.query(LolMatch).all()
+        if (m.winner is None or m.id not in have_maps)
+        and (_day(m.match_date) or today) < today
     ]
 
     resolved = 0
     ambiguous = 0
+    maps_written = 0
     for m in pending:
         target = _day(m.match_date)
         if target is None:
@@ -135,14 +184,20 @@ def apply_golgg_results(session: Session, rows: list[dict],
 
         own_a = _resolve_name(m.team_a, alias_index) or m.team_a
         same_order = _norm(picked.get("team_a")) in (_norm(m.team_a), _norm(own_a))
+        # Per-map rows are written HERE, where the series has already been
+        # matched to this row and oriented, so map settlement reuses the join
+        # rather than re-deriving it (and re-deriving it differently).
+        maps_written += 1 if _write_maps(session, m, picked, series_maps, alias_index) else 0
+        if m.winner is not None:
+            continue  # already graded: maps topped up above, result left alone
         m.maps_won_a = picked.get("maps_won_a") if same_order else picked.get("maps_won_b")
         m.maps_won_b = picked.get("maps_won_b") if same_order else picked.get("maps_won_a")
         win = picked.get("winner")  # "team_a"/"team_b" in the RESULT's order
         m.winner = win if same_order else ("team_b" if win == "team_a" else "team_a")
         resolved += 1
 
-    if resolved:
+    if resolved or maps_written:
         session.commit()
-        log.info("gol.gg results backfill: resolved %d matches (%d left ambiguous)",
-                 resolved, ambiguous)
+        log.info("gol.gg results backfill: resolved %d matches, per-map rows for %d "
+                 "(%d left ambiguous)", resolved, maps_written, ambiguous)
     return resolved
