@@ -27,6 +27,7 @@ from app.api.routers.markets import _batch_latest_snapshots, _edge_sentence, _im
 from app.api.routers.settings import get_lol_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
 from app.api.schemas import FuturesMarketOut, LolMarketOut, ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
+from app.clients import flashscore_esports_client
 from app.db.chunked import fetch_in_chunks
 from app.db.models import LolMatch, Market, MarketSnapshot
 from app.ingestion import market_catalog_lol
@@ -334,8 +335,27 @@ def list_lol_markets(session: Session = Depends(get_session)):
     def _match_looks_live_by_trading(m: Market) -> bool:
         return m.lol_match_id in matches_live_by_trading
 
+    # POSITIVE in-play/finished signal, the only gate here not inferred from a
+    # timestamp or a price. Kalshi's start times for esports are demonstrably
+    # wrong (the reported DRX case really began 4h before its recorded start),
+    # and a result may never arrive for a team whose sponsor name our results
+    # source does not know. See flashscore_esports_client for the measured
+    # coverage (modest) and for why it still ships: it is ONE-DIRECTIONAL and
+    # fails open, so it can only ever hide a match a real source reports as
+    # live or over, never one that is genuinely upcoming.
+    _fs_states = flashscore_esports_client.cached_match_states("lol")
+    _fs_hidden = {
+        mid for mid, match in matches_by_id.items()
+        if flashscore_esports_client.hides_match(
+            _fs_states, match.team_a, match.team_b, match.estimated_start_time)
+    } if _fs_states else set()
+
+    def _match_live_on_flashscore(m: Market) -> bool:
+        return getattr(m, "lol_match_id", None) in _fs_hidden
+
     markets = [
         m for m in markets
+        if not _match_live_on_flashscore(m)
         if not _match_already_decided(m)
         and not _match_already_started(m)
         and (m.status or "active") == "active"
