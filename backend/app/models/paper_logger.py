@@ -138,6 +138,29 @@ def _qualifies(row: dict, min_edge: float) -> bool:
         extreme = price <= EXTREME_MARKET_PRICE or price >= 1 - EXTREME_MARKET_PRICE
         if extreme and abs(model - price) >= IMPLAUSIBLE_EDGE:
             return False
+    # A SECOND CONTAMINATION MODE EXISTS AND IS DELIBERATELY *NOT* FILTERED HERE.
+    #
+    # All 37 of soccer's closed CLV rows were logged at exactly 0.49 or 0.50 with
+    # no bid, no ask and no volume -- `last_price` on a market nobody had quoted,
+    # which is a placeholder rather than a price. A real quote appeared later at
+    # 0.80-0.96, reading as +20.68pp average CLV (single rows up to +47pp). It is
+    # invisible to the extremeness test above, since 0.50 is as un-extreme as a
+    # number gets.
+    #
+    # The obvious filter -- require a two-sided quote or real volume -- was
+    # written, measured, and REJECTED as disproportionate. Polymarket never
+    # supplies bid/ask at all (0 of ~6,000 rows across every sport), and its
+    # volume is sparse, so that rule cut logging from 774 to 158 rows on tennis,
+    # 164 to 19 on soccer and 274 to 92 on MLB. It would have silenced the
+    # validation harness to fix a subset of it, which is a worse outcome than the
+    # contamination.
+    #
+    # The real defect is upstream: soccer's Polymarket ingestion carries volume
+    # on only 23 of 994 rows, so staking.has_real_trading cannot do its job and
+    # nothing downstream can tell a quoted market from an unquoted one. Fix that,
+    # and this filter becomes both cheap and safe. Until then the soccer rows
+    # stay identifiable after the fact (mid-price + no quote + no volume) and are
+    # called out in the CLV report rather than silently averaged in.
     return True
 
 
