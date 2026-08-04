@@ -8,6 +8,7 @@ import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, TRACKER_PERIODS, type TrackerPeriod, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
 import { futuresResolution, gameResolution } from "../utils/resolution";
 import { futuresMarketName, futuresThreshold } from "../utils/futuresLabel";
+import { describeTennisSpread, TENNIS_MARKET_TYPE_LABELS } from "../utils/tennisLabel";
 import type { SportKey } from "../lib/sports";
 
 // Sports whose /reasoning endpoint exists (racing has no reasoning route yet).
@@ -114,20 +115,44 @@ function EquityCurve({ points, mode }: { points: PortfolioPointPayload[]; mode: 
   );
 }
 
+/** What a placed bet actually is, for the tracker's Bet column.
+ *
+ * Everything here still prints its raw market_type, which is terse but honest
+ * for most types ("moneyline", "series_winner"). Tennis spreads are the
+ * exception: "set_spread · Marta Kostyuk -1.5" gives no direction, and the sign
+ * cannot be read off the number because game_spread and set_spread use opposite
+ * conventions (see describeTennisSpread). Those get spelled out; everything
+ * else is untouched. */
+function betPickLabel(b: { market_type: string; team: string | null; side: string | null; line: number | null; sport: string }): string {
+  if (b.sport === "tennis") {
+    const spread = describeTennisSpread(b.market_type, b.team, b.line);
+    if (spread) return `${TENNIS_MARKET_TYPE_LABELS[b.market_type] ?? b.market_type} · ${spread}`;
+  }
+  const side = b.side ? ` ${b.side}` : "";
+  const line = b.line != null ? (b.market_type === "map_winner" ? ` · Map ${b.line}` : ` ${b.line}`) : "";
+  return `${b.market_type}${b.team ? ` · ${b.team}` : ""}${side}${line}`;
+}
+
 // "in 3h", "in 12m", "in play", or "delayed?" — the last when a bet's scheduled
 // start is well in the past but it's still pending (the game hasn't produced a
 // result, so it was probably delayed/postponed, or just needs settling).
-function startLabel(iso: string | null, marketStatus?: string | null): { text: string; soon: boolean; late: boolean } {
-  if (!iso) return { text: "—", soon: false, late: false };
+// `live` means "the event is underway or probably has been", i.e. price
+// movement is now the scoreboard rather than the market re-rating the bet.
+// Kept here because this function already owns the awaiting-vs-in-play
+// reasoning, and a second copy of it would drift.
+function startLabel(iso: string | null, marketStatus?: string | null): { text: string; soon: boolean; late: boolean; live: boolean } {
+  // No start time at all (MMA) -- can't tell which side of the event we are
+  // on, so treat it as live and make no claim about the move.
+  if (!iso) return { text: "—", soon: false, late: false, live: true };
   const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return { text: "—", soon: false, late: false };
+  if (Number.isNaN(ms)) return { text: "—", soon: false, late: false, live: true };
   const diff = ms - Date.now();
   if (diff > 0) {
     const mins = Math.round(diff / 60000);
-    if (mins < 60) return { text: `in ${mins}m`, soon: true, late: false };
+    if (mins < 60) return { text: `in ${mins}m`, soon: true, late: false, live: false };
     const hrs = mins / 60;
-    if (hrs < 24) return { text: `in ${Math.round(hrs)}h`, soon: hrs < 6, late: false };
-    return { text: `in ${Math.round(hrs / 24)}d`, soon: false, late: false };
+    if (hrs < 24) return { text: `in ${Math.round(hrs)}h`, soon: hrs < 6, late: false, live: false };
+    return { text: `in ${Math.round(hrs / 24)}d`, soon: false, late: false, live: false };
   }
   const hoursPast = -diff / 3600000;
   if (hoursPast > 4) {
@@ -139,10 +164,13 @@ function startLabel(iso: string | null, marketStatus?: string | null): { text: s
     // has gone away while the bet stays pending is actually stuck.
     const stillTrading = marketStatus === "active" || marketStatus == null;
     return stillTrading
-      ? { text: "awaiting", soon: false, late: false }
-      : { text: "delayed?", soon: false, late: true };
+      // "awaiting" = still trading, so per the note above the event has NOT
+      // happened and the move is still a genuine re-rating. "delayed?" = the
+      // market went away, so it probably has.
+      ? { text: "awaiting", soon: false, late: false, live: false }
+      : { text: "delayed?", soon: false, late: true, live: true };
   }
-  return { text: "in play", soon: false, late: false };
+  return { text: "in play", soon: false, late: false, live: true };
 }
 
 // The bet's local calendar date, from its precise start or its date-only
@@ -225,7 +253,7 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">{b.label}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
-                    {b.market_type}{b.team ? ` · ${b.team}` : ""}{b.side ? ` ${b.side}` : ""}{b.line != null ? (b.market_type === "map_winner" ? ` · Map ${b.line}` : ` ${b.line}`) : ""}
+                    {betPickLabel(b)}
                   </div>
                 </td>
                 <td className="px-3 py-2">
@@ -237,7 +265,10 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                   {b.market_prob_at_placement != null ? `${(b.market_prob_at_placement * 100).toFixed(0)}%` : "—"}
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums">
-                  <NowCell marketNow={b.market_prob_now ?? null} marketMove={b.market_move_pp ?? null} />
+                  <NowCell
+                    marketNow={b.market_prob_now ?? null} marketMove={b.market_move_pp ?? null}
+                    live={s.live || pricedAsDecided(b.market_prob_now, s.text)}
+                  />
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
                   ${b.stake_dollars.toLocaleString()}{b.stake_units != null ? ` · ${b.stake_units.toFixed(1)}u` : ""}
@@ -307,7 +338,7 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">{b.label}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
-                    {b.market_type}{b.team ? ` · ${b.team}` : ""}{b.side ? ` ${b.side}` : ""}{b.line != null ? (b.market_type === "map_winner" ? ` · Map ${b.line}` : ` ${b.line}`) : ""}{b.stake_pool === "futures" ? " · futures" : ""}
+                    {betPickLabel(b)}{b.stake_pool === "futures" ? " · futures" : ""}
                   </div>
                 </td>
                 <td className="px-3 py-2">
@@ -354,11 +385,44 @@ const PROGRESS_TONE: Record<string, string> = {
   dead: "text-[var(--color-critical)]",
 };
 
-function NowCell({ marketNow, marketMove, modelNow, modelMove }: {
+/** A bet whose scheduled start has passed AND whose price has gone to an
+ * extreme has, in practice, been decided -- whatever `startLabel` concluded.
+ *
+ * "awaiting" is deliberately cautious: Kalshi never revises occurrence_datetime,
+ * so a past estimate with a still-trading market usually means the event hasn't
+ * happened (checked 2026-08-03: 4 of 6 such bets were genuinely still to come).
+ * But a market at 0% is not waiting for anything. Without this, a decided bet
+ * kept showing a red move that read as bad CLV rather than a lost match.
+ *
+ * Only applied PAST the scheduled start -- a legitimate 99% pre-game favourite
+ * must keep its move. Same extreme-price reasoning as ladder_sanity.py's own
+ * live-market gate. */
+const DECIDED_PRICE = 0.02;
+function pricedAsDecided(price: number | null | undefined, startText: string): boolean {
+  if (price == null) return false;
+  if (startText !== "awaiting" && startText !== "delayed?") return false;
+  return price <= DECIDED_PRICE || price >= 1 - DECIDED_PRICE;
+}
+
+function NowCell({ marketNow, marketMove, modelNow, modelMove, live = false }: {
   marketNow: number | null; marketMove: number | null;
   modelNow?: number | null; modelMove?: number | null;
+  /** The event is underway. Show the price, but NOT the move: once play starts
+   * the price tracks the scoreboard, not the market's opinion of the entry, so
+   * a red -9pp on a losing match would read as bad CLV when it only means the
+   * player is behind. Measured on live data: pre-start moves ran a 2pp median,
+   * in-play ones 12pp with a 47pp tail, so the two are not the same quantity. */
+  live?: boolean;
 }) {
   if (marketNow == null) return <span className="text-[var(--color-text-muted)]">—</span>;
+  if (live) {
+    return (
+      <div className="whitespace-nowrap text-[var(--color-text-dim)]">
+        {(marketNow * 100).toFixed(0)}%{" "}
+        <span className="text-[11px] text-[var(--color-text-muted)]">· in play</span>
+      </div>
+    );
+  }
   const tone = (v: number | null | undefined) =>
     v == null || Math.abs(v) < 0.5 ? "text-[var(--color-text-muted)]"
       : v > 0 ? "text-[var(--color-good)]" : "text-[var(--color-critical)]";
