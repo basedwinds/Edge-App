@@ -388,6 +388,23 @@ def mark_refresh_complete():
             session.close()
 
 
+def _resolve_duplicate_fixtures(session):
+    """Copy a result onto an esports match whose duplicate twin already has one.
+
+    Only logs on failure: this is an opportunistic top-up, and settlement must
+    still run even if it cannot.
+    """
+    from app.db.models import Cs2Match, LolMatch, ValorantMatch
+    from app.models.duplicate_fixtures import apply_twin_results
+
+    for model in (LolMatch, Cs2Match, ValorantMatch):
+        try:
+            apply_twin_results(session, model)
+        except Exception:
+            log.exception("duplicate-fixture resolve failed for %s", model.__name__)
+            session.rollback()
+
+
 def settle_placed_bets():
     """Auto-grades pending placed bets. TWO paths, both run every cycle:
     (1) settle_finished_games -- reconstructs win/loss from each sport's own
@@ -402,6 +419,12 @@ def settle_placed_bets():
     with db_write_lock():
         session = SessionLocal()
         try:
+            # Before grading: an esports fixture stored TWICE under two platform
+            # spellings gets the result on one row and keeps the bets on the
+            # other, so (1) below sees an ungraded match and (2) has to carry it.
+            # Copying the twin's result across first lets the normal path work.
+            # See models/duplicate_fixtures.py -- non-destructive, nothing merged.
+            _resolve_duplicate_fixtures(session)
             settle_finished_games(session)
         finally:
             session.close()
