@@ -41,6 +41,20 @@ def _pair(a: str | None, b: str | None) -> tuple[str, str]:
     return tuple(sorted((_norm(a), _norm(b))))  # type: ignore[return-value]
 
 
+def _resolved_pair(a: str | None, b: str | None, index) -> tuple[str, str] | None:
+    """The pair key under gol.gg's OWN spelling of both teams, or None.
+
+    Requires BOTH names to resolve. A half-resolved pair is not a weaker match,
+    it is a different fixture -- so it is refused rather than fallen back on.
+    """
+    from app.ingestion.lol_team_aliases import resolve
+
+    ra, rb = resolve(a, index), resolve(b, index)
+    if ra is None or rb is None:
+        return None
+    return _pair(ra, rb)
+
+
 def _day(value: str | None) -> datetime.date | None:
     if not value:
         return None
@@ -60,11 +74,21 @@ def apply_golgg_results(session: Session, rows: list[dict],
     if not rows:
         return 0
 
+    from app.ingestion.lol_team_aliases import build_alias_index
+
     by_pair: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
         if not r.get("winner"):
             continue
         by_pair.setdefault(_pair(r.get("team_a"), r.get("team_b")), []).append(r)
+
+    # Second lookup for names the two sources merely SPELL differently
+    # ("INTZ e-Sports" vs "INTZ"). Built from gol.gg's own names, so the pair
+    # key it produces is directly comparable to by_pair above. See
+    # lol_team_aliases.py for why sub-rosters are excluded by construction.
+    alias_index = build_alias_index(
+        {n for r in rows for n in (r.get("team_a"), r.get("team_b")) if n}
+    )
 
     today = datetime.date.today()
     pending = [
@@ -78,7 +102,12 @@ def apply_golgg_results(session: Session, rows: list[dict],
         target = _day(m.match_date)
         if target is None:
             continue
+        # Identical spelling first, so the common case never depends on the
+        # alias rules; only fall back to gol.gg's own spelling of both teams.
         candidates = by_pair.get(_pair(m.team_a, m.team_b))
+        if not candidates:
+            alias_pair = _resolved_pair(m.team_a, m.team_b, alias_index)
+            candidates = by_pair.get(alias_pair) if alias_pair else None
         if not candidates:
             continue
 
@@ -96,7 +125,16 @@ def apply_golgg_results(session: Session, rows: list[dict],
                 continue
             picked = near[0]
 
-        same_order = _norm(picked.get("team_a")) == _norm(m.team_a)
+        # Orientation must compare the SAME spelling on both sides. Once an
+        # alias match is possible, `m.team_a` ("INTZ e-Sports") no longer equals
+        # the result's ("INTZ"), and a raw comparison would read every aliased
+        # row as reversed -- silently recording the losing team as the winner.
+        # So resolve this row's own name through the same index before comparing,
+        # falling back to the raw name when it already matches exactly.
+        from app.ingestion.lol_team_aliases import resolve as _resolve_name
+
+        own_a = _resolve_name(m.team_a, alias_index) or m.team_a
+        same_order = _norm(picked.get("team_a")) in (_norm(m.team_a), _norm(own_a))
         m.maps_won_a = picked.get("maps_won_a") if same_order else picked.get("maps_won_b")
         m.maps_won_b = picked.get("maps_won_b") if same_order else picked.get("maps_won_a")
         win = picked.get("winner")  # "team_a"/"team_b" in the RESULT's order
