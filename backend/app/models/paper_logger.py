@@ -28,6 +28,8 @@ Design choices:
 """
 import logging
 
+from app.models.staking import EXTREME_MARKET_PRICE, IMPLAUSIBLE_EDGE
+
 from app import sports as app_sports
 from datetime import datetime, timedelta
 
@@ -108,7 +110,35 @@ def _qualifies(row: dict, min_edge: float) -> bool:
     if row.get("suggested_stake_dollars"):
         return True
     edge = row.get("edge")
-    return edge is not None and edge >= min_edge and row.get("implied_prob") is not None
+    if edge is None or edge < min_edge or row.get("implied_prob") is None:
+        return False
+    # THE SECOND DOOR MUST NOT READMIT WHAT THE STAKING GUARD REFUSED.
+    #
+    # staking.kelly_fraction already rejects a huge disagreement with an
+    # extremely-priced market as implausible rather than an edge. But this
+    # branch only looked at `edge`, so a market priced at 0.5% that the model
+    # called 50% had no stake (guard fired) yet sailed in here on its +48pp
+    # "edge" -- the exact rows the guard exists to disbelieve.
+    #
+    # This was not harmless bookkeeping. It poisoned the ONE validation signal
+    # this app has. Measured 2026-08-03: 969 tennis rows logged at a market
+    # price under 5% (median claimed edge +48.4pp, max +99.7pp), 968 of them
+    # paper, still arriving at ~360/day. In the CLV report those 449 closed rows
+    # averaged +44.39pp against +0.58pp for normally-priced bets, dragging the
+    # whole tennis figure to +13.84pp -- versus +1.57pp for MLB, whose markets
+    # are liquid and whose start times are reliable. A near-empty market
+    # quoting anything later reads as enormous CLV, and the dormant
+    # CLV-selection gate would have learned to trust precisely those buckets.
+    #
+    # Tracking-only markets (racing, futures) still come through: they are
+    # unstaked by design, not because a guard disbelieved them.
+    price = row.get("implied_prob")
+    model = row.get("model_prob")
+    if model is not None and price is not None:
+        extreme = price <= EXTREME_MARKET_PRICE or price >= 1 - EXTREME_MARKET_PRICE
+        if extreme and abs(model - price) >= IMPLAUSIBLE_EDGE:
+            return False
+    return True
 
 
 def _sport_season_active(session, sport) -> bool:
