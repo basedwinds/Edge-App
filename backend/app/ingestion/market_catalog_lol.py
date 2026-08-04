@@ -16,6 +16,7 @@ import datetime
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
+from app.ingestion.start_times import should_update_start
 from app.db.models import LolMap, LolMatch, LolRosterChangeCache, Market, MarketSnapshot
 from app.ingestion.market_matcher_lol import match_by_names_only, team_names_match
 
@@ -100,7 +101,17 @@ def find_or_create_upcoming_match(
 def upsert_leaguepedia_match(session: Session, row: dict) -> LolMatch:
     match = session.query(LolMatch).filter_by(source="leaguepedia", source_match_id=row["source_match_id"]).one_or_none()
     if match is None:
-        upcoming = _load_upcoming_matches(session)
+        # SAME rematch window find_or_create_upcoming_match applies. Without it
+        # this fallback matched on team names ALONE, so the scraper bound a
+        # rematch to the earlier fixture's row and then moved that row's start
+        # into the future -- orphaning the played match. This is the path that
+        # actually did the damage to Invictus Gaming vs LNG Esports; the poller
+        # side had already been fixed, which is exactly why the row kept coming
+        # back after being repaired.
+        upcoming = [
+            m for m in _load_upcoming_matches(session)
+            if _within_rematch_window(m.get("match_date"), row.get("match_date"))
+        ]
         found = match_by_names_only(row["team_a"], row["team_b"], upcoming)
         match = session.get(LolMatch, found["id"]) if found else None
     if match is None:
@@ -112,7 +123,9 @@ def upsert_leaguepedia_match(session: Session, row: dict) -> LolMatch:
     match.event_name = row["event_name"] or match.event_name
     if row.get("best_of") is not None:
         match.best_of = match.best_of or row["best_of"]
-    if match.winner is None and row.get("estimated_start_time"):
+    if match.winner is None and should_update_start(
+        match.estimated_start_time, row.get("estimated_start_time"), match.match_date
+    ):
         match.estimated_start_time = row["estimated_start_time"]
         # Keep match_date in step with the real start. It used to be written only
         # at row creation, so when a match got rescheduled the start time moved

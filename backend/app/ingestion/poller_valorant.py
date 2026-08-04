@@ -26,6 +26,7 @@ import logging
 from app.clients import kalshi_valorant_client, polymarket_valorant_client
 from app.db.database import SessionLocal
 from app.ingestion import market_catalog_valorant, valorant_data
+from app.ingestion.start_times import should_update_start
 from app.ingestion.poller_lock import db_write_lock
 from app.models.baseline import elo_service_valorant
 
@@ -132,7 +133,7 @@ def refresh_kalshi_valorant_markets():
                     # and already implemented for MMA (see poller_mma.py::
                     # _infer_start_time_from_kalshi).
                     occurrence = occurrence_by_code.get(code)
-                    if match is not None and match.winner is None and occurrence:
+                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
                         match.estimated_start_time = occurrence
                 else:
                     match_id_by_code[code] = None
@@ -168,7 +169,7 @@ def refresh_kalshi_valorant_markets():
                     )
                     match_id_by_series_event[event_ticker] = match.id if match else None
                     occurrence = occurrence_by_series_event.get(event_ticker)
-                    if match is not None and match.winner is None and occurrence:
+                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
                         match.estimated_start_time = occurrence
                 else:
                     match_id_by_series_event[event_ticker] = None
@@ -239,7 +240,7 @@ def refresh_polymarket_valorant_markets():
                     # docstring); wired through here the same way Kalshi's
                     # occurrence_datetime is above.
                     start_time = start_time_by_slug.get(slug)
-                    if match is not None and match.winner is None and start_time:
+                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, start_time, match.match_date):
                         match.estimated_start_time = start_time
                 else:
                     match_id_by_slug[slug] = None

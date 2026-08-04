@@ -36,6 +36,7 @@ import datetime
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
+from app.ingestion.start_times import should_update_start
 from app.db.models import Cs2Map, Cs2Match, Cs2RosterChangeCache, Market, MarketSnapshot
 from app.ingestion.market_matcher_cs2 import match_by_names_only, team_names_match
 
@@ -109,7 +110,14 @@ def upsert_liquipedia_match(session: Session, row: dict) -> Cs2Match:
     reconciliation as market_catalog_valorant.py::upsert_vlr_match."""
     match = session.query(Cs2Match).filter_by(source="liquipedia", source_match_id=row["source_match_id"]).one_or_none()
     if match is None:
-        upcoming = _load_upcoming_matches(session)
+        # Same rematch window find_or_create_upcoming_match applies. Without it the
+        # scraper matched on names ALONE, so a rematch bound to the earlier fixture
+        # and moved its start into the future, orphaning the played match. This is
+        # the path that actually did the damage on LoL.
+        upcoming = [
+            m for m in _load_upcoming_matches(session)
+            if _within_rematch_window(m.get("match_date"), row.get("match_date"))
+        ]
         found = match_by_names_only(row["team_a"], row["team_b"], upcoming)
         match = session.get(Cs2Match, found["id"]) if found else None
     if match is None:
@@ -121,7 +129,9 @@ def upsert_liquipedia_match(session: Session, row: dict) -> Cs2Match:
     match.event_name = row["event_name"] or match.event_name
     if row.get("best_of") is not None:
         match.best_of = match.best_of or row["best_of"]  # Liquipedia states best_of upfront -- never overwrite a real known value, but fill if somehow missing
-    if match.winner is None and row.get("estimated_start_time"):
+    if match.winner is None and should_update_start(
+            match.estimated_start_time, row.get("estimated_start_time"), match.match_date
+        ):
         match.estimated_start_time = row["estimated_start_time"]
     if row.get("maps_won_a") is not None:
         match.maps_won_a = row["maps_won_a"]

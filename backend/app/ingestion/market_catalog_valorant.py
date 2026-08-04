@@ -25,6 +25,7 @@ import datetime
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
+from app.ingestion.start_times import should_update_start
 from app.db.models import Market, MarketSnapshot, ValorantMap, ValorantMatch, ValorantRosterChangeCache
 from app.ingestion.market_matcher_valorant import match_by_names_only, team_names_match
 
@@ -102,7 +103,14 @@ def upsert_vlr_match(session: Session, row: dict) -> ValorantMatch:
     vlr.gg side this time)."""
     match = session.query(ValorantMatch).filter_by(source="vlr", source_match_id=row["source_match_id"]).one_or_none()
     if match is None:
-        upcoming = _load_upcoming_matches(session)
+        # Same rematch window find_or_create_upcoming_match applies. Without it the
+        # scraper matched on names ALONE, so a rematch bound to the earlier fixture
+        # and moved its start into the future, orphaning the played match. This is
+        # the path that actually did the damage on LoL.
+        upcoming = [
+            m for m in _load_upcoming_matches(session)
+            if _within_rematch_window(m.get("match_date"), row.get("match_date"))
+        ]
         found = match_by_names_only(row["team_a"], row["team_b"], upcoming)
         match = session.get(ValorantMatch, found["id"]) if found else None
     if match is None:
@@ -112,7 +120,9 @@ def upsert_vlr_match(session: Session, row: dict) -> ValorantMatch:
         match.source = "vlr"
         match.source_match_id = row["source_match_id"]
     match.event_name = row["event_name"] or match.event_name
-    if match.winner is None and row.get("estimated_start_time"):
+    if match.winner is None and should_update_start(
+            match.estimated_start_time, row.get("estimated_start_time"), match.match_date
+        ):
         match.estimated_start_time = row["estimated_start_time"]
     if row.get("maps_won_a") is not None:
         match.maps_won_a = row["maps_won_a"]
