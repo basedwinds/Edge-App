@@ -45,7 +45,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx  # noqa: E402
-from bs4 import BeautifulSoup  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 OUTPUT_PATH = DATA_DIR / "lol_game_lineups_cache.json"
@@ -60,54 +59,10 @@ _client = httpx.Client(
     headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"},
 )
 
-_PLAYER_HREF = re.compile(r"players/player-stats/")
-_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
-def _team_and_result(text: str):
-    """'T1 - WIN' -> ('T1', True). Splits on the LAST ' - ' so team names
-    containing a hyphen survive intact."""
-    if " - " not in text:
-        return None, None
-    name, _, res = text.rpartition(" - ")
-    res = res.strip().upper()
-    if res not in ("WIN", "LOSS"):
-        return None, None
-    return name.strip(), res == "WIN"
-
-
-def parse_game(html: str) -> dict | None:
-    soup = BeautifulSoup(html, "html.parser")
-    blue_el = soup.select_one(".blue-line-header")
-    red_el = soup.select_one(".red-line-header")
-    if blue_el is None or red_el is None:
-        return None  # gap in the id space, or a page with no real game
-    blue, blue_won = _team_and_result(blue_el.get_text(" ", strip=True))
-    red, red_won = _team_and_result(red_el.get_text(" ", strip=True))
-    if not blue or not red or blue_won is None or red_won is None:
-        return None
-
-    dates = _DATE.findall(html)
-    if not dates:
-        return None
-
-    names = [a.get_text(strip=True) for a in soup.find_all("a", href=_PLAYER_HREF)]
-    names = [n for n in names if n]
-    if len(names) != LINEUP_SIZE * 2:
-        return None  # off-10 scoreboard -> unknown rather than a guessed lineup
-
-    title_el = soup.find("title")
-    title = title_el.get_text(strip=True) if title_el else ""
-    # "T1 vs NS summary - LCK 2025 Rounds 3-5 WEEK10 - Game of Legends"
-    tournament = title.split(" - ")[1].strip() if title.count(" - ") >= 2 else None
-
-    return {
-        "date": dates[0],
-        "teams": [blue, red],
-        "blue_won": blue_won,
-        "lineups": [names[:LINEUP_SIZE], names[LINEUP_SIZE:]],
-        "tournament": tournament,
-    }
+# Selectors live in app/ingestion/lol_golgg_parse.py -- lol_results_golgg.py
+# now maintains this same cache on a schedule, so both consumers share one
+# implementation instead of two copies drifting apart.
+from app.ingestion.lol_golgg_parse import parse_game, team_and_result  # noqa: E402,F401
 
 
 def main():

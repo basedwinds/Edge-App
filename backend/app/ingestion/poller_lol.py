@@ -281,14 +281,68 @@ def refresh_lol_results():
     rate-limited -- same reason refresh_lol_matches fetches before locking)."""
     from app.ingestion.lol_results import fetch_lol_results, apply_lol_results
     results = fetch_lol_results()
-    if not results:
+    if results:
+        try:
+            with db_write_lock():
+                session = SessionLocal()
+                try:
+                    apply_lol_results(session, results)
+                finally:
+                    session.close()
+        except Exception:
+            log.exception("lol results apply failed")
+
+    # Leaguepedia's rate limit is not transient (see lol_results_golgg.py: it
+    # answers 200 with an error body and has done for days), so a failed fetch
+    # here is the normal case, not the exception. Run gol.gg whenever ungraded
+    # past matches remain -- not only when Leaguepedia returns nothing -- so a
+    # partial Leaguepedia recovery can't strand the rows it didn't cover. When
+    # everything is graded this costs nothing.
+    _refresh_lol_results_golgg()
+
+
+def _refresh_lol_results_golgg():
+    """gol.gg fallback: top up the game cache, then join it onto ungraded rows."""
+    from app.ingestion.lol_results_golgg import crawl_new_games, golgg_result_rows
+    from app.ingestion.lol_results_golgg_apply import apply_golgg_results
+
+    if not _has_ungraded_past_matches():
+        return
+    try:
+        crawl_new_games()  # network -- outside the write lock, like the fetch above
+        rows = golgg_result_rows()
+    except Exception:
+        log.exception("gol.gg lol results fetch failed -- retried next cycle")
+        return
+    if not rows:
         return
     try:
         with db_write_lock():
             session = SessionLocal()
             try:
-                apply_lol_results(session, results)
+                apply_golgg_results(session, rows)
             finally:
                 session.close()
     except Exception:
-        log.exception("lol results apply failed")
+        log.exception("gol.gg lol results apply failed")
+
+
+def _has_ungraded_past_matches() -> bool:
+    """Cheap read so a fully-settled board skips the crawl entirely."""
+    import datetime
+
+    from app.db.models import LolMatch
+
+    session = SessionLocal()
+    try:
+        today = datetime.date.today().isoformat()
+        return session.query(
+            session.query(LolMatch)
+            .filter(LolMatch.winner.is_(None), LolMatch.match_date < today)
+            .exists()
+        ).scalar()
+    except Exception:
+        log.exception("gol.gg ungraded-match check failed")
+        return False
+    finally:
+        session.close()
