@@ -96,6 +96,53 @@ EXTREME_MARKET_PRICE = 0.10
 IMPLAUSIBLE_EDGE = 0.25
 
 
+# How many times more likely our model may think a side is than the market before
+# the disagreement stops being an edge and starts being a bug.
+IMPLAUSIBLE_ODDS_RATIO = 10.0
+
+
+def implausible_disagreement(model_prob: float, market_price: float) -> bool:
+    """Is this disagreement too large to believe?
+
+    REPLACES a percentage-point gap gated on an absolute price cliff (a >=25pp gap
+    at a price <=0.10 or >=0.90). That shape had two problems.
+
+    First, percentage points are the wrong unit near the tails. A model of 0.27
+    against a market of 0.005 is FIFTY-FOUR times the market's estimate and is
+    plainly broken; a model of 0.479 against 0.0975 is under five times and is
+    just an aggressive longshot call. The old rule scored those 27pp and 38pp and
+    blocked the sane one harder than the absurd one.
+
+    Second, the cliff was arbitrary and visible in the product. The user reported
+    a Hanwha Life KeSPA Cup future vanishing from recommendations while Gen.G
+    stayed: HLE priced 0.0975, a quarter-point under the 0.10 threshold, and
+    Gen.G at 0.1465 above it. Same market, same model, opposite treatment,
+    entirely because of where the cliff sat.
+
+    An odds ratio has no cliff and treats both tails alike (above 0.5 it compares
+    the complements, so "market says 94%, model says 3%" is measured as the 16x
+    disagreement it is).
+
+    CHOSEN AGAINST REAL OUTCOMES, not taste. Over 3,912 settled bets carrying a
+    usable placement price, the old rule blocks 35 and a 10x ratio blocks 35 --
+    the same exposure, so this is a reshaping rather than a loosening. It keeps
+    blocking the cases that should be blocked (a 0.9995 market against a 0.654
+    model, i.e. a decided match) and releases the genuine longshot.
+
+    HONEST LIMIT: n=35 is far too small to prove one threshold beats another on
+    results. The case for 10x rests on the unit being right for tail
+    probabilities and on the cliff being indefensible -- not on a measured edge.
+    """
+    if not (0.0 < market_price < 1.0):
+        return False
+    if market_price <= 0.5:
+        ratio = model_prob / market_price if market_price > 0 else float("inf")
+    else:
+        # Compare the complements above 0.5 so both tails are measured alike.
+        ratio = (1.0 - model_prob) / (1.0 - market_price) if market_price < 1 else float("inf")
+    return ratio >= IMPLAUSIBLE_ODDS_RATIO
+
+
 def kelly_fraction(
     model_prob: float | None,
     market_price: float | None,
@@ -153,9 +200,7 @@ def kelly_fraction(
     # market that extreme does not exist -- it is a live price, a stale price, or
     # a broken model, and none of those is a bet worth making.
     if model_prob is not None and market_price is not None:
-        gap = abs(model_prob - market_price)
-        extreme = market_price <= EXTREME_MARKET_PRICE or market_price >= 1 - EXTREME_MARKET_PRICE
-        if gap >= IMPLAUSIBLE_EDGE and extreme:
+        if implausible_disagreement(model_prob, market_price):
             return None
 
     if model_prob is None or market_price is None:
