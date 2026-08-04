@@ -27,14 +27,16 @@ import {
   type SettingsPayload,
 } from "../api/markets";
 import { CrossSportFuturesTable, type CrossSportFuturesRow } from "../components/markets/CrossSportFuturesTable";
+import { fetchReadiness, isRowNotReady } from "../api/markets";
 import { fetchOpenBets, fetchSettledBets } from "../api/markets";
 import type { FuturesMarketRow } from "../types/market";
 
 // One place to see every sport's recommended bets at once. Each sport is built
-// with its OWN pool sizes (from Settings) exactly as its dedicated page does;
-// rows are then merged and sorted by suggested stake. Locked-pool subtraction
-// is skipped here (this is a read-only overview) -- mark bets from here or from
-// the per-sport page, both route by row.sport.
+// with its OWN pool sizes (from Settings), and each sport's ceiling nets off
+// the capital already committed to its PENDING bets, so a full sport stops
+// suggesting until something settles. Rows are then merged and sorted by
+// suggested stake. Mark bets from here or from the per-sport page, both
+// route by row.sport.
 //
 // Every fetch is timeout-guarded (a single heavy endpoint -- e.g. NFL's
 // /markets, which can return tens of thousands of rows against a bloated
@@ -73,7 +75,7 @@ function guard<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise<
  * after the start-time window, or "Today" degenerates into "whichever of the
  * global top-N happen to start today" -- which is how a day with 69 qualified
  * tennis candidates rendered zero of them (user-reported 2026-08-04). */
-type SportPlan = { ranked: RecommendedBetRow[]; ceilingDollars: number };
+type SportPlan = { ranked: RecommendedBetRow[]; ceilings: Record<"weekly" | "futures", number> };
 
 async function loadCombined(): Promise<SportPlan[]> {
   const s = await fetchSettings();
@@ -82,6 +84,24 @@ async function loadCombined(): Promise<SportPlan[]> {
   // depth-chart lookups) and season-long, not "upcoming". They stay on each
   // sport's own Futures page. `[]` is passed for the futures arg below, so
   // every row here draws on the WEEKLY pool.
+  // Capital already committed to PENDING bets. Subtracted from each sport's
+  // ceiling below, so a sport that is full stops producing suggestions until
+  // something settles and frees room. Every builder has taken a
+  // `lockedWeeklyDollars` argument since it was written and NO caller in the
+  // app ever supplied one -- the cap has never actually been enforced.
+  const openBets = await guard("OpenBetsForPool", fetchOpenBets(), []);
+  // Weekly and futures are SEPARATE sub-allocations (Settings splits them),
+  // so they have to be tracked apart -- a season-long win-total row must not
+  // eat the room reserved for tonight's games.
+  const locked = new Map<string, { weekly: number; futures: number }>();
+  for (const b of openBets) {
+    const key = b.sport === "f1" || b.sport === "nascar" || b.sport === "irl" ? "__racing" : b.sport;
+    const cur = locked.get(key) ?? { weekly: 0, futures: 0 };
+    if (b.stake_pool === "futures") cur.futures += b.stake_dollars;
+    else cur.weekly += b.stake_dollars;
+    locked.set(key, cur);
+  }
+
   const [
     nflM, nbaM, wnbaM, cfbM, mlbM, mmaM, tenM, socM, valM, cs2M, lolM, racingM,
   ] = await Promise.all([
@@ -91,22 +111,31 @@ async function loadCombined(): Promise<SportPlan[]> {
     guard("TennisMarkets", fetchTennisMarkets(), []), guard("SoccerMarkets", fetchSoccerMarkets(), []), guard("ValorantMarkets", fetchValorantMarkets(), []),
     guard("Cs2Markets", fetchCs2Markets(), []), guard("LolMarkets", fetchLolMarkets(), []), guard("RacingMarkets", fetchRacingMarkets(), []),
   ]);
-  const plan = (ranked: RecommendedBetRow[], weeklyPool: number): SportPlan => ({
-    ranked, ceilingDollars: Math.max(0, weeklyPool * PORTFOLIO_CEILING_PCT),
-  });
+  const plan = (sport: string, ranked: RecommendedBetRow[], weeklyPool: number, futuresPool = 0): SportPlan => {
+    const l = locked.get(sport) ?? { weekly: 0, futures: 0 };
+    return {
+      ranked,
+      ceilings: {
+        weekly: Math.max(0, weeklyPool * PORTFOLIO_CEILING_PCT - l.weekly),
+        futures: Math.max(0, futuresPool * PORTFOLIO_CEILING_PCT - l.futures),
+      },
+    };
+  };
   return [
-    plan(buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).ranked, s.weekly_pool_dollars),
-    plan(buildNbaRecommendedBets(nbaM, [], s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars).ranked, s.nba_weekly_pool_dollars),
-    plan(buildWnbaRecommendedBets(wnbaM, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars).ranked, s.wnba_weekly_pool_dollars),
-    plan(buildCfbRecommendedBets(cfbM, s.cfb_weekly_pool_dollars, s.cfb_futures_pool_dollars).ranked, s.cfb_weekly_pool_dollars),
-    plan(buildMlbRecommendedBets(mlbM, [], s.mlb_weekly_pool_dollars, s.mlb_futures_pool_dollars).ranked, s.mlb_weekly_pool_dollars),
-    plan(buildMmaRecommendedBets(mmaM, s.mma_weekly_pool_dollars).ranked, s.mma_weekly_pool_dollars),
-    plan(buildTennisRecommendedBets(tenM, s.tennis_weekly_pool_dollars).ranked, s.tennis_weekly_pool_dollars),
-    plan(buildSoccerRecommendedBets(socM, s.soccer_weekly_pool_dollars).ranked, s.soccer_weekly_pool_dollars),
-    plan(buildValorantRecommendedBets(valM, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars).ranked, s.valorant_weekly_pool_dollars),
-    plan(buildCs2RecommendedBets(cs2M, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars).ranked, s.cs2_weekly_pool_dollars),
-    plan(buildLolRecommendedBets(lolM, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars).ranked, s.lol_weekly_pool_dollars),
-    plan(buildRacingRecommendedBets(racingM, s.racing_weekly_pool_dollars).ranked, s.racing_weekly_pool_dollars),
+    plan("nfl", buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).ranked, s.weekly_pool_dollars, s.futures_pool_dollars),
+    plan("nba", buildNbaRecommendedBets(nbaM, [], s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars).ranked, s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars),
+    plan("wnba", buildWnbaRecommendedBets(wnbaM, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars).ranked, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars),
+    plan("cfb", buildCfbRecommendedBets(cfbM, s.cfb_weekly_pool_dollars, s.cfb_futures_pool_dollars).ranked, s.cfb_weekly_pool_dollars, s.cfb_futures_pool_dollars),
+    plan("mlb", buildMlbRecommendedBets(mlbM, [], s.mlb_weekly_pool_dollars, s.mlb_futures_pool_dollars).ranked, s.mlb_weekly_pool_dollars, s.mlb_futures_pool_dollars),
+    plan("mma", buildMmaRecommendedBets(mmaM, s.mma_weekly_pool_dollars).ranked, s.mma_weekly_pool_dollars),
+    plan("tennis", buildTennisRecommendedBets(tenM, s.tennis_weekly_pool_dollars).ranked, s.tennis_weekly_pool_dollars),
+    plan("soccer", buildSoccerRecommendedBets(socM, s.soccer_weekly_pool_dollars).ranked, s.soccer_weekly_pool_dollars),
+    plan("valorant", buildValorantRecommendedBets(valM, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars).ranked, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars),
+    plan("cs2", buildCs2RecommendedBets(cs2M, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars).ranked, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars),
+    plan("lol", buildLolRecommendedBets(lolM, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars).ranked, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars),
+    // Racing rows carry sport f1/nascar/irl but all three draw on ONE pool,
+    // so the committed capital of all three has to net off together.
+    plan("__racing", buildRacingRecommendedBets(racingM, s.racing_weekly_pool_dollars).ranked, s.racing_weekly_pool_dollars),
   ];
 }
 
@@ -272,6 +301,10 @@ export function Combined() {
   const query = useQuery({ queryKey: ["combined-recommended"], queryFn: loadCombined });
   const futuresQuery = useQuery({ queryKey: ["combined-futures"], queryFn: loadCombinedFutures });
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
+  // The table hides rows whose sport is out of season / outside its game
+  // window. The headline tiles used the UNfiltered list, so they read "14
+  // bets shown" above a table of 3. Filter once, here, so both agree.
+  const readinessQuery = useQuery({ queryKey: ["readiness"], queryFn: fetchReadiness });
   // Market ids you've ALREADY placed (any pool), so the table shows "Placed" for
   // them even after navigating away and back -- the per-row marked state alone is
   // ephemeral component state and forgets on remount, which is why a bet you'd
@@ -337,17 +370,18 @@ export function Combined() {
     const out: RecommendedBetRow[] = [];
     let cut = 0;                 // qualified, in-window, but the pool was full
     for (const p of plans) {
-      let spent = 0;
+      const spent = { weekly: 0, futures: 0 };
       for (const row of p.ranked) {
         if (!inWindow(row)) continue;
-        if (spent + row.suggestedStakeDollars > p.ceilingDollars) { cut++; continue; }
-        spent += row.suggestedStakeDollars;
+        const pool = row.stakePool;
+        if (spent[pool] + row.suggestedStakeDollars > p.ceilings[pool]) { cut++; continue; }
+        spent[pool] += row.suggestedStakeDollars;
         out.push(row);
       }
     }
     return { rows: out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars), cut };
   }, [plans, win]);
-  const rows = windowed.rows;
+  const rows = windowed.rows.filter((r) => !isRowNotReady(r, readinessQuery.data));
   const cutByPool = windowed.cut;
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
@@ -473,8 +507,9 @@ export function Combined() {
           <>
             Every sport's recommended bets in one place, each sized against its own bankroll slice (see Settings)
             and sorted by suggested stake. Same rules as the per-sport pages: quarter-Kelly, capped per position,
-            3pp minimum edge, model_validated: false everywhere. This is a read-only overview — it doesn't
-            subtract capital already locked in pending bets, so cross-check the per-sport page before sizing up.
+            3pp minimum edge, model_validated: false everywhere. Each sport's ceiling nets off the capital
+            already committed to its pending bets, so a sport that is full stops suggesting until something
+            settles. Weekly and futures are separate sub-pools and are tracked apart.
           </>
         )}
       </p>

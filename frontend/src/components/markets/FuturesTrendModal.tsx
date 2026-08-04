@@ -92,14 +92,17 @@ export function FuturesTrendModal({
                     tick={{ fontSize: 11, fill: "var(--color-text-muted)" }}
                     axisLine={false} tickLine={false}
                   />
+                  {/* formatter: recharts types the value as ValueType|undefined,
+                      not number -- a gap in a connectNulls series really can hand
+                      it an undefined, so that's handled rather than asserted away.
+                      (Comment sits here, not among the attributes: a `//` line
+                      comment between JSX attributes type-checks but does NOT
+                      parse in Vite's transformer, and takes the whole app down.) */}
                   <Tooltip
                     contentStyle={{
                       background: "var(--color-surface-hover)", border: "1px solid var(--color-border)",
                       borderRadius: 6, fontSize: 12, color: "var(--color-text)",
                     }}
-                    // recharts types the value as ValueType|undefined, not number: a
-                    // gap in a connectNulls series really can hand this an undefined,
-                    // so it's handled rather than asserted away.
                     formatter={(v, name) => [typeof v === "number" ? `${v.toFixed(1)}%` : "—", name]}
                   />
                   <Legend wrapperStyle={{ fontSize: 12, color: "var(--color-text-dim)" }} />
