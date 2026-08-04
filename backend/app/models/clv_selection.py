@@ -54,8 +54,17 @@ def bucket_clv_stats(session: Session) -> dict[tuple[str, str], dict]:
     buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
     for bet in session.query(PlacedBet).all():
         clv = compute_bet_clv(session, bet)
-        if clv["status"] == "closed" and clv["clv_pp"] is not None:
-            buckets[(bet.sport, bet.market_type)].append(clv["clv_pp"])
+        if clv["status"] != "closed" or clv["clv_pp"] is None:
+            continue
+        # An entry price off an unquoted market isn't a price, so nothing
+        # measured against it belongs in a bucket -- see _entry_was_unquoted.
+        # This path feeds both /clv-buckets and gate_kelly, so the exclusion
+        # has to happen HERE, not only in the conditional slices.
+        # Checked AFTER the CLV test on purpose: it costs a snapshot lookup,
+        # and most rows are already dropped for having no closing line.
+        if _entry_was_unquoted(session, bet):
+            continue
+        buckets[(bet.sport, bet.market_type)].append(clv["clv_pp"])
     value = {}
     for key, vals in buckets.items():
         clean = [v for v in vals if abs(v) <= _CONTAMINATION_PP]
@@ -132,6 +141,38 @@ _COND_TTL_SECONDS = 300
 _cond_cache: dict = {"at": 0.0, "value": None}
 
 
+def _entry_was_unquoted(session, bet) -> bool:
+    """True when this bet's ENTRY price came off a market nobody had quoted.
+
+    Such a `market_prob_at_placement` is a placeholder, not a price, so the CLV
+    measured against it is meaningless in either direction. Excluded rather than
+    counted as contaminated, because the defect is at the ENTRY end -- the
+    closing snapshot on these is fine.
+
+    Rows from before paper_logger started requiring a real quote. Measured: of
+    400 sampled tennis bets logged at <=0.5%, 400 of 400 had no bid, no ask and
+    zero volume against a median model probability of 0.489 -- a ~48pp "edge"
+    over a number nobody offered. 978 of 5,327 tennis paper bets are this shape,
+    and they are why tennis reads 76% contaminated while MLB, soccer, NFL, WNBA,
+    MMA and CFB read ~0%.
+
+    Tested EXACTLY (no quote and no volume at placement) rather than by a price
+    threshold: `EXTREME_MARKET_PRICE` is 0.10, and excluding everything under
+    10% would throw away every legitimate longshot along with the junk.
+    """
+    from app.db.models import MarketSnapshot
+
+    snap = (
+        session.query(MarketSnapshot)
+        .filter(MarketSnapshot.market_id == bet.market_id, MarketSnapshot.ts <= bet.placed_at)
+        .order_by(MarketSnapshot.ts.desc())
+        .first()
+    )
+    if snap is None:
+        return False   # can't tell -- fail open, keep the row
+    return snap.yes_bid is None and snap.yes_ask is None and not (snap.volume or 0) > 0
+
+
 def _clean_closed_clvs(session: Session):
     """[(bet, clv_pp)] for closed, non-contaminated bets -- the shared input to
     every conditional slice (contamination excluded, same |clv|<=0.20 rule)."""
@@ -139,8 +180,11 @@ def _clean_closed_clvs(session: Session):
     for bet in session.query(PlacedBet).all():
         clv = compute_bet_clv(session, bet)
         v = clv.get("clv_pp")
-        if clv["status"] == "closed" and v is not None and abs(v) <= _CONTAMINATION_PP:
-            out.append((bet, v))
+        if clv["status"] != "closed" or v is None or abs(v) > _CONTAMINATION_PP:
+            continue
+        if _entry_was_unquoted(session, bet):   # same order-of-checks reason
+            continue
+        out.append((bet, v))
     return out
 
 

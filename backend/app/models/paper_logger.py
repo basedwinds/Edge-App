@@ -175,29 +175,33 @@ def _qualifies(row: dict, min_edge: float) -> bool:
         extreme = price <= EXTREME_MARKET_PRICE or price >= 1 - EXTREME_MARKET_PRICE
         if extreme and abs(model - price) >= IMPLAUSIBLE_EDGE:
             return False
-    # A SECOND CONTAMINATION MODE EXISTS AND IS DELIBERATELY *NOT* FILTERED HERE.
+    # THE SECOND CONTAMINATION MODE -- now filtered, on the condition the earlier
+    # decision named.
     #
-    # All 37 of soccer's closed CLV rows were logged at exactly 0.49 or 0.50 with
-    # no bid, no ask and no volume -- `last_price` on a market nobody had quoted,
-    # which is a placeholder rather than a price. A real quote appeared later at
-    # 0.80-0.96, reading as +20.68pp average CLV (single rows up to +47pp). It is
-    # invisible to the extremeness test above, since 0.50 is as un-extreme as a
-    # number gets.
+    # A market with no bid, no ask and no volume has a `last_price` that is a
+    # PLACEHOLDER, not a price. Logging against it invents an edge: sampled 400
+    # tennis bets logged at an entry of <=0.5% and 400 of 400 had no quote on
+    # either side and zero volume, against a median model probability of 0.489.
+    # That is a ~48pp "edge" over a number nobody ever offered. 978 of 5,327
+    # tennis paper bets (18%) are this shape, and they are what makes the tennis
+    # CLV buckets 76% contaminated -- by far the worst in the app.
     #
-    # The obvious filter -- require a two-sided quote or real volume -- was
-    # written, measured, and REJECTED as disproportionate. Polymarket never
-    # supplies bid/ask at all (0 of ~6,000 rows across every sport), and its
-    # volume is sparse, so that rule cut logging from 774 to 158 rows on tennis,
-    # 164 to 19 on soccer and 274 to 92 on MLB. It would have silenced the
-    # validation harness to fix a subset of it, which is a worse outcome than the
-    # contamination.
+    # This filter was written, measured and REJECTED once before, correctly: at
+    # the time Polymarket supplied no bid/ask at all and almost no volume, so the
+    # rule cut tennis logging 774 -> 158 and would have silenced the harness to
+    # fix a subset of it. That rejection was explicitly conditional -- "the real
+    # defect is upstream ... fix that, and this filter becomes both cheap and
+    # safe."
     #
-    # The real defect is upstream: soccer's Polymarket ingestion carries volume
-    # on only 23 of 994 rows, so staking.has_real_trading cannot do its job and
-    # nothing downstream can tell a quoted market from an unquoted one. Fix that,
-    # and this filter becomes both cheap and safe. Until then the soccer rows
-    # stay identifiable after the fact (mid-price + no quote + no volume) and are
-    # called out in the CLV report rather than silently averaged in.
+    # Polymarket volume ingestion HAS since been fixed, so it was re-measured
+    # rather than assumed. Today the rule keeps 100% of candidates in soccer,
+    # LoL, Valorant, CS2 and MMA (where it would previously have gutted them),
+    # and the rows it still drops are the genuinely unquoted ones: 60% of tennis
+    # and 43% of MLB candidates have no quote AND no volume. Tennis keeps ~582
+    # candidates and already has 2,903 settled samples, so nothing is silenced.
+    bid, ask = row.get("yes_bid"), row.get("yes_ask")
+    if bid is None and ask is None and not (row.get("volume") or 0) > 0:
+        return False
     return True
 
 
