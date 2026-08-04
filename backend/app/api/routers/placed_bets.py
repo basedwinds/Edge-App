@@ -582,12 +582,19 @@ def _within_period(bet: PlacedBet, cutoff) -> bool:
     """
     if cutoff is None:
         return True
-    stamp = bet.settled_at if bet.status not in ("pending",) and bet.settled_at else bet.placed_at
+    stamp = _bet_stamp(bet)
     return stamp is not None and stamp >= cutoff
 
 
+def _bet_stamp(bet: PlacedBet):
+    """The instant a bet BELONGS to -- settlement for a graded bet, placement for
+    one still open. Shared by both ends of the window so they cannot disagree."""
+    return bet.settled_at if bet.status not in ("pending",) and bet.settled_at else bet.placed_at
+
+
 @router.get("/portfolio", response_model=PortfolioOut)
-def get_portfolio(period: str = "all", since: str | None = None, session: Session = Depends(get_session)):
+def get_portfolio(period: str = "all", since: str | None = None, until: str | None = None,
+                  session: Session = Depends(get_session)):
     """Cross-sport bet-tracker rollup -- the "how am I actually doing"
     dashboard that replaces a standalone bet diary. REAL bets only (paper
     bets are the forward-CLV study, not real money). Realized P/L uses each
@@ -598,12 +605,17 @@ def get_portfolio(period: str = "all", since: str | None = None, session: Sessio
     price-capture and money outcome sit side by side, exactly as asked."""
     rows = session.query(PlacedBet).filter(PlacedBet.paper == False).all()  # noqa: E712
     explicit = _parse_since(since)
+    # `until` closes the window at the top, which "Yesterday" needs and a rolling
+    # look-back does not: yesterday is a bounded DAY, not everything since a point.
+    ceiling = _parse_since(until)
     if explicit is not None:
         cutoff = explicit
     else:
         days = PORTFOLIO_PERIOD_DAYS.get(period, None)
         cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days)) if days else None
     rows = [r for r in rows if _within_period(r, cutoff)]
+    if ceiling is not None:
+        rows = [r for r in rows if (_bet_stamp(r) or ceiling) < ceiling]
 
     def _blank() -> dict:
         return {"staked": 0.0, "net": 0.0, "net_units": 0.0, "wins": 0, "losses": 0,
