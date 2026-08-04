@@ -692,6 +692,28 @@ function ladderCollapseKey(row: RecommendedBetRow): string {
 // depending on which pool a row belongs to -- summing fractions across
 // pools would compare fractions of different denominators, so this caps on
 // actual dollars against each pool's own dollar total instead.
+/** A recommendation has to be on a market someone has actually traded.
+ *
+ * Ranking by edge alone selects for the OPPOSITE: the biggest gaps sit where
+ * nobody has priced the market, so the model's opinion is unopposed. Measured
+ * on a live tennis board -- the 40pp+ bucket had a median volume of 16, and the
+ * top three edges (54pp, 52pp, 36pp) sat on volumes of 6, 25 and 6. Those are
+ * not 50-point mispricings, they are an unvalidated model talking to itself,
+ * and at volume 6 the price probably isn't fillable anyway.
+ *
+ * 100 keeps roughly half the board and is even-handed across platforms
+ * (checked per sport: Kalshi keeps 52-100%, Polymarket 47-87%, no nulls
+ * anywhere), so it isn't quietly a filter on one venue. Thin-but-real markets
+ * still qualify -- they're where this project expects any edge to live -- it's
+ * only the untraded ones that drop out.
+ *
+ * Deliberately NOT applied to futures: those are tracking-only and already
+ * carry their own volume requirement in the shortlist builder. */
+export const MIN_RECOMMEND_VOLUME = 100;
+function tradedEnough(volume: number | null | undefined): boolean {
+  return (volume ?? 0) >= MIN_RECOMMEND_VOLUME;
+}
+
 export const PORTFOLIO_CEILING_PCT = 0.6;
 // Max recommended bets per single race event (see buildRacingRecommendedBets).
 // A race supports several genuinely different positions (podium spots, h2h
@@ -945,6 +967,7 @@ export function buildRecommendedBets(
 
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.game_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1124,6 +1147,7 @@ export function buildNbaRecommendedBets(
 
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.game_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1274,6 +1298,7 @@ export function buildWnbaRecommendedBets(
   const candidates: RecommendedBetRow[] = [];
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.game_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1369,6 +1394,7 @@ export function buildCfbRecommendedBets(
   const candidates: RecommendedBetRow[] = [];
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.game_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1469,6 +1495,7 @@ export function buildMlbRecommendedBets(
 
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.game_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1613,6 +1640,7 @@ export function buildMmaRecommendedBets(
 
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.fight_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1726,6 +1754,7 @@ export function buildTennisRecommendedBets(
 
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.match_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1852,6 +1881,7 @@ export function buildSoccerRecommendedBets(
 
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.match_label ?? m.market_type;
     candidates.push({
       key: `market-${m.id}`,
@@ -1983,6 +2013,7 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
 
   for (const m of markets) {
     if (m.kelly_fraction === null || m.suggested_stake_dollars === null || m.stake_pool === null) continue;
+    if (!tradedEnough(m.volume)) continue;
     const label = m.match_label ?? m.group_label ?? m.market_type;
     const matchId = matchIdOf(m);
     candidates.push({
@@ -2172,7 +2203,8 @@ export function buildRacingRecommendedBets(
 ): RecommendedBetsResult {
   const CHAMP = new Set(["drivers_champion", "constructors_champion"]);
   const staked = markets.filter(
-    (m) => !CHAMP.has(m.market_type) && (m.suggested_stake_dollars ?? 0) > 0 && m.model_prob != null && m.edge != null
+    (m) => !CHAMP.has(m.market_type) && (m.suggested_stake_dollars ?? 0) > 0 && m.model_prob != null
+      && m.edge != null && tradedEnough(m.volume)
   );
   const rawCandidateCount = staked.length;
 

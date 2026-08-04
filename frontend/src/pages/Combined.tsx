@@ -185,9 +185,18 @@ function localDateStr(offsetDays = 0): string {
 }
 
 type WindowFilter = "today" | "2d" | "all" | "futures";
+// ROLLING hours, not calendar days. A calendar boundary is the wrong cut for
+// this board: 104 of 246 upcoming tennis matches (42%) start between 10pm and
+// 6am local, and their start times get CORRECTED as real scraped schedules
+// replace the platform's guess -- one such correction moved a match from
+// 11:30pm to 5:00am the next day, which silently dropped it out of "Today"
+// and reshuffled everything behind it. Rolling hours make that correction a
+// non-event: 11:30pm and 5:00am are both simply "soon". Labels renamed to
+// match, since the tab no longer claims a calendar day it can't determine.
+const WINDOW_HOURS: Partial<Record<WindowFilter, number>> = { today: 24, "2d": 48 };
 const WINDOWS: { key: WindowFilter; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "2d", label: "Next 2 days" },
+  { key: "today", label: "Next 24h" },
+  { key: "2d", label: "Next 48h" },
   { key: "all", label: "All upcoming" },
   { key: "futures", label: "Futures" },
 ];
@@ -220,7 +229,7 @@ export function Combined() {
   const [win, setWin] = useState<WindowFilter>("all");
 
   const plans = query.data ?? EMPTY_PLANS;
-  const rows = useMemo(() => {
+  const windowed = useMemo(() => {
     // Bucket by the REAL start instant. Match sports (tennis/soccer/esports/MMA)
     // carry an accurate estimatedStartTime -- and a `gameday` derived from a
     // STALE match_date (tennis showed match_date 5 days before the real start),
@@ -230,8 +239,8 @@ export function Combined() {
     // timestamp exists (team sports, where gameday IS accurate). Reported
     // 2026-07-24.
     const now = Date.now();
-    const today = localDateStr(0);
-    const limit = win === "today" ? today : localDateStr(1); // "2d" = today + tomorrow
+    const hours = WINDOW_HOURS[win];
+    const until = hours === undefined ? null : now + hours * 3600_000;
     const start = (r: RecommendedBetRow): { ms: number | null; date: string | null } => {
       if (r.estimatedStartTime) {
         const ms = Date.parse(r.estimatedStartTime);
@@ -242,9 +251,13 @@ export function Combined() {
     const inWindow = (r: RecommendedBetRow) => {
       const { ms, date } = start(r);
       if (ms !== null && ms < now) return false;        // already started -> not "upcoming"
-      if (win === "all") return true;                    // futures (date null) live only here
+      if (until === null) return true;                   // "all": futures (date null) live only here
+      if (ms !== null) return ms <= until;               // real timestamp -> exact rolling window
+      // Team sports carry a date but no usable time. Keep the day-level test for
+      // them rather than inventing an hour: a date within the window's span of
+      // days is as precise as the data allows.
       if (date === null) return false;                   // season-long futures: All-upcoming only
-      return date >= today && date <= limit;             // kicks off within the window
+      return date >= localDateStr(0) && date <= localDateStr(Math.ceil(hours! / 24) - 1);
     };
 
     // The window is applied FIRST, then each sport's portfolio ceiling is spent
@@ -256,17 +269,20 @@ export function Combined() {
     // and the same bet can appear in more than one window -- correct, since the
     // ceiling is about how much to deploy at once, not a running total.
     const out: RecommendedBetRow[] = [];
+    let cut = 0;                 // qualified, in-window, but the pool was full
     for (const p of plans) {
       let spent = 0;
       for (const row of p.ranked) {
         if (!inWindow(row)) continue;
-        if (spent + row.suggestedStakeDollars > p.ceilingDollars) continue;
+        if (spent + row.suggestedStakeDollars > p.ceilingDollars) { cut++; continue; }
         spent += row.suggestedStakeDollars;
         out.push(row);
       }
     }
-    return out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars);
+    return { rows: out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars), cut };
   }, [plans, win]);
+  const rows = windowed.rows;
+  const cutByPool = windowed.cut;
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
   const stats = useMemo(() => {
@@ -355,7 +371,19 @@ export function Combined() {
           {isFutures ? (
             <CrossSportFuturesTable rows={futuresRows} />
           ) : (
-            <RecommendedBetsTable rows={rows} onMarkPlaced={handleMarkPlaced} onShowReasoning={setReasoningRow} placedMarketIds={placedMarketIds} showSport />
+            <>
+              <RecommendedBetsTable rows={rows} onMarkPlaced={handleMarkPlaced} onShowReasoning={setReasoningRow} placedMarketIds={placedMarketIds} showSport />
+              {/* Say out loud that the list is money-capped, not quality-capped.
+                  Without this a bet that was 4th silently isn't there, which
+                  reads as the app dropping it -- reported twice. */}
+              {cutByPool > 0 && (
+                <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+                  {cutByPool} more {cutByPool === 1 ? "bet qualifies" : "bets qualify"} in this window but
+                  {" "}{cutByPool === 1 ? "was" : "were"} left out — each sport's pool is already fully
+                  allocated above. Raise a sport's pool in Settings to see more of them.
+                </p>
+              )}
+            </>
           )}
         </>
       )}
