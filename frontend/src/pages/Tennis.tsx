@@ -4,6 +4,7 @@ import { PageShell } from "../components/layout/PageShell";
 import { StatTile } from "../components/markets/StatTile";
 import { SourceBadge } from "../components/markets/SourceBadge";
 import { EdgeBadge } from "../components/markets/EdgeBadge";
+import { describeTennisSpread, TENNIS_MARKET_TYPE_LABELS } from "../utils/tennisLabel";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchTennisMarkets } from "../api/markets";
 import type { TennisMarketRow } from "../types/market";
@@ -14,14 +15,12 @@ const TIER_LABELS: Record<string, string> = {
   itf: "ITF",
 };
 
+// set_spread was missing here too, so this page fell to the `default` branch
+// and showed only the player name -- no handicap, no line. Names now come
+// from the shared table so the two pages cannot drift.
 const MARKET_TYPE_LABELS: Record<string, string> = {
   moneyline: "Moneyline",
-  set_winner: "Set Winner",
-  game_spread: "Game Spread",
-  game_total: "Game Total",
-  exact_score: "Exact Score",
-  set_total: "Set Total",
-  total_sets: "Total Sets",
+  ...TENNIS_MARKET_TYPE_LABELS,
 };
 
 function formatPct(v: number | null) {
@@ -49,8 +48,13 @@ function formatPick(r: TennisMarketRow): string {
       return r.side ? `${r.team ?? "—"} wins ${r.side}` : (r.team ?? "—");
     case "game_total":
       return r.line !== null ? `Over ${r.line} games` : "—";
+    // REAL BUG: this used Math.ceil(line) on the RAW signed number, so a
+    // negative line rendered as "wins by -1+ games" -- and it had no
+    // set_spread case at all. Both go through the shared describer now,
+    // which also knows the two markets use opposite sign conventions.
     case "game_spread":
-      return r.line !== null ? `${r.team ?? "—"} wins by ${Math.ceil(r.line)}+ games` : (r.team ?? "—");
+    case "set_spread":
+      return describeTennisSpread(r.market_type, r.team, r.line) ?? (r.team ?? "—");
     case "set_total": {
       const setLabel = r.side ? r.side.replace("set_", "Set ") : "?";
       return r.line !== null ? `${setLabel}: Over ${r.line} games` : "—";

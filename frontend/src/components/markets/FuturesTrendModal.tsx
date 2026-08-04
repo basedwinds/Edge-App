@@ -97,7 +97,10 @@ export function FuturesTrendModal({
                       background: "var(--color-surface-hover)", border: "1px solid var(--color-border)",
                       borderRadius: 6, fontSize: 12, color: "var(--color-text)",
                     }}
-                    formatter={(v: number, name: string) => [`${v.toFixed(1)}%`, name]}
+                    // recharts types the value as ValueType|undefined, not number: a
+                    // gap in a connectNulls series really can hand this an undefined,
+                    // so it's handled rather than asserted away.
+                    formatter={(v, name) => [typeof v === "number" ? `${v.toFixed(1)}%` : "—", name]}
                   />
                   <Legend wrapperStyle={{ fontSize: 12, color: "var(--color-text-dim)" }} />
                   <Line

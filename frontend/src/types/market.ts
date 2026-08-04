@@ -64,7 +64,11 @@ export interface MmaMarketRow {
 
 export interface TennisMarketRow {
   id: number;
-  market_type: "moneyline" | "set_winner" | "game_spread" | "game_total" | "exact_score" | "set_total" | "total_sets";
+  // set_spread is a SET handicap and is priced separately from game_spread
+  // (tennis_markets.py::_set_spread_model_prob). It was missing from this
+  // union even though the backend lists it in GAME_MARKET_TYPES, so any
+  // UI switch on it failed to compile and the rows rendered untyped.
+  market_type: "moneyline" | "set_winner" | "game_spread" | "set_spread" | "game_total" | "exact_score" | "set_total" | "total_sets";
   source: "kalshi" | "polymarket";
   team: string | null; // a player's real full name -- no fixed roster, see backend market_catalog_tennis.py
   line: number | null; // set_winner: set number; game_spread/game_total/set_total/total_sets: the line

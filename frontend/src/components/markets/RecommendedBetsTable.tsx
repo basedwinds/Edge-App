@@ -43,6 +43,7 @@ import { MARKET_TYPE_LABELS } from "./FuturesTable";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import type { SportKey } from "../../lib/sports";
+import { describeTennisSpread, TENNIS_MARKET_TYPE_LABELS } from "../../utils/tennisLabel";
 
 const GAME_MARKET_TYPE_LABELS: Record<string, string> = {
   moneyline: "Moneyline",
@@ -89,7 +90,15 @@ const GAME_MARKET_TYPE_LABELS: Record<string, string> = {
   series_handicap: "Map Handicap",
 };
 
-function marketTypeLabel(marketType: string): string {
+// Tennis is checked FIRST because it collides with soccer on two keys:
+// `game_spread`/`game_total` mean goals there and GAMES here, and tennis
+// additionally owns set_spread/set_winner/set_total/total_sets, none of
+// which had a name at all -- so a handicap row printed the raw
+// "set_spread" and read as "over -1.5 set spread" (user-reported).
+function marketTypeLabel(marketType: string, sport: SportKey): string {
+  if (sport === "tennis" && TENNIS_MARKET_TYPE_LABELS[marketType]) {
+    return TENNIS_MARKET_TYPE_LABELS[marketType];
+  }
   return GAME_MARKET_TYPE_LABELS[marketType] ?? MARKET_TYPE_LABELS[marketType] ?? marketType;
 }
 
@@ -232,6 +241,17 @@ function describePick(row: RecommendedBetRow): string {
   }
   if (marketType === "rounds" && line !== null) {
     return side === "under" ? `Ends before round ${line}` : `Goes past round ${line}`;
+  }
+  // Tennis's two spreads, which disagree on what a negative line means -- see
+  // describeTennisSpread. set_spread had NO branch at all before, so it fell
+  // through to the Over/Under fallback at the bottom and rendered as
+  // "Marta Kostyuk Over -1.5" (user-reported 2026-08-04): a handicap read as
+  // a total, with the sign left for the reader to interpret. There is no sign
+  // convention that makes that line correct, because the two markets use
+  // opposite ones.
+  if (sport === "tennis") {
+    const spread = describeTennisSpread(marketType, team, line);
+    if (spread) return spread;
   }
   if (marketType === "set_winner" && line !== null) return `${team ?? "—"} wins Set ${Math.round(line)}`;
   if (marketType === "exact_score" && side) return `${team ?? "—"} wins ${side}`;
@@ -394,7 +414,7 @@ const columns = [
             <span className="font-medium whitespace-nowrap" title={r.waitReason ?? "Ready"}>{r.label}</span>
           </div>
           <div className="text-xs text-[var(--color-text-dim)] whitespace-nowrap mt-0.5">
-            {marketTypeLabel(r.marketType)} · {describePick(r)}
+            {marketTypeLabel(r.marketType, r.sport)} · {describePick(r)}
           </div>
           {/* REAL BUG this fixes (user-reported 2026-07-20: "LUA Gaming vs
               UB Alma Mater has a waiting symbol but I don't know why"): the

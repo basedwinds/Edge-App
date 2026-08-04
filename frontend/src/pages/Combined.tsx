@@ -7,6 +7,7 @@ import { BetReasoningModal } from "../components/markets/BetReasoningModal";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import {
   fetchSettings,
+  PORTFOLIO_CEILING_PCT,
   fetchMarkets, buildRecommendedBets,
   fetchNbaMarkets, buildNbaRecommendedBets,
   fetchWnbaMarkets, buildWnbaRecommendedBets,
@@ -65,12 +66,21 @@ function guard<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise<
   ]);
 }
 
-async function loadCombined(): Promise<RecommendedBetRow[]> {
+/** One sport's ranked-but-uncapped shortlist plus the dollars it may use.
+ *
+ * The portfolio ceiling is deliberately NOT applied here. It has to be applied
+ * after the start-time window, or "Today" degenerates into "whichever of the
+ * global top-N happen to start today" -- which is how a day with 69 qualified
+ * tennis candidates rendered zero of them (user-reported 2026-08-04). */
+type SportPlan = { ranked: RecommendedBetRow[]; ceilingDollars: number };
+
+async function loadCombined(): Promise<SportPlan[]> {
   const s = await fetchSettings();
   // Game/match markets only -- this is an "upcoming bets" view, and the
   // per-sport /futures endpoints are both the slowest (season-long models +
   // depth-chart lookups) and season-long, not "upcoming". They stay on each
-  // sport's own Futures page. `[]` is passed for the futures arg below.
+  // sport's own Futures page. `[]` is passed for the futures arg below, so
+  // every row here draws on the WEEKLY pool.
   const [
     nflM, nbaM, wnbaM, cfbM, mlbM, mmaM, tenM, socM, valM, cs2M, lolM, racingM,
   ] = await Promise.all([
@@ -80,22 +90,23 @@ async function loadCombined(): Promise<RecommendedBetRow[]> {
     guard("TennisMarkets", fetchTennisMarkets(), []), guard("SoccerMarkets", fetchSoccerMarkets(), []), guard("ValorantMarkets", fetchValorantMarkets(), []),
     guard("Cs2Markets", fetchCs2Markets(), []), guard("LolMarkets", fetchLolMarkets(), []), guard("RacingMarkets", fetchRacingMarkets(), []),
   ]);
-  const rows = [
-    ...buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).rows,
-    ...buildNbaRecommendedBets(nbaM, [], s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars).rows,
-    ...buildWnbaRecommendedBets(wnbaM, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars).rows,
-    ...buildCfbRecommendedBets(cfbM, s.cfb_weekly_pool_dollars, s.cfb_futures_pool_dollars).rows,
-    ...buildMlbRecommendedBets(mlbM, [], s.mlb_weekly_pool_dollars, s.mlb_futures_pool_dollars).rows,
-    ...buildMmaRecommendedBets(mmaM, s.mma_weekly_pool_dollars).rows,
-    ...buildTennisRecommendedBets(tenM, s.tennis_weekly_pool_dollars).rows,
-    ...buildSoccerRecommendedBets(socM, s.soccer_weekly_pool_dollars).rows,
-    ...buildValorantRecommendedBets(valM, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars).rows,
-    ...buildCs2RecommendedBets(cs2M, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars).rows,
-    ...buildLolRecommendedBets(lolM, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars).rows,
-    ...buildRacingRecommendedBets(racingM, s.racing_weekly_pool_dollars).rows,
+  const plan = (ranked: RecommendedBetRow[], weeklyPool: number): SportPlan => ({
+    ranked, ceilingDollars: Math.max(0, weeklyPool * PORTFOLIO_CEILING_PCT),
+  });
+  return [
+    plan(buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).ranked, s.weekly_pool_dollars),
+    plan(buildNbaRecommendedBets(nbaM, [], s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars).ranked, s.nba_weekly_pool_dollars),
+    plan(buildWnbaRecommendedBets(wnbaM, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars).ranked, s.wnba_weekly_pool_dollars),
+    plan(buildCfbRecommendedBets(cfbM, s.cfb_weekly_pool_dollars, s.cfb_futures_pool_dollars).ranked, s.cfb_weekly_pool_dollars),
+    plan(buildMlbRecommendedBets(mlbM, [], s.mlb_weekly_pool_dollars, s.mlb_futures_pool_dollars).ranked, s.mlb_weekly_pool_dollars),
+    plan(buildMmaRecommendedBets(mmaM, s.mma_weekly_pool_dollars).ranked, s.mma_weekly_pool_dollars),
+    plan(buildTennisRecommendedBets(tenM, s.tennis_weekly_pool_dollars).ranked, s.tennis_weekly_pool_dollars),
+    plan(buildSoccerRecommendedBets(socM, s.soccer_weekly_pool_dollars).ranked, s.soccer_weekly_pool_dollars),
+    plan(buildValorantRecommendedBets(valM, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars).ranked, s.valorant_weekly_pool_dollars),
+    plan(buildCs2RecommendedBets(cs2M, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars).ranked, s.cs2_weekly_pool_dollars),
+    plan(buildLolRecommendedBets(lolM, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars).ranked, s.lol_weekly_pool_dollars),
+    plan(buildRacingRecommendedBets(racingM, s.racing_weekly_pool_dollars).ranked, s.racing_weekly_pool_dollars),
   ];
-  rows.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars);
-  return rows;
 }
 
 // Cross-sport futures for the "Futures" window: every sport's /futures merged,
@@ -166,7 +177,8 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
 
 const MAX_FUTURES_PER_SPORT = 8; // futures shortlist: top-N per sport (fairness across sports)
 
-const EMPTY_IDS: Set<string> = new Set(); // stable ref for the loading state (cross-platform placed keys)
+const EMPTY_IDS: Set<string> = new Set();
+const EMPTY_PLANS: SportPlan[] = []; // stable ref so the rows memo doesn't rerun while loading
 
 function localDateStr(offsetDays = 0): string {
   return new Date(Date.now() + offsetDays * 86400000).toLocaleDateString("en-CA"); // YYYY-MM-DD, local
@@ -207,7 +219,7 @@ export function Combined() {
   const [reasoningRow, setReasoningRow] = useState<RecommendedBetRow | null>(null);
   const [win, setWin] = useState<WindowFilter>("all");
 
-  const allRows = query.data ?? [];
+  const plans = query.data ?? EMPTY_PLANS;
   const rows = useMemo(() => {
     // Bucket by the REAL start instant. Match sports (tennis/soccer/esports/MMA)
     // carry an accurate estimatedStartTime -- and a `gameday` derived from a
@@ -227,14 +239,34 @@ export function Combined() {
       }
       return { ms: null, date: r.gameday };
     };
-    return allRows.filter((r) => {
+    const inWindow = (r: RecommendedBetRow) => {
       const { ms, date } = start(r);
       if (ms !== null && ms < now) return false;        // already started -> not "upcoming"
       if (win === "all") return true;                    // futures (date null) live only here
       if (date === null) return false;                   // season-long futures: All-upcoming only
       return date >= today && date <= limit;             // kicks off within the window
-    });
-  }, [allRows, win]);
+    };
+
+    // The window is applied FIRST, then each sport's portfolio ceiling is spent
+    // on what survived. Done the other way round -- ceiling first, window second
+    // -- a narrow window shows only the leftovers of a global ranking, which is
+    // how Today rendered 3 MLB bets and nothing else while 69 tennis candidates
+    // sat qualified and unshown behind 3 higher-edge ones starting tomorrow.
+    // Each window therefore answers "the best use of this pool on THIS slate",
+    // and the same bet can appear in more than one window -- correct, since the
+    // ceiling is about how much to deploy at once, not a running total.
+    const out: RecommendedBetRow[] = [];
+    for (const p of plans) {
+      let spent = 0;
+      for (const row of p.ranked) {
+        if (!inWindow(row)) continue;
+        if (spent + row.suggestedStakeDollars > p.ceilingDollars) continue;
+        spent += row.suggestedStakeDollars;
+        out.push(row);
+      }
+    }
+    return out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars);
+  }, [plans, win]);
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
   const stats = useMemo(() => {

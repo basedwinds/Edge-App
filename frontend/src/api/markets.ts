@@ -592,6 +592,17 @@ export interface RecommendedBetsResult {
   collapsedCount: number;
   /** Rows that survived collapsing but were cut by the portfolio cap. */
   cutByPortfolioCapCount: number;
+  /** Everything that survived dedup + the one-row-per-game cap, ranked by
+   * edge but NOT yet cut to the portfolio ceiling.
+   *
+   * The cross-sport page needs this because it slices by START TIME. Cutting
+   * to the ceiling first and filtering to "today" second answers the wrong
+   * question -- it shows whichever of the global top-N happen to start today,
+   * so a day with 69 qualified tennis candidates showed ZERO because the 3
+   * highest-edge tennis bets started tomorrow (user-reported 2026-08-04).
+   * Filtering this list first and applying the ceiling after gives "the best
+   * bets among today's games", which is what a Today tab means. */
+  ranked: RecommendedBetRow[];
 }
 
 // Multi-rung "N or more" ladders (win_total, season-stat thresholds,
@@ -681,7 +692,7 @@ function ladderCollapseKey(row: RecommendedBetRow): string {
 // depending on which pool a row belongs to -- summing fractions across
 // pools would compare fractions of different denominators, so this caps on
 // actual dollars against each pool's own dollar total instead.
-const PORTFOLIO_CEILING_PCT = 0.6;
+export const PORTFOLIO_CEILING_PCT = 0.6;
 // Max recommended bets per single race event (see buildRacingRecommendedBets).
 // A race supports several genuinely different positions (podium spots, h2h
 // pairings) unlike a team game, but one race shouldn't be able to fill the whole
@@ -1086,6 +1097,7 @@ export function buildRecommendedBets(
 
   return {
     rows: shown,
+    ranked: afterGameCap,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - afterGameCap.length,
     cutByPortfolioCapCount: afterGameCap.length - shown.length,
@@ -1236,6 +1248,7 @@ export function buildNbaRecommendedBets(
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -1335,6 +1348,7 @@ export function buildWnbaRecommendedBets(
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -1432,6 +1446,7 @@ export function buildCfbRecommendedBets(
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -1573,6 +1588,7 @@ export function buildMlbRecommendedBets(
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -1688,6 +1704,7 @@ export function buildMmaRecommendedBets(
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -1806,6 +1823,7 @@ export function buildTennisRecommendedBets(
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -1934,6 +1952,7 @@ export function buildSoccerRecommendedBets(
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -2074,6 +2093,7 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
 
   return {
     rows: shown,
+    ranked: gameCapped,
     rawCandidateCount,
     collapsedCount: rawCandidateCount - gameCapped.length,
     cutByPortfolioCapCount: gameCapped.length - shown.length,
@@ -2185,35 +2205,45 @@ export function buildRacingRecommendedBets(
   const collapsedCount = rawCandidateCount - deduped.length;
 
   const ceiling = Math.max(0, weeklyPoolDollars * PORTFOLIO_CEILING_PCT - lockedWeeklyDollars);
-  const rows: RecommendedBetRow[] = [];
-  let running = 0;
-  let cutByPortfolioCapCount = 0;
+  // Build every surviving row FIRST, then spend the ceiling on it. This used to
+  // construct rows inside the cap loop, which meant the pre-cap list existed
+  // only as a side effect and couldn't be handed to a caller that slices by
+  // start time (see RecommendedBetsResult.ranked).
+  //
   // `deduped` is already in byStakeThenEdge order (it's built by walking the
   // sorted list), so no re-sort here -- and the backend mirror iterates it in the
   // same order, which is what keeps alerts identical to this list.
-  for (const m of deduped) {
-    const stake = m.suggested_stake_dollars ?? 0;
-    if (running + stake > ceiling && rows.length > 0) { cutByPortfolioCapCount++; continue; }
-    running += stake;
-    rows.push({
-      key: `racing-${m.id}`, marketId: m.id,
-      label: `${m.driver} — ${RACING_MT_LABEL[m.market_type] ?? m.market_type}`,
-      marketType: m.market_type, team: m.driver, line: m.line, side: null,
-      gameday: m.close_time ? m.close_time.slice(0, 10) : null, gametime: null,
-      estimatedStartTime: m.close_time ?? null,
-      source: m.source, impliedProb: m.implied_prob, estProb: m.model_prob, edge: m.edge,
-      lineMovePp: null, kellyFraction: m.kelly_fraction ?? 0,
-      suggestedStakeDollars: stake, suggestedStakeUnits: m.suggested_stake_units ?? null,
-      stakePool: "weekly", volume: m.volume,
-      nflGameId: null, sport: m.series, nbaGameId: null, mlbGameId: null,
-      mmaFightId: null, tennisMatchId: null, soccerMatchId: null,
-      valorantMatchId: null, cs2MatchId: null, lolMatchId: null,
-      raceEventId: m.race_event_id,
-      groupKey: `racing|${m.series}|${m.market_type}|${m.driver}`,
-      waitReason: null,
-    });
+  const ranked: RecommendedBetRow[] = deduped.map((m) => ({
+    key: `racing-${m.id}`, marketId: m.id,
+    label: `${m.driver} — ${RACING_MT_LABEL[m.market_type] ?? m.market_type}`,
+    marketType: m.market_type, team: m.driver, line: m.line, side: null,
+    gameday: m.close_time ? m.close_time.slice(0, 10) : null, gametime: null,
+    estimatedStartTime: m.close_time ?? null,
+    source: m.source, impliedProb: m.implied_prob, estProb: m.model_prob, edge: m.edge,
+    lineMovePp: null, kellyFraction: m.kelly_fraction ?? 0,
+    suggestedStakeDollars: m.suggested_stake_dollars ?? 0,
+    suggestedStakeUnits: m.suggested_stake_units ?? null,
+    stakePool: "weekly", volume: m.volume,
+    nflGameId: null, sport: m.series, nbaGameId: null, mlbGameId: null,
+    mmaFightId: null, tennisMatchId: null, soccerMatchId: null,
+    valorantMatchId: null, cs2MatchId: null, lolMatchId: null,
+    raceEventId: m.race_event_id,
+    groupKey: `racing|${m.series}|${m.market_type}|${m.driver}`,
+    waitReason: null,
+  }));
+
+  const rows: RecommendedBetRow[] = [];
+  let running = 0;
+  let cutByPortfolioCapCount = 0;
+  for (const row of ranked) {
+    // The `rows.length > 0` allowance is deliberate: a single race-winner stake
+    // larger than the whole ceiling should still surface one row rather than an
+    // empty list.
+    if (running + row.suggestedStakeDollars > ceiling && rows.length > 0) { cutByPortfolioCapCount++; continue; }
+    running += row.suggestedStakeDollars;
+    rows.push(row);
   }
-  return { rows, rawCandidateCount, collapsedCount, cutByPortfolioCapCount };
+  return { rows, ranked, rawCandidateCount, collapsedCount, cutByPortfolioCapCount };
 }
 
 /** Collapses each game's two per-team moneyline rows (one binary market per
