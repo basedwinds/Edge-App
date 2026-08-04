@@ -394,26 +394,46 @@ PAIR_SURGE_GROWTH = 3.0
 def pair_looks_live_by_surge(
     sides: list[tuple[float | None, float | None, float | None]],
 ) -> bool:
-    """A side that has really traded up while its price moved a long way.
+    """The FIXTURE has really traded up while its price moved a long way.
 
     `sides` is one (price_swing, current_volume, base_volume) triple per side,
-    measured across the recent window. Only ONE side needs to qualify -- the two
-    sides of a moneyline do not always trade evenly, and the reported case had
-    107k on one and 60k on the other.
+    measured across the recent window. Volume is SUMMED across both sides and
+    the swing is the largest on either.
+
+    Judged per fixture, not per side, and that is the correction rather than a
+    detail. The first version asked one side to satisfy every condition alone,
+    and a third reported live match (Dang vs Hui, ITF women, recommended at its
+    "5pm" start while into the first set) slipped through because each side
+    failed a DIFFERENT one: Dang's swing cleared at 0.250 but its base was 36
+    against a floor of 50, while Hui had base 232, 23k traded and 99x growth but
+    swung 0.240, ten-thousandths under the bar. Meanwhile the match itself went
+    from 268 to 48,415 traded in under half an hour.
+
+    Both sides of a moneyline are the same market being traded, so the evidence
+    is naturally joint: which side carries the volume, and which side's price
+    happens to move furthest, is arbitrary. Summing removes that arbitrariness
+    instead of chasing it with per-side thresholds.
+
+    The controls still hold at these levels: Sabalenka vs Uchijima (a genuine
+    upcoming match) swings 0.010, and Rottoli vs Ferrari (a market that had
+    merely opened) has a combined base of 0.
     """
-    for swing, current, base in sides:
-        if swing is None or current is None or base is None:
-            continue
-        if swing < PAIR_SURGE_MIN_SWING or current < PAIR_SURGE_MIN_VOLUME:
-            continue
-        # The base gate is the one doing the real work: it demands the market was
-        # ALREADY trading before the surge. A market opening from nothing has a
-        # base of 0 and is not a live match, however fast its volume then climbs.
-        if base < PAIR_SURGE_MIN_BASE:
-            continue
-        if current >= PAIR_SURGE_GROWTH * base:
-            return True
-    return False
+    swings = [s for s, _, _ in sides if s is not None]
+    currents = [c for _, c, _ in sides if c is not None]
+    bases = [b for _, _, b in sides if b is not None]
+    if not swings or not currents or not bases:
+        return False
+    if max(swings) < PAIR_SURGE_MIN_SWING:
+        return False
+    current, base = sum(currents), sum(bases)
+    if current < PAIR_SURGE_MIN_VOLUME:
+        return False
+    # The base gate is the one doing the real work: it demands the market was
+    # ALREADY trading before the surge. A market opening from nothing has a base
+    # of 0 and is not a live match, however fast its volume then climbs.
+    if base < PAIR_SURGE_MIN_BASE:
+        return False
+    return current >= PAIR_SURGE_GROWTH * base
 
 # Futures market types where exactly ONE entity can win, so a leg trading at
 # near-certainty means the whole group is decided. Deliberately explicit rather
