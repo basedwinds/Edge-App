@@ -115,6 +115,21 @@ def run_paper_log_job():
         log.exception("paper log job crashed")
 
 
+def run_futures_history():
+    """Hourly -- samples each futures leg's MODEL probability so the UI can show
+    how the model and the market moved against each other (see
+    models/futures_history.py). Self-HTTP + a small write; only logs."""
+    try:
+        from app.models.futures_history import record_futures_probs
+        session = SessionLocal()
+        try:
+            record_futures_probs(session)
+        finally:
+            session.close()
+    except Exception:
+        log.exception("futures history job crashed")
+
+
 def run_snapshot_prune():
     """Daily -- caps MarketSnapshot growth (see snapshot_maintenance.py). Keeps
     the last 14 days + each market's latest; only logs, never raises."""
@@ -349,6 +364,14 @@ def start():
     # run scheduled here. Staggered, and after the initial poll burst, so
     # housekeeping never competes with the first price refresh for the write lock.
     housekeeping_tick = datetime.now() + timedelta(minutes=8)
+    scheduler.add_job(
+        serialized(run_futures_history),
+        "interval",
+        hours=1,
+        id="futures_history",
+        next_run_time=housekeeping_tick + timedelta(seconds=3 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
     scheduler.add_job(
         serialized(run_catalog_scan),
         "interval",

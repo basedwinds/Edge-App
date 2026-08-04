@@ -8,11 +8,12 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpDown, CheckCircle2, ChevronDown, ChevronUp, Hourglass, Info } from "lucide-react";
+import { ArrowUpDown, CheckCircle2, ChevronDown, ChevronUp, Hourglass, Info, TrendingUp } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
 import { fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
+import { FuturesTrendModal } from "./FuturesTrendModal";
 import { BetReasoningModal } from "./BetReasoningModal";
 import type { SportKey } from "../../lib/sports";
 
@@ -196,6 +197,7 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
     { id: "implied_prob", desc: true },
   ]);
   const [reasoningRow, setReasoningRow] = useState<FuturesMarketRow | null>(null);
+  const [trendRow, setTrendRow] = useState<FuturesMarketRow | null>(null);
   // A settled group is a RESULT, not an opportunity. It used to be dropped by
   // the backend, so a decided future vanished from the page rather than
   // reading as finished (the reported case: a champion market disappearing).
@@ -224,7 +226,6 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
   // "Mark placed" button when the page wires a handler. Built here (not at
   // module scope) so the buttons close over sport/onMarkPlaced.
   const allColumns = useMemo(() => {
-    if (!onMarkPlaced && !sport) return columns;
     return [
       ...columns,
       columnHelper.display({
@@ -232,6 +233,13 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
         header: "",
         cell: ({ row }) => (
           <div className="flex items-center justify-end gap-1.5">
+            <button
+              onClick={() => setTrendRow(row.original)}
+              className="p-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]"
+              title="How the price and the model have moved over time"
+            >
+              <TrendingUp size={13} />
+            </button>
             {sport && (
               <button
                 onClick={() => setReasoningRow(row.original)}
@@ -352,6 +360,13 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
             </div>
           )}
         </div>
+      )}
+      {trendRow && (
+        <FuturesTrendModal
+          marketId={trendRow.id}
+          title={`${trendRow.team ?? "This leg"} — ${trendRow.group_label ?? ""}`}
+          onClose={() => setTrendRow(null)}
+        />
       )}
       {reasoningRow && sport && (
         <BetReasoningModal

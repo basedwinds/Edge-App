@@ -163,6 +163,18 @@ export async function fetchLolMarkets(): Promise<LolMarketRow[]> {
   return apiGet<LolMarketRow[]>("/lol/markets");
 }
 
+export interface FuturesHistory {
+  market_id: number;
+  team: string | null;
+  group_label: string | null;
+  market: { ts: string; prob: number }[];
+  model: { ts: string; prob: number }[];
+}
+
+export async function fetchFuturesHistory(marketId: number): Promise<FuturesHistory> {
+  return apiGet<FuturesHistory>(`/markets/futures-history/${marketId}`);
+}
+
 export async function fetchLolFutures(): Promise<FuturesMarketRow[]> {
   return apiGet<FuturesMarketRow[]>("/lol/futures");
 }

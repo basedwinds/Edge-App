@@ -602,6 +602,33 @@ class Market(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
+class FuturesProbHistory(Base):
+    """The MODEL's own probability for a futures leg, sampled over time.
+
+    The market side of "how has this moved?" already exists -- MarketSnapshot
+    records every poll. The model side did not exist anywhere: model_prob is
+    computed on the READ path (each futures router prices its rows per request)
+    and then thrown away, so there was no way to see whether the model changed
+    its mind or only the market did.
+
+    Kept separate from MarketSnapshot rather than adding a column to it: the
+    pollers write snapshots every few minutes and know nothing about models,
+    while this is sampled hourly off the priced endpoints. Merging them would
+    mean writing a null model_prob on millions of rows to carry a value that
+    changes far more slowly.
+    """
+    __tablename__ = "futures_prob_history"
+    __table_args__ = (Index("ix_futures_prob_history_market_ts", "market_id", "ts"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    market_id = Column(Integer, ForeignKey("markets.id"), nullable=False)
+    ts = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    model_prob = Column(Float, nullable=True)
+    # The market price at the same instant, so a chart can be drawn from ONE
+    # table without re-joining snapshots on an approximate timestamp.
+    implied_prob = Column(Float, nullable=True)
+
+
 class MarketSnapshot(Base):
     __tablename__ = "market_snapshots"
     # Line-movement queries (2026-07-16) look up the snapshot closest to

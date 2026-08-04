@@ -1670,3 +1670,56 @@ def get_market_reasoning(
         factors=factors,
         caveats=caveats,
     )
+
+@router.get("/futures-history/{market_id}")
+def futures_history(market_id: int, session: Session = Depends(get_session)):
+    """How the MODEL and the MARKET moved on one futures leg, over time.
+
+    Two series from two places on purpose. The market price comes from
+    MarketSnapshot, which the pollers have always written; the model probability
+    comes from FuturesProbHistory, sampled hourly, because model_prob is computed
+    on the read path and was otherwise discarded (see models/futures_history.py).
+
+    A futures position settles months out, so the only thing that happens in the
+    meantime is that opinion moves -- being able to see whether the MODEL moved
+    or only the market did is the whole point of the chart.
+    """
+    from app.db.models import FuturesProbHistory, MarketSnapshot
+
+    market = session.get(Market, market_id)
+    if market is None:
+        raise HTTPException(status_code=404, detail="market not found")
+
+    # Hourly buckets: futures move on news, not minute to minute, and the raw
+    # snapshot stream is one row every few minutes for weeks.
+    seen: set[str] = set()
+    market_series = []
+    for snap in (
+        session.query(MarketSnapshot)
+        .filter(MarketSnapshot.market_id == market_id)
+        .order_by(MarketSnapshot.ts)
+        .all()
+    ):
+        bucket = snap.ts.strftime("%Y-%m-%dT%H")
+        if bucket in seen:
+            continue
+        seen.add(bucket)
+        price = _implied_prob(snap)
+        if price is not None:
+            market_series.append({"ts": snap.ts.isoformat() + "Z", "prob": price})
+
+    model_series = [
+        {"ts": row.ts.isoformat() + "Z", "prob": row.model_prob}
+        for row in session.query(FuturesProbHistory)
+        .filter(FuturesProbHistory.market_id == market_id,
+                FuturesProbHistory.model_prob.isnot(None))
+        .order_by(FuturesProbHistory.ts)
+        .all()
+    ]
+    return {
+        "market_id": market_id,
+        "team": market.team,
+        "group_label": market.group_label,
+        "market": market_series,
+        "model": model_series,
+    }
