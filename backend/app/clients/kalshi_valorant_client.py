@@ -34,6 +34,7 @@ so Valorant's own series_winner market_type now has two real independent
 price sources, same as every other market type here.
 """
 import re
+from app.ingestion.kalshi_ticker_time import start_from_ticker
 
 from app.clients.base import get_json, paginate
 
@@ -109,7 +110,13 @@ def get_map_winner_markets() -> list[dict]:
                 "last_price": _to_float(m.get("last_price_dollars")),
                 "volume": _to_float(m.get("volume_fp")),
                 "status": m.get("status"),
-                "occurrence_datetime": m.get("occurrence_datetime"),
+                # The TICKER's own clock, not occurrence_datetime, is the real scheduled
+                # start: Kalshi sets occurrence once and never revises it when a match
+                # moves, while the ticker carries an Eastern-time stamp that measured
+                # within 15 min of Flashscore's real start on 25/28 LoL and 3/3 CS2
+                # matches (vs 16/28 and 0/3 for occurrence). Falls back to occurrence
+                # whenever the ticker has no clock. See ingestion/kalshi_ticker_time.py.
+                "occurrence_datetime": start_from_ticker(m.get("ticker")) or m.get("occurrence_datetime"),
                 "event_title": ev.get("title", ""),
             })
     return rows
@@ -136,7 +143,13 @@ def get_series_winner_markets() -> list[dict]:
                 "last_price": _to_float(m.get("last_price_dollars")),
                 "volume": _to_float(m.get("volume_fp")),
                 "status": m.get("status"),
-                "occurrence_datetime": m.get("occurrence_datetime"),
+                # The TICKER's own clock, not occurrence_datetime, is the real scheduled
+                # start: Kalshi sets occurrence once and never revises it when a match
+                # moves, while the ticker carries an Eastern-time stamp that measured
+                # within 15 min of Flashscore's real start on 25/28 LoL and 3/3 CS2
+                # matches (vs 16/28 and 0/3 for occurrence). Falls back to occurrence
+                # whenever the ticker has no clock. See ingestion/kalshi_ticker_time.py.
+                "occurrence_datetime": start_from_ticker(m.get("ticker")) or m.get("occurrence_datetime"),
                 "event_title": ev.get("title", ""),
             })
     return rows

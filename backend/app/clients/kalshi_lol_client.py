@@ -34,6 +34,7 @@ KXCS2GAME/KXVALORANTGAME (one event per match, team name from
 yes_sub_title).
 """
 import re
+from app.ingestion.kalshi_ticker_time import start_from_ticker
 
 from app.clients.base import get_json, paginate
 
@@ -93,7 +94,13 @@ def _base_row(event_ticker: str, event_title: str, m: dict, **extra) -> dict:
         "last_price": _to_float(m.get("last_price_dollars")),
         "volume": _to_float(m.get("volume_fp")),
         "status": m.get("status"),
-        "occurrence_datetime": m.get("occurrence_datetime"),
+        # The TICKER's own clock, not occurrence_datetime, is the real scheduled
+        # start: Kalshi sets occurrence once and never revises it when a match
+        # moves, while the ticker carries an Eastern-time stamp that measured
+        # within 15 min of Flashscore's real start on 25/28 LoL and 3/3 CS2
+        # matches (vs 16/28 and 0/3 for occurrence). Falls back to occurrence
+        # whenever the ticker has no clock. See ingestion/kalshi_ticker_time.py.
+        "occurrence_datetime": start_from_ticker(m.get("ticker")) or m.get("occurrence_datetime"),
     }
     row.update(extra)
     return row
