@@ -354,6 +354,16 @@ class OpenBetOut(BaseModel):
     clv_status: str
     cross_key: str = ""         # frontend-identical crossPlatformKey: lets Recommended mark a bet "placed" on EITHER book
     game_key: str = ""          # real-world game id ("" for futures): marks the whole game covered
+    # WHERE THE POSITION STANDS NOW, against the entry above. A futures bet sits
+    # open for months, so "what did I pay" on its own says nothing about whether
+    # it has gone for or against you since.
+    market_prob_now: float | None = None   # latest traded price for this leg
+    # Only futures carry this: model_prob is computed on the read path and was
+    # never stored for game markets, whereas futures are now sampled hourly
+    # (see models/futures_history.py). None means "not recorded", not "unchanged".
+    model_prob_now: float | None = None
+    market_move_pp: float | None = None    # now - entry, in percentage points
+    model_move_pp: float | None = None
 
 
 class SettledBetOut(BaseModel):
@@ -785,6 +795,22 @@ def get_open_bets(session: Session = Depends(get_session)):
         m.id: m.status
         for m in (session.query(Market).filter(Market.id.in_(_market_ids)).all() if _market_ids else [])
     }
+    # Current market price + current model number, so the tracker can show an
+    # open position against the entry rather than only the entry.
+    from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
+    from app.db.models import FuturesProbHistory
+
+    _snaps = _batch_latest_snapshots(session, _market_ids) if _market_ids else {}
+    _model_now: dict[int, float] = {}
+    if _market_ids:
+        for mid, prob in (
+            session.query(FuturesProbHistory.market_id, FuturesProbHistory.model_prob)
+            .filter(FuturesProbHistory.market_id.in_(_market_ids),
+                    FuturesProbHistory.model_prob.isnot(None))
+            .order_by(FuturesProbHistory.ts)
+            .all()
+        ):
+            _model_now[mid] = prob   # ordered ascending, so the last write wins
     for r in rows:
         start_dt: datetime.datetime | None = None
         start_date: str | None = None
@@ -821,6 +847,17 @@ def get_open_bets(session: Session = Depends(get_session)):
             except (ValueError, AttributeError):
                 rescheduled = False
         clv = compute_bet_clv(session, r)
+        # Where the position stands NOW, against the entry stored on the bet. The
+        # move is signed from the BET's point of view: a positive number means the
+        # market/model has come toward the side that was backed since it was taken.
+        _mkt_now = _implied_prob(_snaps.get(r.market_id))
+        _mdl_now = _model_now.get(r.market_id)
+
+        def _move(now: float | None, entry: float | None) -> float | None:
+            if now is None or entry is None:
+                return None
+            return round((now - entry) * 100, 2)
+
         # These datetimes are naive UTC (the CLV module works in UTC); emit an
         # explicit 'Z' so the browser parses them as UTC, not local time -- else
         # a just-started game misreads as hours away (timezone-offset bug).
@@ -841,6 +878,10 @@ def get_open_bets(session: Session = Depends(get_session)):
             clv_status=clv["status"],
             cross_key=_cross_platform_key(r),
             game_key=_game_key(r),
+            market_prob_now=_mkt_now,
+            model_prob_now=_mdl_now,
+            market_move_pp=_move(_mkt_now, r.market_prob_at_placement),
+            model_move_pp=_move(_mdl_now, r.model_prob_at_placement),
         )))
     # Ordering: UPCOMING first (soonest start at top -- the actionable ones),
     # then genuinely-DELAYED bets (start already >4h past but still pending --

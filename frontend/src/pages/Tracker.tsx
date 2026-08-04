@@ -182,6 +182,7 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
             <th className="px-3 py-2 font-medium">Bet</th>
             <th className="px-3 py-2 font-medium">Source</th>
             <th className="px-3 py-2 font-medium text-right">Entry</th>
+            <th className="px-3 py-2 font-medium text-right">Now</th>
             <th className="px-3 py-2 font-medium text-right">Stake</th>
             <th className="px-3 py-2 font-medium"></th>
           </tr>
@@ -234,6 +235,9 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
                   {b.market_prob_at_placement != null ? `${(b.market_prob_at_placement * 100).toFixed(0)}%` : "—"}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums">
+                  <NowCell marketNow={b.market_prob_now ?? null} marketMove={b.market_move_pp ?? null} />
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
                   ${b.stake_dollars.toLocaleString()}{b.stake_units != null ? ` · ${b.stake_units.toFixed(1)}u` : ""}
@@ -337,6 +341,36 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
   );
 }
 
+/** Where an open position stands now, against what it was taken at.
+ * Signed from the BET's point of view: positive means the number has moved
+ * toward the side that was backed since entry. Market for every bet; model
+ * only for futures, which are the ones sampled hourly -- a dash there means
+ * "not recorded", not "unchanged". */
+function NowCell({ marketNow, marketMove, modelNow, modelMove }: {
+  marketNow: number | null; marketMove: number | null;
+  modelNow?: number | null; modelMove?: number | null;
+}) {
+  if (marketNow == null) return <span className="text-[var(--color-text-muted)]">—</span>;
+  const tone = (v: number | null | undefined) =>
+    v == null || Math.abs(v) < 0.5 ? "text-[var(--color-text-muted)]"
+      : v > 0 ? "text-[var(--color-good)]" : "text-[var(--color-critical)]";
+  const pp = (v: number | null | undefined) => (v == null ? "" : `${v > 0 ? "+" : ""}${v.toFixed(1)}pp`);
+  return (
+    <>
+      <div className="whitespace-nowrap text-[var(--color-text)]">
+        {(marketNow * 100).toFixed(0)}%{" "}
+        <span className={`text-[11px] ${tone(marketMove)}`}>{pp(marketMove)}</span>
+      </div>
+      {modelNow != null && (
+        <div className="whitespace-nowrap text-[11px] text-[var(--color-text-muted)]">
+          model {(modelNow * 100).toFixed(0)}%{" "}
+          <span className={tone(modelMove)}>{pp(modelMove)}</span>
+        </div>
+      )}
+    </>
+  );
+}
+
 // Compact list of futures positions (open first, then settled) -- kept lean on
 // purpose so the Futures section stays uncluttered: pick, source, status, entry,
 // stake, P/L. No CLV column (futures have no clean close).
@@ -346,6 +380,9 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
     id: number; market_id: number; sport: string; league: string | null; source: string; label: string; market_type: string;
     team: string | null; side: string | null; line: number | null;
     entry: number | null; model_prob: number | null; stake: number; status: string; profit: number | null;
+    // Where an OPEN position stands now vs the entry above. Only open rows
+    // carry these: a settled one has a result, which is the better answer.
+    marketNow: number | null; modelNow: number | null; marketMove: number | null; modelMove: number | null;
     resolves: string; resolveKey: number;
   };
   const mk = (b: OpenBetPayload | SettledBetPayload, status: string, profit: number | null): FRow => {
@@ -354,6 +391,10 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
       id: b.id, market_id: b.market_id, sport: b.sport, league: b.league, source: b.source, label: b.label, market_type: b.market_type,
       team: b.team, side: b.side, line: b.line, entry: b.market_prob_at_placement, model_prob: b.model_prob_at_placement, stake: b.stake_dollars,
       status, profit, resolves: r.label, resolveKey: r.sortKey,
+      marketNow: (b as OpenBetPayload).market_prob_now ?? null,
+      modelNow: (b as OpenBetPayload).model_prob_now ?? null,
+      marketMove: (b as OpenBetPayload).market_move_pp ?? null,
+      modelMove: (b as OpenBetPayload).model_move_pp ?? null,
     };
   };
   // Open first (soonest to resolve → capital frees earliest), then settled.
@@ -376,6 +417,7 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
             <th className="px-3 py-2 font-medium">Status</th>
             <th className="px-3 py-2 font-medium">Est. resolves</th>
             <th className="px-3 py-2 font-medium text-right">Entry</th>
+            <th className="px-3 py-2 font-medium text-right">Now</th>
             <th className="px-3 py-2 font-medium text-right">Stake</th>
             <th className="px-3 py-2 font-medium text-right">P/L</th>
             <th className="px-3 py-2 font-medium"></th>
@@ -410,6 +452,15 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
                 <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)]">{r.resolves}</td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
                   {r.entry != null ? `${(r.entry * 100).toFixed(0)}%` : "—"}
+                </td>
+                {/* A settled leg has a result, so "now" is noise there. */}
+                <td className="px-3 py-2 text-right font-mono tabular-nums">
+                  {r.status === "open" ? (
+                    <NowCell
+                      marketNow={r.marketNow} marketMove={r.marketMove}
+                      modelNow={r.modelNow} modelMove={r.modelMove}
+                    />
+                  ) : <span className="text-[var(--color-text-muted)]">—</span>}
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">${r.stake.toLocaleString()}</td>
                 <td className={`px-3 py-2 text-right font-mono tabular-nums ${r.profit != null ? pnlClass(r.profit) : "text-[var(--color-text-dim)]"}`}>

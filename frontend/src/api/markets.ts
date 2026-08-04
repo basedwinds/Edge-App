@@ -2406,6 +2406,12 @@ export interface OpenBetPayload {
   stake_dollars: number;
   stake_units: number | null;
   market_prob_at_placement: number | null;
+  // Where the market and the model sit RIGHT NOW, plus the move since entry
+  // in percentage points. Model side is futures-only (sampled hourly).
+  market_prob_now: number | null;
+  model_prob_now: number | null;
+  market_move_pp: number | null;
+  model_move_pp: number | null;
   edge_at_placement: number | null;
   placed_at: string;
   start_time: string | null;
