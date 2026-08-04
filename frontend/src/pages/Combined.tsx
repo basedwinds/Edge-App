@@ -24,6 +24,7 @@ import {
   fetchFutures, fetchNbaFutures, fetchMlbFutures, fetchTennisFutures,
   fetchSoccerFutures, fetchValorantFutures, fetchCs2Futures, fetchLolFutures,
   type RecommendedBetRow,
+  type SettingsPayload,
 } from "../api/markets";
 import { CrossSportFuturesTable, type CrossSportFuturesRow } from "../components/markets/CrossSportFuturesTable";
 import { fetchOpenBets, fetchSettledBets } from "../api/markets";
@@ -201,6 +202,71 @@ const WINDOWS: { key: WindowFilter; label: string }[] = [
   { key: "futures", label: "Futures" },
 ];
 
+const SPORT_SHORT: Record<string, string> = {
+  nfl: "NFL", nba: "NBA", wnba: "WNBA", cfb: "CFB", mlb: "MLB", mma: "MMA",
+  tennis: "Tennis", soccer: "Soccer", valorant: "Valorant", cs2: "CS2", lol: "LoL",
+  f1: "F1", nascar: "NASCAR", irl: "IndyCar",
+};
+
+/** How much of each sport's weekly pool is already committed to PENDING bets.
+ *
+ * The recommendation ceiling is computed per window and does NOT subtract
+ * capital already locked, so nothing on this page stops you from placing the
+ * top 2 Valorant bets off "All upcoming", switching to "Next 24h", and placing
+ * its 2 as well -- $80 against a $40.80 ceiling, silently. This makes that
+ * visible rather than enforcing it: hiding bets as you place them is exactly
+ * the vanishing-row behaviour that made this list confusing in the first place.
+ *
+ * Interim. Real enforcement belongs in the staking layer, not a warning strip.
+ */
+function weeklyPoolFor(sport: string, s: SettingsPayload): number | null {
+  const rec = s as unknown as Record<string, number | undefined>;
+  if (sport === "nfl") return s.weekly_pool_dollars;                       // no nfl_ prefix
+  if (sport === "f1" || sport === "nascar" || sport === "irl") return rec.racing_weekly_pool_dollars ?? null;
+  return rec[`${sport}_weekly_pool_dollars`] ?? null;
+}
+
+function PoolExposure({ settings }: { settings: SettingsPayload }) {
+  const q = useQuery({ queryKey: ["open-bets-exposure"], queryFn: fetchOpenBets });
+  const rows = useMemo(() => {
+    const open = (q.data ?? []).filter((b) => b.stake_pool !== "futures");
+    const bySport = new Map<string, number>();
+    for (const b of open) bySport.set(b.sport, (bySport.get(b.sport) ?? 0) + b.stake_dollars);
+    return [...bySport.entries()]
+      .map(([sport, committed]) => {
+        const pool = weeklyPoolFor(sport, settings);
+        const ceiling = pool === null ? null : pool * PORTFOLIO_CEILING_PCT;
+        return { sport, committed, ceiling, pct: ceiling ? committed / ceiling : null };
+      })
+      .filter((r) => r.ceiling !== null)
+      .sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0));
+  }, [q.data, settings]);
+
+  if (rows.length === 0) return null;
+  const over = rows.filter((r) => (r.pct ?? 0) > 1).length;
+  return (
+    <div className="mt-3 text-[11px] text-[var(--color-text-muted)]">
+      <span className="mr-2">Pool already committed to open bets:</span>
+      {rows.map((r) => {
+        const pct = r.pct ?? 0;
+        const tone = pct > 1 ? "text-[var(--color-critical)]"
+          : pct > 0.8 ? "text-[var(--color-warning)]" : "text-[var(--color-text-dim)]";
+        return (
+          <span key={r.sport} className={`mr-2 whitespace-nowrap ${tone}`}>
+            {SPORT_SHORT[r.sport] ?? r.sport} ${r.committed}/${Math.round(r.ceiling!)}
+          </span>
+        );
+      })}
+      {over > 0 && (
+        <span className="block mt-1">
+          {over} {over === 1 ? "sport is" : "sports are"} past the ceiling the recommendations size
+          against — the list won't stop you, so treat those as full.
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function Combined() {
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ["combined-recommended"], queryFn: loadCombined });
@@ -367,6 +433,9 @@ export function Combined() {
               {isFutures ? "season-long / tournament markets — place to track for calibration" : win === "all" ? "everything not yet started" : "games kicking off in this window"}
             </span>
           </div>
+          {/* Each window sizes against the FULL pool, independently -- so working
+              two windows in one sitting can double-commit without warning. */}
+          {!isFutures && settingsQuery.data && <PoolExposure settings={settingsQuery.data} />}
 
           {isFutures ? (
             <CrossSportFuturesTable rows={futuresRows} />
