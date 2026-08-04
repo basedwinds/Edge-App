@@ -346,6 +346,62 @@ def pair_looks_live_by_travel(
     swings = [w for _, _, w in sides if w is not None]
     return bool(swings) and max(swings) >= PAIR_LIVE_MIN_SWING
 
+
+# TENTH gap (2026-08-04, user-reported): Ovcharenko vs Broadus, a Kalshi ITF
+# women's moneyline, recommended at $20 while the match was ON COURT. Recorded
+# start 20:00Z, five hours away; the two sides had travelled 0.22->0.65 and
+# 0.80->0.35 in forty-five minutes on 107k and 60k of volume, with the lead
+# changing hands.
+#
+# pair_looks_live_by_travel cannot see this and never could: it requires the two
+# sides to sit at OPPOSITE EXTREMES, so it only ever catches a match that is
+# live AND effectively decided. A live match that is merely CLOSE never
+# qualifies. Flashscore had both players, but only in doubles draws, so the
+# positive-signal gate had no opinion either.
+#
+# What gives it away is not where the price is but how the market got there: a
+# ten-fold jump in traded volume ON A REAL BASE, together with a large swing.
+# The base is what makes the volume test meaningful -- an earlier attempt at a
+# surge rule was rejected because it fired on markets that had merely OPENED
+# (Rottoli vs Ferrari: 0.50/0.58, volume 0 -> 13k, plainly pre-match), where the
+# "growth" was division by nothing. Requiring real CURRENT volume as well as
+# growth separates the two cleanly.
+#
+# Deliberately price-blind, which is the whole point of adding it beside the
+# travel rule rather than widening that one.
+#
+# Measured over every active Kalshi tennis moneyline: fires on 86 matches, of
+# which only 6 still claim a future start -- and all 6 are ITF matches carrying
+# 50k-280k volume with swings of 0.29-0.78, i.e. every one genuinely in play.
+# The controls stay out: Sabalenka vs Uchijima (a real upcoming match with a
+# world-#1 favourite) swings 0.010, and Rottoli vs Ferrari holds only 13k.
+PAIR_SURGE_MIN_SWING = 0.25
+PAIR_SURGE_MIN_VOLUME = 50_000.0
+PAIR_SURGE_GROWTH = 3.0
+
+
+def pair_looks_live_by_surge(
+    sides: list[tuple[float | None, float | None, float | None]],
+) -> bool:
+    """A side that has really traded up while its price moved a long way.
+
+    `sides` is one (price_swing, current_volume, base_volume) triple per side,
+    measured across the recent window. Only ONE side needs to qualify -- the two
+    sides of a moneyline do not always trade evenly, and the reported case had
+    107k on one and 60k on the other.
+    """
+    for swing, current, base in sides:
+        if swing is None or current is None:
+            continue
+        if swing < PAIR_SURGE_MIN_SWING or current < PAIR_SURGE_MIN_VOLUME:
+            continue
+        # max(base, 1.0): a base of 0 is a market that just opened, not a surge.
+        # Pairing that with the absolute floor above is what keeps a newly listed
+        # market from reading as a live one.
+        if current >= PAIR_SURGE_GROWTH * max(base or 0.0, 1.0):
+            return True
+    return False
+
 # Futures market types where exactly ONE entity can win, so a leg trading at
 # near-certainty means the whole group is decided. Deliberately explicit rather
 # than inferred: "sum of prices ~ 1" looks like a clean test for mutual

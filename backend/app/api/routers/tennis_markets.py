@@ -32,6 +32,7 @@ from app.models.bracket_sim_tennis import simulate_tournament
 from app.models.ladder_sanity import (
     find_resolved_entities,
     looks_already_live_by_trading,
+    pair_looks_live_by_surge,
     pair_looks_live_by_travel,
     pair_looks_resolved,
 )
@@ -520,6 +521,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     # separates a live match from a genuine lopsided favourite. Reuses the
     # already-loaded live-check window rather than querying again.
     moneyline_travel: dict[int, list[tuple[float | None, float | None, float | None]]] = {}
+    moneyline_surge: dict[int, list[tuple[float | None, float | None, float | None]]] = {}
     for m in markets:
         if m.market_type != "moneyline" or m.tennis_match_id is None:
             continue
@@ -534,13 +536,25 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         moneyline_travel.setdefault(m.tennis_match_id, []).append(
             (_implied_prob(snap), snap.volume, swing)
         )
+        vols = [s.volume for s in window if s.volume is not None]
+        moneyline_surge.setdefault(m.tennis_match_id, []).append(
+            (swing, max(vols) if vols else None, min(vols) if vols else None)
+        )
     matches_live_by_travel = {
         mid for mid, sides in moneyline_travel.items() if pair_looks_live_by_travel(sides)
+    }
+    # Second, price-BLIND arm -- see ladder_sanity.pair_looks_live_by_surge for
+    # the reported Ovcharenko vs Broadus case. The travel rule above needs the
+    # two sides at opposite extremes, so a live match that is still CLOSE slips
+    # past it; a ten-fold volume jump on a real base does not.
+    matches_live_by_surge = {
+        mid for mid, sides in moneyline_surge.items() if pair_looks_live_by_surge(sides)
     }
 
     def _match_pair_resolved(m: Market) -> bool:
         return (m.tennis_match_id in matches_pair_resolved
-                or m.tennis_match_id in matches_live_by_travel)
+                or m.tennis_match_id in matches_live_by_travel
+                or m.tennis_match_id in matches_live_by_surge)
 
     # EIGHTH gap (2026-08-03, user-reported: Toby Martin, Kayla Day set 1, and
     # Miriam vs Calista Liu all recommended while already under way or finished).
