@@ -127,6 +127,69 @@ def _match_outcome(stored: str, resolved: dict[str, float]) -> float | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def _leg_from_market(market: Market, outcomes: list[str]) -> str | None:
+    """Which outcome a bare-ticker market represents, derived from the Market row.
+
+    REAL GAP this closes. Most Polymarket tickers are "<conditionId>-<outcome>",
+    but several upsert paths store the bare condition id with no outcome at all --
+    1,454 markets across soccer (team_total, game_spread, half team totals),
+    nascar (race_winner), nfl (super_bowl_champion, conference_champion,
+    division_winner, playoff_qualifier, mvp) and f1 (h2h, drivers_champion,
+    race_winner, constructor_pole). Settlement could not tell which side those
+    bets were on, so they could never grade -- 230 were sitting pending.
+
+    Deriving the leg here rather than changing the ticker is deliberate: the
+    ticker IS the market's identity, so rewriting it would either orphan every
+    existing row or create a duplicate market alongside each one. The Market row
+    already carries everything needed.
+
+    Three real shapes, confirmed against live Gamma responses:
+      ["Yes", "No"]                 -> a per-entity futures/prop question
+                                       ("Will Bottas be champion?"); our row is
+                                       always the affirmative side.
+      ["Over", "Under"]             -> a total; these paths store the OVER price
+                                       (see _upsert_polymarket_spread_shaped_row),
+                                       and Market.side is honoured when set.
+      two named competitors         -> a spread; Market.team names our side.
+
+    Validated on 30 randomly sampled bare-ticker markets: every one resolved
+    (18 Over, 9 Yes, 3 by team name), none ambiguous. Returns None rather than
+    guessing on any shape it does not recognise.
+    """
+    if not outcomes:
+        return None
+    lowered = [o.strip().lower() for o in outcomes]
+    if lowered == ["yes", "no"]:
+        return "Yes"
+    if set(lowered) == {"over", "under"}:
+        side = (market.side or "over").strip().lower()
+        want = "under" if side.startswith("u") else "over"
+        for original, low in zip(outcomes, lowered):
+            if low == want:
+                return original
+        return None
+    if market.team:
+        target = market.team.strip().lower()
+        hits = [o for o, low in zip(outcomes, lowered) if low == target]
+        if len(hits) == 1:
+            return hits[0]
+        # Head-to-head rows store BOTH competitors in `team` ("Russell vs
+        # Antonelli"), so the exact match above cannot fire. The FIRST name is
+        # our side, and that is a guarantee rather than a guess:
+        # polymarket_racing_client builds this label FROM the outcomes order
+        # precisely so last_price stays aligned with the first-named driver
+        # ("Polymarket's outcomes are NOT always in groupItemTitle order").
+        # bet_settlement._grade_racing_h2h splits the same field the same way.
+        import re as _re
+        halves = _re.split(r"\s+vs\.?\s+", market.team.strip(), flags=_re.IGNORECASE)
+        if len(halves) == 2:
+            first = halves[0].strip().lower()
+            hits = [o for o, low in zip(outcomes, lowered) if low == first]
+            if len(hits) == 1:
+                return hits[0]
+    return None
+
+
 def settle_pending_from_polymarket(session: Session, bets: list[PlacedBet]) -> int:
     """Grade `bets` from Polymarket's resolution. Returns how many settled."""
     import datetime
@@ -138,15 +201,28 @@ def settle_pending_from_polymarket(session: Session, bets: list[PlacedBet]) -> i
             continue
         parts = _split_ticker(market.source_ticker)
         if parts is None:
-            continue
-        resolved = _resolved_outcomes(parts[0])
-        if not resolved:
-            continue
-        price = _match_outcome(parts[1], resolved)
+            # Bare condition id -- no outcome suffix. Recoverable from the Market
+            # row itself; see _leg_from_market.
+            if not market.source_ticker.startswith("0x"):
+                continue
+            resolved = _resolved_outcomes(market.source_ticker)
+            if not resolved:
+                continue
+            leg = _leg_from_market(market, list(resolved))
+            if leg is None:
+                log.warning("polymarket bare ticker, leg not derivable: %s %s outcomes=%s",
+                            market.sport, market.market_type, sorted(resolved))
+                continue
+        else:
+            resolved = _resolved_outcomes(parts[0])
+            if not resolved:
+                continue
+            leg = parts[1]
+        price = _match_outcome(leg, resolved)
         if price is None:
             # Outcome name drifted from what we stored -- do not guess which leg
             # this bet was on.
-            log.warning("polymarket outcome %r not in %s", parts[1], sorted(resolved))
+            log.warning("polymarket outcome %r not in %s", leg, sorted(resolved))
             continue
         if price >= _DECISIVE:
             bet.status = "won"
