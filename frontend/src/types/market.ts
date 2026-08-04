@@ -373,6 +373,13 @@ export interface FuturesMarketRow {
   stake_pool: "weekly" | "futures" | null;
   line_move_pp: number | null;
   model_note?: string | null; // esports tournament sim: "Elo-approximated bracket, tracking-only" caveat
+  /** This leg's one-winner group has already been decided. Such rows used to be
+   * dropped outright, so a settled future silently disappeared from the page
+   * instead of reading as finished. They are returned and flagged now, never
+   * staked, and the UI files them under their own Settled section. */
+  group_settled?: boolean;
+  /** The leg that won it, so a settled group reads as a result. */
+  group_winner?: string | null;
 }
 
 export interface GameMarketRow {

@@ -455,6 +455,11 @@ ONE_WINNER_MARKET_TYPES = {
 # heavy favourites without needing a second signal.
 FUTURES_DECIDED_PRICE = 0.97
 
+# How much a DECIDED field's dead legs may still be quoted at, per leg. A
+# finished market does not go to zero -- BLAST Bounty's 31 dead legs still
+# carried ~0.05 each, summing the field to 2.51.
+FUTURES_DEAD_LEG_ALLOWANCE = 0.05
+
 
 def futures_group_decided(market_type: str | None, prices) -> bool:
     """True when a one-winner futures group has already been won.
@@ -465,8 +470,29 @@ def futures_group_decided(market_type: str | None, prices) -> bool:
     (0.025), FURIA (0.005) and Aurora (0.005). Kalshi still reported every leg
     `active`, so the platform's own status could not catch it, and no futures
     endpoint applied any resolved-group check at all.
+
+    Two guards added after the first version, because `market_type` alone does
+    not mean what it says: Kalshi files "Who Will Qualify For Champs 2026?",
+    "Team to Qualify for Worlds 2026?" and "LPL Summer 2026: Player to Penta"
+    all as `tournament_winner`, and MANY of those legs win. Treating them as
+    one-winner marked live groups as finished -- 166 legs across three groups,
+    every one of them a real bet the page was throwing away.
+
+      1. Exactly ONE leg may be at the decided price. A single-winner field
+         cannot have two outcomes at 97%+; "Qualify For Champs" had two at 0.98
+         and "Player to Penta" two more.
+      2. The field's prices must SUM to about one. Mutually exclusive outcomes
+         do; a multi-qualifier field does not ("Team to Qualify for Worlds"
+         sums to 21.02 across 56 legs). The allowance is 1 + 0.05 per leg,
+         because a genuinely decided field keeps stale non-zero prices on its
+         dead legs -- BLAST Bounty, the real reported case, sums to 2.51 across
+         32 legs against a 2.60 bound and still passes.
     """
     if market_type not in ONE_WINNER_MARKET_TYPES:
         return False
     real = [p for p in prices if p is not None]
-    return bool(real) and max(real) >= FUTURES_DECIDED_PRICE
+    if not real:
+        return False
+    if sum(1 for p in real if p >= FUTURES_DECIDED_PRICE) != 1:
+        return False
+    return sum(real) <= 1.0 + FUTURES_DEAD_LEG_ALLOWANCE * len(real)

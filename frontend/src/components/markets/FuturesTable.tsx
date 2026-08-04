@@ -8,7 +8,7 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpDown, Hourglass, Info } from "lucide-react";
+import { ArrowUpDown, CheckCircle2, ChevronDown, ChevronUp, Hourglass, Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
 import { fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { SourceBadge } from "./SourceBadge";
@@ -196,7 +196,28 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
     { id: "implied_prob", desc: true },
   ]);
   const [reasoningRow, setReasoningRow] = useState<FuturesMarketRow | null>(null);
-  const data = useMemo(() => rows, [rows]);
+  // A settled group is a RESULT, not an opportunity. It used to be dropped by
+  // the backend, so a decided future vanished from the page rather than
+  // reading as finished (the reported case: a champion market disappearing).
+  // It is returned flagged now and filed below, collapsed, so the live list
+  // stays short instead of being padded with dead legs.
+  const activeRows = useMemo(() => rows.filter((r) => !r.group_settled), [rows]);
+  const settledRows = useMemo(() => rows.filter((r) => r.group_settled), [rows]);
+  const [showSettled, setShowSettled] = useState(false);
+  // Collapsed to ONE LINE PER EVENT: 32 dead legs of a finished tournament is
+  // scrolling, not information. The winner is the only part still worth reading.
+  const settledGroups = useMemo(() => {
+    const by = new Map<string, { label: string; winner: string | null; legs: number }>();
+    for (const r of settledRows) {
+      const label = r.group_label ?? "(ungrouped)";
+      const cur = by.get(label) ?? { label, winner: r.group_winner ?? null, legs: 0 };
+      cur.legs += 1;
+      if (!cur.winner && r.group_winner) cur.winner = r.group_winner;
+      by.set(label, cur);
+    }
+    return [...by.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [settledRows]);
+  const data = activeRows;
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: fetchReadiness }).data;
 
   // Actions column: a "why" (reasoning) button when a sport is provided, and a
@@ -293,12 +314,45 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
           {table.getRowModel().rows.length === 0 && (
             <tr>
               <td colSpan={columns.length} className="px-4 py-10 text-center text-[var(--color-text-dim)]">
-                No futures markets tracked yet.
+                {settledRows.length > 0
+                  ? "No live futures here — every tracked group has been decided."
+                  : "No futures markets tracked yet."}
               </td>
             </tr>
           )}
         </tbody>
       </table>
+      {settledRows.length > 0 && (
+        <div className="border-t border-[var(--color-border)]">
+          <button
+            onClick={() => setShowSettled((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 text-sm text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+          >
+            <span className="inline-flex items-center gap-2">
+              <CheckCircle2 size={14} className="text-[var(--color-text-muted)]" />
+              Settled ({settledGroups.length} {settledGroups.length === 1 ? "event" : "events"},{" "}
+              {settledRows.length} legs)
+            </span>
+            {showSettled ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+          {showSettled && (
+            <div className="px-4 pb-4 flex flex-col gap-2">
+              {settledGroups.map((g) => (
+                <div
+                  key={g.label}
+                  className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] px-3 py-2"
+                >
+                  <span className="text-sm text-[var(--color-text)] truncate">{g.label}</span>
+                  <span className="text-xs text-[var(--color-text-dim)] whitespace-nowrap">
+                    {g.winner ? <>Won by <span className="text-[var(--color-text)]">{g.winner}</span></> : "Decided"}
+                    <span className="text-[var(--color-text-muted)]"> · {g.legs} legs</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {reasoningRow && sport && (
         <BetReasoningModal
           marketId={reasoningRow.id}

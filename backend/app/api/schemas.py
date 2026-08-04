@@ -85,6 +85,14 @@ class FuturesMarketOut(BaseModel):
     suggested_stake_units: float | None
     stake_pool: str | None
     line_move_pp: float | None
+    # True when this leg's one-winner group has ALREADY been decided (some leg
+    # is at/above FUTURES_DECIDED_PRICE). These used to be dropped outright,
+    # which meant a settled future silently vanished from the page instead of
+    # being shown as finished. Kept and flagged now; never staked.
+    group_settled: bool = False
+    # The leg that won it, so a settled group reads as a result rather than
+    # a list of dead prices.
+    group_winner: str | None = None
     # Optional free-text caveat shown under a futures row. Used by the esports
     # tournament sim to flag that a price comes from an Elo-approximated single-
     # elim bracket (real events are double-elim/Swiss) and is shown for tracking

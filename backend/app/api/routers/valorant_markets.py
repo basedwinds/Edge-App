@@ -129,8 +129,8 @@ def list_valorant_futures(session: Session = Depends(get_session)):
     Swiss events); season-long aggregate markets left unpriced."""
     markets = session.query(Market).filter(Market.sport == "valorant", Market.market_type == "tournament_winner", Market.status == "active").all()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
-    # Drop groups whose tournament is already won. Kalshi still reports every leg
-    # `active` long after the event decides, so status alone cannot catch it --
+    # Identify groups whose tournament is already won. Kalshi still reports every
+    # leg `active` long after the event decides, so status alone cannot catch it --
     # the BLAST Bounty 2026 Season 2 Finals had MOUZ at 0.995 with 31 dead legs
     # still listed and $5 stakes recommended on 0.5% longshots.
     _by_group = {}
@@ -138,13 +138,18 @@ def list_valorant_futures(session: Session = Depends(get_session)):
         _p = _implied_prob(snapshots_by_market.get(_m.id))
         _by_group.setdefault(_m.group_label or "", []).append(_p)
     _decided = {g for g, ps in _by_group.items() if futures_group_decided("tournament_winner", ps)}
-    if _decided:
-        markets = [m for m in markets if (m.group_label or "") not in _decided]
-        # Hoisted: as an inline set literal this was rebuilt once per
-        # snapshots_by_market entry -- quadratic, and the dominant cost of the
-        # tennis endpoint at 34k markets (183M attribute reads, ~40s).
-        _kept_market_ids = {m.id for m in markets}
-        snapshots_by_market = {k: v for k, v in snapshots_by_market.items() if k in _kept_market_ids}
+    # KEPT, not dropped. Dropping made a settled future silently disappear from
+    # the page -- the user's own report was a champion market vanishing rather
+    # than showing as finished. They are flagged instead, never staked below,
+    # and the UI files them under a separate Settled section.
+    _winner_by_group = {}
+    for _m in markets:
+        g = _m.group_label or ""
+        if g not in _decided:
+            continue
+        _p = _implied_prob(snapshots_by_market.get(_m.id))
+        if _p is not None and _p >= 0.5 and _m.team:
+            _winner_by_group[g] = _m.team
 
     priced = price_tournament_winners(markets, elo_service_valorant)
     # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
@@ -174,6 +179,13 @@ def list_valorant_futures(session: Session = Depends(get_session)):
             _clv, "valorant", m.market_type,
         )
         _stake = size_stake_dollars(_mode, _kelly, _futures_pool, model_prob, implied, _unit, _fm, _ff, unit_scale=FUTURES_UNIT_SCALE)
+        # A decided group is shown for the record, never sized. The prior
+        # behaviour dropped these rows entirely, which is why a settled
+        # future appeared to vanish rather than read as finished.
+        _settled = (m.group_label or "") in _decided
+        if _settled:
+            _kelly = None
+            _stake = None
         out.append(
             FuturesMarketOut(
                 id=m.id,
@@ -195,8 +207,10 @@ def list_valorant_futures(session: Session = Depends(get_session)):
                 kelly_fraction=_kelly,
                 suggested_stake_dollars=_stake,
                 suggested_stake_units=round(_stake / _unit, 3) if (_stake is not None and _unit > 0) else None,
-                stake_pool="futures",
+                stake_pool=None if _settled else "futures",
                 line_move_pp=None,
+                group_settled=_settled,
+                group_winner=_winner_by_group.get(m.group_label or "") if _settled else None,
                 model_note=TOURNAMENT_SIM_NOTE if model_prob is not None else None,
             )
         )
