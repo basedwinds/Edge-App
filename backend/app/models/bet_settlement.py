@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session, object_session
 
 from app.db.models import (
     CfbGame, Cs2Match, LolMap, LolMatch, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
-    RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame,
+    RaceEvent, SoccerMatch, TennisMatch, ValorantMap, ValorantMatch, WnbaGame,
 )
 
 log = logging.getLogger("bet_settlement")
@@ -47,9 +47,9 @@ AUTO_SETTLE_MARKET_TYPES = {
     "moneyline", "spread", "total", "team_total", "moneyline_3way", "game_spread", "game_total", "btts",
     # mma
     "distance", "rounds", "method_of_finish",
-    # esports (cs2/valorant/lol). map_winner grades for LoL ONLY -- see
-    # _grade_esports_map_winner; CS2/Valorant have no per-map source, and
-    # their bets return None (stay pending) rather than being guessed.
+    # esports (cs2/valorant/lol). map_winner grades for LoL + Valorant -- see
+    # _grade_esports_map_winner; CS2 has no reachable per-map source, and its
+    # bets return None (stay pending) rather than being guessed.
     "series_winner", "series_total", "map_winner",
     # tennis (moneyline shared above); set/game markets
     "set_winner", "set_total", "exact_score", "set_spread",
@@ -547,16 +547,19 @@ def _grade_esports_map_winner(bet: PlacedBet, match) -> "str | None":
     """"Who wins map N", graded off the per-map rows lol_map_results writes.
 
     map_winner was previously ungradeable for the reason this file used to note
-    here: only the SERIES score was stored. LolMap now carries a winner per map
-    for LoL (gol.gg publishes one page per game), so the note no longer holds --
-    but ONLY for LoL. CS2's source is Cloudflare-gated and Valorant's match list
-    renders just the series score, so their map rows never exist and those bets
-    return None (ungraded) rather than being guessed at.
+    here: only the SERIES score was stored. Per-map winners now exist for two of
+    the three titles -- LoL from gol.gg (one page per game) and Valorant from
+    vlr.gg match pages -- so the note no longer holds for them.
+
+    CS2 is still excluded, and not by oversight: its own source (Liquipedia) is
+    Cloudflare-gated (403 live), so CS2 matches currently get no result at all,
+    let alone per-map ones. Its bets return None and stay pending rather than
+    being guessed at.
 
     bet.line is the MAP NUMBER, not a handicap (see paper_logger's own note on
     the same field).
     """
-    if bet.sport != "lol" or bet.line is None:
+    if bet.line is None:
         return None
     side = _esports_side(bet, match)
     if side is None:
@@ -564,9 +567,15 @@ def _grade_esports_map_winner(bet: PlacedBet, match) -> "str | None":
     session = object_session(match)
     if session is None:
         return None
+    if bet.sport == "lol":
+        model, link = LolMap, LolMap.lol_match_id
+    elif bet.sport == "valorant":
+        model, link = ValorantMap, ValorantMap.valorant_match_id
+    else:
+        return None
     row = (
-        session.query(LolMap)
-        .filter(LolMap.lol_match_id == match.id, LolMap.map_number == int(bet.line))
+        session.query(model)
+        .filter(link == match.id, model.map_number == int(bet.line))
         .one_or_none()
     )
     if row is None or row.winner is None:

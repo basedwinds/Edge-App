@@ -284,10 +284,51 @@ def refresh_polymarket_valorant_markets():
             session.close()
 
 
+def refresh_valorant_map_results():
+    """Per-map winners from vlr.gg match pages, so map_winner bets can settle.
+
+    One fetch per settled match that still lacks map rows -- bounded by the
+    backlog, not the catalogue, and capped per cycle. Network happens before the
+    write lock is taken, like every other refresh here.
+    """
+    from app.ingestion.valorant_map_results import collect_map_results
+    from app.ingestion.valorant_map_results_apply import (
+        apply_valorant_map_results, matches_needing_maps,
+    )
+
+    session = SessionLocal()
+    try:
+        todo = matches_needing_maps(session)
+    except Exception:
+        log.exception("valorant map results: lookup failed")
+        return
+    finally:
+        session.close()
+    if not todo:
+        return
+    try:
+        by_match = collect_map_results(todo)
+    except Exception:
+        log.exception("valorant map results fetch failed -- retried next cycle")
+        return
+    if not by_match:
+        return
+    try:
+        with db_write_lock():
+            session = SessionLocal()
+            try:
+                apply_valorant_map_results(session, by_match)
+            finally:
+                session.close()
+    except Exception:
+        log.exception("valorant map results apply failed")
+
+
 def run_full_refresh_valorant():
     refresh_valorant_matches()
     refresh_valorant_ratings()
     refresh_kalshi_valorant_markets()
     refresh_polymarket_valorant_markets()
+    refresh_valorant_map_results()
     # Roster-change scrape removed 2026-07-23 -- see poller_cs2.py's note (badge
     # retired for esports, no accuracy penalty, so no reason to scrape vlr.gg).
