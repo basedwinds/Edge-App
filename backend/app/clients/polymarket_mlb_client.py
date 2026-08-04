@@ -101,6 +101,8 @@ def get_moneyline_markets() -> list[dict]:
                         "last_price": price,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     }
                 )
     return rows
@@ -178,6 +180,8 @@ def get_spread_markets() -> list[dict]:
                         "last_price": price,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     }
                 )
     return rows
@@ -209,6 +213,8 @@ def get_total_markets() -> list[dict]:
                         "last_price": price,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     }
                 )
     return rows
@@ -247,6 +253,8 @@ def get_f5_markets() -> list[dict]:
                     "last_price": yes_price,
                     "condition_id": prices["condition_id"],
                     "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                 }
             )
     return rows
@@ -278,6 +286,8 @@ def get_rfi_markets() -> list[dict]:
                         "last_price": price,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     }
                 )
     return rows
@@ -311,6 +321,8 @@ def get_futures_markets() -> list[dict]:
                         "yes_price": outcome_prices[yes_idx] if yes_idx < len(outcome_prices) else None,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     }
                 )
     return rows
@@ -349,6 +361,8 @@ def get_win_total_markets() -> list[dict]:
                 "yes_price": outcome_prices[yes_idx] if yes_idx < len(outcome_prices) else None,
                 "condition_id": prices["condition_id"],
                 "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
             }
         )
     return rows

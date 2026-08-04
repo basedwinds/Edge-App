@@ -119,6 +119,8 @@ def fetch_polymarket_racing_futures() -> list[dict]:
                 "yes_bid": None,
                 "yes_ask": None,
                 "volume": p["volume"],
+                        "raw_bid": p["best_bid"],
+                        "raw_ask": p["best_ask"],
                 "source": "polymarket",
             })
     return out
@@ -173,6 +175,8 @@ def fetch_polymarket_racing() -> list[dict]:
                     "yes_bid": None,
                     "yes_ask": None,
                     "volume": p["volume"],
+                        "raw_bid": p["best_bid"],
+                        "raw_ask": p["best_ask"],
                     "source": "polymarket",
                 })
     return out

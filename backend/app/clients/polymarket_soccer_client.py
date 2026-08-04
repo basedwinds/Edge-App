@@ -161,6 +161,8 @@ def get_moneyline_markets() -> list[dict]:
                     "last_price": outcome_prices[0],  # YES price
                     "condition_id": prices["condition_id"],
                     "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     "status": _market_status(m),
                     "estimated_start_time": _normalize_start_time(m.get("gameStartTime")),
                 })
@@ -227,6 +229,8 @@ def get_spread_markets() -> list[dict]:
                     "last_price": outcome_prices[0],
                     "condition_id": prices["condition_id"],
                     "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     "status": _market_status(m),
                 })
     return rows
@@ -258,6 +262,8 @@ def get_total_markets() -> list[dict]:
                     "over_price": outcome_prices[0],
                     "condition_id": prices["condition_id"],
                     "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     "status": _market_status(m),
                 })
     return rows
@@ -306,6 +312,8 @@ def _get_btts_from_more_markets(question_re: re.Pattern) -> list[dict]:
                     "yes_price": outcome_prices[0],
                     "condition_id": prices["condition_id"],
                     "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     "status": _market_status(m),
                 })
     return rows
@@ -371,7 +379,9 @@ def get_team_total_markets() -> list[dict]:
                     "event_slug": event.get("slug", ""), "division": division,
                     "home_team": home_team, "away_team": away_team, "team": team, "line": line,
                     "over_price": outcome_prices[0], "condition_id": prices["condition_id"],
-                    "volume": prices["volume"], "status": _market_status(m),
+                    "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"], "status": _market_status(m),
                 })
     return rows
 
@@ -393,7 +403,9 @@ def _get_half_total_markets(question_re: re.Pattern) -> list[dict]:
                     "event_slug": event.get("slug", ""), "division": division,
                     "home_team": home_team, "away_team": away_team, "line": line,
                     "over_price": outcome_prices[0], "condition_id": prices["condition_id"],
-                    "volume": prices["volume"], "status": _market_status(m),
+                    "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"], "status": _market_status(m),
                 })
     return rows
 
@@ -429,7 +441,9 @@ def _get_half_team_total_markets(question_re: re.Pattern) -> list[dict]:
                     "event_slug": event.get("slug", ""), "division": division,
                     "home_team": home_team, "away_team": away_team, "team": team, "line": line,
                     "over_price": outcome_prices[0], "condition_id": prices["condition_id"],
-                    "volume": prices["volume"], "status": _market_status(m),
+                    "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"], "status": _market_status(m),
                 })
     return rows
 
@@ -494,7 +508,9 @@ def _get_3way_side_event_markets(slug_suffix: str, none_label: str, none_side: s
                     "event_slug": slug, "division": division,
                     "home_team": home_team, "away_team": away_team, "side": side, "team": team,
                     "yes_price": outcome_prices[0], "condition_id": prices["condition_id"],
-                    "volume": prices["volume"], "status": _market_status(m),
+                    "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"], "status": _market_status(m),
                 })
     return rows
 
@@ -537,6 +553,8 @@ def get_correct_score_markets() -> list[dict]:
                     "home_team": home_team, "away_team": away_team,
                     "home_score": home_score, "away_score": away_score,
                     "yes_price": outcome_prices[0], "condition_id": prices["condition_id"],
-                    "volume": prices["volume"], "status": _market_status(m),
+                    "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"], "status": _market_status(m),
                 })
     return rows

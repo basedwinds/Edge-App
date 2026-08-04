@@ -13,6 +13,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.clients.polymarket_client import quote_fields
 from app.db.models import Market, MarketSnapshot, MmaFight
 
 
@@ -78,7 +79,7 @@ def upsert_polymarket_mma_moneyline_row(session: Session, row: dict, mma_fight_i
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -126,7 +127,7 @@ def upsert_polymarket_mma_distance_row(session: Session, row: dict, mma_fight_id
                 yes_price = price
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, yes_price),
         last_price=yes_price, volume=row.get("volume"),
     ))
     return market
@@ -246,7 +247,7 @@ def upsert_polymarket_mma_method_row(session: Session, row: dict, mma_fight_id: 
                 yes_price = price
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, yes_price),
         last_price=yes_price, volume=row.get("volume"),
     ))
     return market
@@ -297,7 +298,7 @@ def upsert_polymarket_mma_rounds_row(session: Session, row: dict, mma_fight_id: 
                 over_price = price
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, over_price),
         last_price=over_price, volume=row.get("volume"),
     ))
     return market

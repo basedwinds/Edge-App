@@ -130,6 +130,8 @@ def get_moneyline_markets() -> list[dict]:
                         "last_price": price,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                         "status": _market_status(m),
                         "estimated_start_time": _normalize_start_time(m.get("gameStartTime")),
                     })
@@ -166,6 +168,8 @@ def get_set_winner_markets() -> list[dict]:
                         "last_price": price,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                         "status": _market_status(m),
                     })
     return rows
@@ -253,6 +257,8 @@ def get_set_handicap_markets() -> list[dict]:
                         "last_price": price,
                         "condition_id": prices["condition_id"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                         "status": _market_status(m),
                     })
     return rows

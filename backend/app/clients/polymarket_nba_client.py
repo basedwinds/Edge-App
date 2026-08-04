@@ -89,6 +89,8 @@ def get_futures_markets() -> list[dict]:
                         "slug": prices["slug"],
                         "question": prices["question"],
                         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                     }
                 )
     return rows
@@ -122,6 +124,8 @@ def get_summer_league_moneyline_markets() -> list[dict]:
                     "last_price": price,
                     "condition_id": prices["condition_id"],
                     "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
                 }
             )
     return rows

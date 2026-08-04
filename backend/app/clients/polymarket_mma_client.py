@@ -69,6 +69,8 @@ def _base_row(event: dict, m: dict, prices: dict, **extra) -> dict:
         "outcome_prices": prices["outcome_prices"],
         "condition_id": prices["condition_id"],
         "volume": prices["volume"],
+                        "raw_bid": prices["best_bid"],
+                        "raw_ask": prices["best_ask"],
         "status": _market_status(m),
     }
     row.update(extra)

@@ -15,6 +15,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.clients.polymarket_client import quote_fields
 from app.db.models import LolMap, LolMatch, LolRosterChangeCache, Market, MarketSnapshot
 from app.ingestion.market_matcher_lol import match_by_names_only, team_names_match
 
@@ -252,7 +253,7 @@ def upsert_polymarket_lol_series_winner_row(session: Session, row: dict, lol_mat
     market.lol_match_id = lol_match_id
     market.team = row["team_name"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
@@ -266,7 +267,7 @@ def upsert_polymarket_lol_map_winner_row(session: Session, row: dict, lol_match_
     market.team = row["team_name"]
     market.line = float(row["map_number"])
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
@@ -283,7 +284,7 @@ def upsert_polymarket_lol_total_row(session: Session, row: dict, lol_match_id: i
     market.status = row.get("status") or "active"
     outcomes, prices = row.get("outcomes", []), row.get("outcome_prices", [])
     over_price = prices[outcomes.index("Over")] if "Over" in outcomes and len(prices) == len(outcomes) else None
-    _upsert_snapshot(session, market, over_price, row.get("volume"))
+    _upsert_snapshot(session, market, over_price, row.get("volume"),**quote_fields(row, over_price))
     return market
 
 
@@ -297,7 +298,7 @@ def upsert_polymarket_lol_handicap_row(session: Session, row: dict, lol_match_id
     market.team = row["team_name"]
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
@@ -310,7 +311,7 @@ def upsert_polymarket_lol_futures_row(session: Session, row: dict) -> Market:
     market.team = row["team_name"]
     market.group_label = row["group_label"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"),**quote_fields(row, row.get("yes_price")))
     return market
 
 

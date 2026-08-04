@@ -20,6 +20,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.clients.polymarket_client import quote_fields
 from app.db.models import Market, MarketSnapshot, SoccerMatch, SoccerNewsAdjustmentCache
 from app.ingestion.market_matcher_soccer import match_upcoming_soccer_match
 from app.models.news_adjustment.schema import NewsAdjustment
@@ -129,7 +130,7 @@ def upsert_polymarket_soccer_moneyline_row(session: Session, row: dict, soccer_m
     market.team = row["team"]
     market.side = row["side"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
@@ -166,7 +167,7 @@ def upsert_polymarket_soccer_spread_row(session: Session, row: dict, soccer_matc
     market.team = row["team"]
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
@@ -205,7 +206,7 @@ def upsert_polymarket_soccer_total_row(session: Session, row: dict, soccer_match
     market.line = row["line"]
     market.side = "over"
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("over_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("over_price"), row.get("volume"),**quote_fields(row, row.get("over_price")))
     return market
 
 
@@ -491,7 +492,7 @@ def _upsert_polymarket_3way_market(session: Session, row: dict, soccer_match_id:
     market.team = row["team"]
     market.side = row["side"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"),**quote_fields(row, row.get("yes_price")))
     return market
 
 
@@ -520,7 +521,7 @@ def _upsert_polymarket_spread_shaped_row(session: Session, row: dict, soccer_mat
     market.team = row["team"]
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("over_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("over_price"), row.get("volume"),**quote_fields(row, row.get("over_price")))
     return market
 
 
@@ -550,7 +551,7 @@ def _upsert_polymarket_total_shaped_row(session: Session, row: dict, soccer_matc
     market.line = row["line"]
     market.side = "over"
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("over_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("over_price"), row.get("volume"),**quote_fields(row, row.get("over_price")))
     return market
 
 
@@ -575,7 +576,7 @@ def _upsert_polymarket_btts_shaped_row(session: Session, row: dict, soccer_match
     market.team = None
     market.side = "yes"
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"),**quote_fields(row, row.get("yes_price")))
     return market
 
 
@@ -604,7 +605,7 @@ def upsert_polymarket_soccer_correct_score_row(session: Session, row: dict, socc
     market.correct_score_home = row["home_score"]
     market.correct_score_away = row["away_score"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"),**quote_fields(row, row.get("yes_price")))
     return market
 
 

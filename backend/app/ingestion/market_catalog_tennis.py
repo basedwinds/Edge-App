@@ -19,6 +19,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.clients.polymarket_client import quote_fields
 from app.db.models import Market, MarketSnapshot, TennisMatch
 from app.ingestion.market_matcher_tennis import full_name_to_abbreviated_key, match_upcoming_tennis_match
 
@@ -168,7 +169,7 @@ def upsert_kalshi_tennis_moneyline_market(session: Session, row: dict, tennis_ma
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -189,7 +190,7 @@ def upsert_polymarket_tennis_moneyline_row(session: Session, row: dict, tennis_m
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -212,7 +213,7 @@ def upsert_kalshi_tennis_set_winner_market(session: Session, row: dict, tennis_m
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -236,7 +237,7 @@ def upsert_kalshi_tennis_game_spread_market(session: Session, row: dict, tennis_
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -260,7 +261,7 @@ def upsert_kalshi_tennis_game_total_market(session: Session, row: dict, tennis_m
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -285,7 +286,7 @@ def upsert_kalshi_tennis_exact_match_market(session: Session, row: dict, tennis_
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -309,7 +310,7 @@ def upsert_polymarket_tennis_set_winner_row(session: Session, row: dict, tennis_
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -334,7 +335,7 @@ def upsert_polymarket_tennis_match_total_row(session: Session, row: dict, tennis
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("over_price")),
         last_price=row.get("over_price"), volume=row.get("volume"),
     ))
     return market
@@ -360,7 +361,7 @@ def upsert_polymarket_tennis_set_handicap_row(session: Session, row: dict, tenni
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -386,7 +387,7 @@ def upsert_polymarket_tennis_set_game_total_row(session: Session, row: dict, ten
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("over_price")),
         last_price=row.get("over_price"), volume=row.get("volume"),
     ))
     return market
@@ -411,7 +412,7 @@ def upsert_polymarket_tennis_total_sets_row(session: Session, row: dict, tennis_
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("over_price")),
         last_price=row.get("over_price"), volume=row.get("volume"),
     ))
     return market
@@ -482,7 +483,7 @@ def upsert_kalshi_tennis_tournament_winner_market(session: Session, row: dict) -
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market

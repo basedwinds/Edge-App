@@ -7,6 +7,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.clients.polymarket_client import quote_fields
 from app.db.models import Market, MarketSnapshot, MlbGame, MlbNewsAdjustmentCache
 from app.models.news_adjustment.schema import NewsAdjustment
 
@@ -76,7 +77,7 @@ def upsert_polymarket_mlb_moneyline_row(session: Session, row: dict, mlb_game_id
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -165,7 +166,7 @@ def upsert_polymarket_mlb_spread_row(session: Session, row: dict, mlb_game_id: s
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -188,7 +189,7 @@ def upsert_polymarket_mlb_total_row(session: Session, row: dict, mlb_game_id: st
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -241,7 +242,7 @@ def upsert_polymarket_mlb_f5_row(session: Session, row: dict, mlb_game_id: str |
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -284,7 +285,7 @@ def upsert_polymarket_mlb_rfi_row(session: Session, row: dict, mlb_game_id: str 
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("last_price")),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -347,7 +348,7 @@ def upsert_polymarket_mlb_futures_market(session: Session, row: dict) -> Market 
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("yes_price")),
         last_price=row.get("yes_price"), volume=row.get("volume"),
     ))
     return market
@@ -370,7 +371,7 @@ def upsert_polymarket_mlb_win_total_market(session: Session, row: dict) -> Marke
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        yes_bid=None, yes_ask=None,
+        **quote_fields(row, row.get("yes_price")),
         last_price=row.get("yes_price"), volume=row.get("volume"),
     ))
     return market

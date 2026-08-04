@@ -35,6 +35,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.clients.polymarket_client import quote_fields
 from app.db.models import Cs2Map, Cs2Match, Cs2RosterChangeCache, Market, MarketSnapshot
 from app.ingestion.market_matcher_cs2 import match_by_names_only, team_names_match
 
@@ -267,7 +268,7 @@ def upsert_polymarket_cs2_match_winner_row(session: Session, row: dict, cs2_matc
     market.cs2_match_id = cs2_match_id
     market.team = row["team_name"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
@@ -281,7 +282,7 @@ def upsert_polymarket_cs2_map_winner_row(session: Session, row: dict, cs2_match_
     market.team = row["team_name"]
     market.line = float(row["map_number"])
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
@@ -298,7 +299,7 @@ def upsert_polymarket_cs2_total_row(session: Session, row: dict, cs2_match_id: i
     market.status = row.get("status") or "active"
     outcomes, prices = row.get("outcomes", []), row.get("outcome_prices", [])
     over_price = prices[outcomes.index("Over")] if "Over" in outcomes and len(prices) == len(outcomes) else None
-    _upsert_snapshot(session, market, over_price, row.get("volume"))
+    _upsert_snapshot(session, market, over_price, row.get("volume"),**quote_fields(row, over_price))
     return market
 
 
@@ -312,7 +313,7 @@ def upsert_polymarket_cs2_handicap_row(session: Session, row: dict, cs2_match_id
     market.team = row["team_name"]
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"))
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),**quote_fields(row, row.get("last_price")))
     return market
 
 
