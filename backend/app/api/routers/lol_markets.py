@@ -32,7 +32,7 @@ from app.ingestion import market_catalog_lol
 from app.ingestion.market_matcher_lol import team_names_match
 from app.models.baseline import elo_service_lol
 from app.models.esports_tournament_pricing import price_tournament_winners
-from app.models.ladder_sanity import ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
+from app.models.ladder_sanity import futures_group_decided, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -146,6 +146,19 @@ def list_lol_futures(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport == "lol", Market.market_type == "tournament_winner", Market.status == "active").all()
     markets = [m for m in markets if _is_bracket_future(m)]
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
+    # Drop groups whose tournament is already won. Kalshi still reports every leg
+    # `active` long after the event decides, so status alone cannot catch it --
+    # the BLAST Bounty 2026 Season 2 Finals had MOUZ at 0.995 with 31 dead legs
+    # still listed and $5 stakes recommended on 0.5% longshots.
+    _by_group = {}
+    for _m in markets:
+        _p = _implied_prob(snapshots_by_market.get(_m.id))
+        _by_group.setdefault(_m.group_label or "", []).append(_p)
+    _decided = {g for g, ps in _by_group.items() if futures_group_decided("tournament_winner", ps)}
+    if _decided:
+        markets = [m for m in markets if (m.group_label or "") not in _decided]
+        snapshots_by_market = {k: v for k, v in snapshots_by_market.items() if k in {m.id for m in markets}}
+
     # Priced by the SAME Elo-seeded bracket Monte Carlo that already prices CS2
     # and Valorant tournament winners -- LoL was left unpriced not because the
     # model didn't fit but because 446 non-bracket rows (player props, TFT,

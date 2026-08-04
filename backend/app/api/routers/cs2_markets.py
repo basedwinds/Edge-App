@@ -31,7 +31,7 @@ from app.ingestion.market_matcher_cs2 import team_names_match
 from app.models.baseline import elo_service_cs2
 from app.models.esports_tournament_pricing import price_tournament_winners
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
-from app.models.ladder_sanity import CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
+from app.models.ladder_sanity import futures_group_decided, CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -122,6 +122,19 @@ def list_cs2_futures(session: Session = Depends(get_session)):
     international") stay unpriced -- they're not a single bracket at all."""
     markets = session.query(Market).filter(Market.sport == "cs2", Market.market_type == "tournament_winner", Market.status == "active").all()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
+    # Drop groups whose tournament is already won. Kalshi still reports every leg
+    # `active` long after the event decides, so status alone cannot catch it --
+    # the BLAST Bounty 2026 Season 2 Finals had MOUZ at 0.995 with 31 dead legs
+    # still listed and $5 stakes recommended on 0.5% longshots.
+    _by_group = {}
+    for _m in markets:
+        _p = _implied_prob(snapshots_by_market.get(_m.id))
+        _by_group.setdefault(_m.group_label or "", []).append(_p)
+    _decided = {g for g, ps in _by_group.items() if futures_group_decided("tournament_winner", ps)}
+    if _decided:
+        markets = [m for m in markets if (m.group_label or "") not in _decided]
+        snapshots_by_market = {k: v for k, v in snapshots_by_market.items() if k in {m.id for m in markets}}
+
     priced = price_tournament_winners(markets, elo_service_cs2)
     # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
     # kelly_fraction=None on the reasoning that the bracket is an approximation.

@@ -41,6 +41,7 @@ from app.models.baseline import elo_service_valorant
 from app.models.esports_tournament_pricing import price_tournament_winners
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import (
+    futures_group_decided,
     ESPORTS_LIVE_TRADING_MIN_PRICE_SWING,
     VALORANT_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA,
     VALORANT_POLYMARKET_LIVE_TRADING_MIN_VOLUME_DELTA,
@@ -125,6 +126,19 @@ def list_valorant_futures(session: Session = Depends(get_session)):
     Swiss events); season-long aggregate markets left unpriced."""
     markets = session.query(Market).filter(Market.sport == "valorant", Market.market_type == "tournament_winner", Market.status == "active").all()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
+    # Drop groups whose tournament is already won. Kalshi still reports every leg
+    # `active` long after the event decides, so status alone cannot catch it --
+    # the BLAST Bounty 2026 Season 2 Finals had MOUZ at 0.995 with 31 dead legs
+    # still listed and $5 stakes recommended on 0.5% longshots.
+    _by_group = {}
+    for _m in markets:
+        _p = _implied_prob(snapshots_by_market.get(_m.id))
+        _by_group.setdefault(_m.group_label or "", []).append(_p)
+    _decided = {g for g, ps in _by_group.items() if futures_group_decided("tournament_winner", ps)}
+    if _decided:
+        markets = [m for m in markets if (m.group_label or "") not in _decided]
+        snapshots_by_market = {k: v for k, v in snapshots_by_market.items() if k in {m.id for m in markets}}
+
     priced = price_tournament_winners(markets, elo_service_valorant)
     # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
     # kelly_fraction=None on the reasoning that the bracket is an approximation.

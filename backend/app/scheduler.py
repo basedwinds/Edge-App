@@ -251,7 +251,17 @@ def start():
     scheduler.add_job(
         run_full_refresh_lol,
         "interval",
-        minutes=5,
+        # 30, not 5. lol_data.py's own docstring already prescribed this: "the fix
+        # is a longer poller interval for LoL specifically, not a workaround around
+        # the limit". At 5 minutes this hit Leaguepedia's cargoquery ~288x/day and
+        # the limit is now permanently tripped -- refresh_lol_results raises every
+        # cycle, so 0 of 223 played LoL matches have a result and 353 bets cannot
+        # settle. It also stalls OTHER sports: run_full_refresh_lol holds the shared
+        # cross-sport poller lock while burning 100+ seconds on 20/30/45/68s retries.
+        # Kalshi/Polymarket prices for LoL come from the same job, so this trades
+        # some price freshness for having results at all -- results are the harder
+        # half, and without them nothing settles and no CLV accrues.
+        minutes=30,
         id="full_refresh_lol",
         next_run_time=base_tick + timedelta(seconds=8 * JOB_STAGGER_SECONDS),
         replace_existing=True,

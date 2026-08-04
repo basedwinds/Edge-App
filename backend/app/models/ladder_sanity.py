@@ -259,3 +259,39 @@ def pair_looks_resolved(sides: list[tuple[float | None, float | None]]) -> bool:
         return False
     volumes = [v for _, v in sides if v is not None]
     return bool(volumes) and max(volumes) >= PAIR_RESOLVED_MIN_VOLUME
+
+# Futures market types where exactly ONE entity can win, so a leg trading at
+# near-certainty means the whole group is decided. Deliberately explicit rather
+# than inferred: "sum of prices ~ 1" looks like a clean test for mutual
+# exclusivity and is NOT one here -- the real BLAST Bounty group summed to 2.51
+# because the losing legs kept stale quotes (MOUZ 0.995 while OG and Wildcard
+# still showed 0.42), so a sum test would have missed the exact case this exists
+# for. Multi-winner groups (win_total, playoff qualifiers, "team to make
+# postseason") must NOT be listed: a near-certain leg there is perfectly normal.
+ONE_WINNER_MARKET_TYPES = {
+    "tournament_winner", "league_winner", "division_winner", "conference_champion",
+    "super_bowl_champion", "drivers_champion", "constructors_champion",
+    "race_winner", "pole", "mvp",
+}
+
+# A one-winner group with a leg at or above this is over. Chosen from live data:
+# across 304 futures groups only 9 have any leg >= 0.97, and the genuine
+# pre-event favourites sit well below -- so this separates decided groups from
+# heavy favourites without needing a second signal.
+FUTURES_DECIDED_PRICE = 0.97
+
+
+def futures_group_decided(market_type: str | None, prices) -> bool:
+    """True when a one-winner futures group has already been won.
+
+    REAL BUG this fixes (user-reported 2026-08-04): the BLAST Bounty 2026 Season 2
+    Finals champion market had MOUZ at 0.995 -- the tournament was over -- yet all
+    32 legs still showed, and the app was recommending $5 stakes on Team Falcons
+    (0.025), FURIA (0.005) and Aurora (0.005). Kalshi still reported every leg
+    `active`, so the platform's own status could not catch it, and no futures
+    endpoint applied any resolved-group check at all.
+    """
+    if market_type not in ONE_WINNER_MARKET_TYPES:
+        return False
+    real = [p for p in prices if p is not None]
+    return bool(real) and max(real) >= FUTURES_DECIDED_PRICE
