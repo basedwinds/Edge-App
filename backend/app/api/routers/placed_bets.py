@@ -541,8 +541,30 @@ def get_bet_stats(sport: str = "nfl", session: Session = Depends(get_session)):
     )
 
 
+# Rolling look-back windows for the tracker's period selector, in days.
+# Rolling rather than calendar-anchored on purpose: "this month" means different
+# spans depending on the day you ask and on the viewer's timezone, whereas "last
+# 30 days" is the same question every time and needs no timezone handling.
+PORTFOLIO_PERIOD_DAYS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90, "365d": 365, "all": None}
+
+
+def _within_period(bet: PlacedBet, cutoff) -> bool:
+    """Does this bet belong in the selected window?
+
+    Anchored on when the bet's OUTCOME landed -- settled_at for a graded bet,
+    placed_at for one still open. One rule, and it matches what the page is
+    asking: "what did I actually do in this stretch". A bet placed weeks ago and
+    settled today is this week's result, which is also how the equity curve
+    already buckets (it keys on settlement day).
+    """
+    if cutoff is None:
+        return True
+    stamp = bet.settled_at if bet.status not in ("pending",) and bet.settled_at else bet.placed_at
+    return stamp is not None and stamp >= cutoff
+
+
 @router.get("/portfolio", response_model=PortfolioOut)
-def get_portfolio(session: Session = Depends(get_session)):
+def get_portfolio(period: str = "all", session: Session = Depends(get_session)):
     """Cross-sport bet-tracker rollup -- the "how am I actually doing"
     dashboard that replaces a standalone bet diary. REAL bets only (paper
     bets are the forward-CLV study, not real money). Realized P/L uses each
@@ -552,6 +574,9 @@ def get_portfolio(session: Session = Depends(get_session)):
     (surfaced separately as at_risk_dollars). CLV is folded in here too so
     price-capture and money outcome sit side by side, exactly as asked."""
     rows = session.query(PlacedBet).filter(PlacedBet.paper == False).all()  # noqa: E712
+    days = PORTFOLIO_PERIOD_DAYS.get(period, None)
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days)) if days else None
+    rows = [r for r in rows if _within_period(r, cutoff)]
 
     def _blank() -> dict:
         return {"staked": 0.0, "net": 0.0, "net_units": 0.0, "wins": 0, "losses": 0,

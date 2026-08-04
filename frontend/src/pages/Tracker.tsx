@@ -5,7 +5,7 @@ import { PageShell } from "../components/layout/PageShell";
 import { StatTile } from "../components/markets/StatTile";
 import { BetReasoningModal } from "../components/markets/BetReasoningModal";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
-import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
+import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, TRACKER_PERIODS, type TrackerPeriod, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
 import { futuresResolution, gameResolution } from "../utils/resolution";
 import { futuresMarketName, futuresThreshold } from "../utils/futuresLabel";
 import type { SportKey } from "../lib/sports";
@@ -440,7 +440,14 @@ function CollapsibleHeader({ title, sub, collapsed, onToggle }: { title: string;
 }
 
 export function Tracker() {
-  const { data, isLoading, isError } = useQuery({ queryKey: ["portfolio"], queryFn: fetchPortfolio });
+  const [period, setPeriod] = useState<TrackerPeriod>("all");
+  const { data, isLoading, isError, isFetching } = useQuery({
+    queryKey: ["portfolio", period],
+    queryFn: () => fetchPortfolio(period),
+    // Keep the previous window's numbers on screen while the new one loads, so
+    // switching periods doesn't flash the whole dashboard back to skeletons.
+    placeholderData: (prev) => prev,
+  });
   const openQuery = useQuery({ queryKey: ["open-bets"], queryFn: fetchOpenBets });
   const settledQuery = useQuery({ queryKey: ["settled-bets"], queryFn: fetchSettledBets });
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
@@ -494,6 +501,32 @@ export function Tracker() {
 
   return (
     <PageShell title="Bet Tracker">
+      {/* Period selector. Every headline number below (P/L, ROI, record, CLV,
+          per-sport and per-source splits) reflects the selected window; a bet
+          counts in the window its OUTCOME landed in -- settlement date for a
+          graded bet, placement date for one still open. */}
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">Period</span>
+        <div className="inline-flex rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
+          {TRACKER_PERIODS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => setPeriod(p.key)}
+              aria-pressed={period === p.key}
+              className={
+                "px-3 py-1.5 text-xs font-medium transition-colors border-r border-[var(--color-border)] last:border-r-0 " +
+                (period === p.key
+                  ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
+                  : "text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]")
+              }
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {isFetching && <span className="text-[11px] text-[var(--color-text-muted)]">updating...</span>}
+      </div>
+
       {isError && (
         <div className="rounded-lg border border-[var(--color-critical)]/30 bg-[var(--color-critical)]/10 text-[var(--color-critical)] px-4 py-3 mb-6 text-sm">
           Could not reach the backend at http://127.0.0.1:8756 — is it running?
