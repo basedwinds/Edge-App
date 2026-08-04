@@ -375,6 +375,7 @@ function NowCell({ marketNow, marketMove, modelNow, modelMove }: {
 // purpose so the Futures section stays uncluttered: pick, source, status, entry,
 // stake, P/L. No CLV column (futures have no clean close).
 function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]; settled: SettledBetPayload[]; onExplain: (t: ReasoningTarget) => void }) {
+  const [showSettled, setShowSettled] = useState(false);
   if (open.length === 0 && settled.length === 0) return null;
   type FRow = {
     id: number; market_id: number; sport: string; league: string | null; source: string; label: string; market_type: string;
@@ -403,11 +404,19 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
   // placement order.
   const byResolve = (a: FRow, b: FRow) =>
     a.resolveKey - b.resolveKey || a.sport.localeCompare(b.sport) || a.label.localeCompare(b.label);
-  const rows: FRow[] = [
-    ...open.map((b) => mk(b, "open", null)).sort(byResolve),
-    ...settled.map((b) => mk(b, b.status, b.profit_dollars)).sort(byResolve),
-  ];
-  return (
+  const openRows = open.map((b) => mk(b, "open", null)).sort(byResolve);
+  // Settled ones sort the OTHER way -- most recently resolved first. Open
+  // positions are a schedule of what's coming, so soonest-first is right there;
+  // settled ones are history, and the useful end of history is the recent end.
+  const settledRows = settled
+    .map((b) => mk(b, b.status, b.profit_dollars))
+    .sort((a, b) => b.resolveKey - a.resolveKey || a.sport.localeCompare(b.sport) || a.label.localeCompare(b.label));
+
+  const wins = settledRows.filter((r) => r.status === "won").length;
+  const losses = settledRows.filter((r) => r.status === "lost").length;
+  const settledPnl = settledRows.reduce((s, r) => s + (r.profit ?? 0), 0);
+
+  const table = (list: FRow[]) => (
     <div className="overflow-x-auto border border-[var(--color-border)] rounded-lg mt-2">
       <table className="w-full text-sm">
         <thead>
@@ -424,7 +433,7 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border)]">
-          {rows.map((r) => {
+          {list.map((r) => {
             const badge = r.status === "open"
               ? { label: "Open", cls: "bg-[var(--color-accent)]/15 text-[var(--color-accent)] border-[var(--color-accent)]/30" }
               : (STATUS_BADGE[r.status] ?? { label: r.status, cls: "border-[var(--color-border)] text-[var(--color-text-dim)]" });
@@ -475,6 +484,34 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
         </tbody>
       </table>
     </div>
+  );
+
+  return (
+    <>
+      {openRows.length > 0 && table(openRows)}
+      {/* Resolved positions kept OUT of the open list and collapsed by default.
+          They're the same shape but a different question: the open table is
+          "what am I holding", this is "how did the last ones go". */}
+      {settledRows.length > 0 && (
+        <div className="mt-2 border border-[var(--color-border)] rounded-lg">
+          <button
+            onClick={() => setShowSettled((v) => !v)}
+            className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-sm text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            aria-expanded={showSettled}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {showSettled ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              Resolved ({settledRows.length})
+            </span>
+            <span className="text-xs whitespace-nowrap">
+              {wins}–{losses}
+              <span className={`ml-2 font-mono tabular-nums ${pnlClass(settledPnl)}`}>{money(settledPnl)}</span>
+            </span>
+          </button>
+          {showSettled && <div className="px-3 pb-3 -mt-2">{table(settledRows)}</div>}
+        </div>
+      )}
+    </>
   );
 }
 
