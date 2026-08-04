@@ -201,6 +201,11 @@ class ValorantMarketOut(BaseModel):
     line: float | None  # map_winner: the map number; series_handicap: map-margin threshold; series_total: total-maps threshold
     match_label: str | None  # "{team_a} vs {team_b}"
     valorant_match_id: int | None
+    # Shared by duplicate rows of the SAME real fixture (a Kalshi row and a
+    # Polymarket row spelling a team differently). The frontend's
+    # cross-platform dedupe and per-match stake cap key on this instead of
+    # the raw match id, which they used to bypass. See duplicate_fixtures.py.
+    fixture_key: int | None = None
     event_name: str | None
     match_date: str | None
     estimated_start_time: str | None
@@ -233,6 +238,11 @@ class Cs2MarketOut(BaseModel):
     line: float | None  # map_winner: the map number; series_total: total-maps threshold
     match_label: str | None  # "{team_a} vs {team_b}"
     cs2_match_id: int | None
+    # Shared by duplicate rows of the SAME real fixture (a Kalshi row and a
+    # Polymarket row spelling a team differently). The frontend's
+    # cross-platform dedupe and per-match stake cap key on this instead of
+    # the raw match id, which they used to bypass. See duplicate_fixtures.py.
+    fixture_key: int | None = None
     event_name: str | None
     match_date: str | None
     estimated_start_time: str | None
@@ -265,6 +275,11 @@ class LolMarketOut(BaseModel):
     line: float | None  # map_winner: the map number; series_total: total-maps threshold
     match_label: str | None  # "{team_a} vs {team_b}"
     lol_match_id: int | None
+    # Shared by duplicate rows of the SAME real fixture (a Kalshi row and a
+    # Polymarket row spelling a team differently). The frontend's
+    # cross-platform dedupe and per-match stake cap key on this instead of
+    # the raw match id, which they used to bypass. See duplicate_fixtures.py.
+    fixture_key: int | None = None
     event_name: str | None
     match_date: str | None
     estimated_start_time: str | None

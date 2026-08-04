@@ -104,12 +104,19 @@ export function sportFromPath(pathname: string): string | null {
 /** The namespaced real-world event id for a row, or null when it isn't tied to
  *  one (season-long futures). Derived from SPORTS so a new sport is covered by
  *  registering it, not by remembering to edit this. */
-export function gameIdForRow(row: Partial<GameIdFields>): string | null {
+export function gameIdForRow(
+  row: Partial<GameIdFields> & { fixtureKey?: number | null },
+): string | null {
   for (const s of SPORTS) {
     if (!s.gameIdField) continue;
     const raw = row[s.gameIdField];
     if (raw === null || raw === undefined || raw === "") continue;
-    return s.prefixGameId ? `${s.key}:${raw}` : String(raw);
+    // fixtureKey collapses the TWO rows an esports match can have (a Kalshi
+    // one and a Polymarket one spelling a team differently) onto one id. They
+    // used to look like two independent games here, which quietly disabled the
+    // per-match stake cap for exactly the matches most likely to be doubled.
+    const id = row.fixtureKey ?? raw;
+    return s.prefixGameId ? `${s.key}:${id}` : String(id);
   }
   return null;
 }

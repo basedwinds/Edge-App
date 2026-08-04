@@ -27,6 +27,7 @@ from app.api.schemas import Cs2MarketOut, FuturesMarketOut, ReasoningFactorOut, 
 from app.db.database import get_session
 from app.clients import flashscore_esports_client
 from app.db.chunked import fetch_in_chunks
+from app.models.duplicate_fixtures import canonical_fixture_ids
 from app.db.models import Cs2Match, Market, MarketSnapshot
 from app.ingestion import market_catalog_cs2
 from app.ingestion.market_matcher_cs2 import team_names_match
@@ -348,6 +349,11 @@ def list_cs2_markets(session: Session = Depends(get_session)):
     def _match_live_on_flashscore(m: Market) -> bool:
         return getattr(m, "cs2_match_id", None) in _fs_hidden
 
+    # One id per real FIXTURE: duplicate Kalshi/Polymarket rows of the same
+    # match share it, so the frontend's dedupe and per-match stake cap stop
+    # being bypassed by the two rows having different ids.
+    _fixture_keys = canonical_fixture_ids(session, Cs2Match)
+
     markets = [
         m for m in markets
         if not _match_live_on_flashscore(m)
@@ -400,6 +406,7 @@ def list_cs2_markets(session: Session = Depends(get_session)):
                 line=m.line,
                 match_label=f"{match.team_a} vs {match.team_b}" if match else None,
                 cs2_match_id=m.cs2_match_id,
+                fixture_key=_fixture_keys.get(m.cs2_match_id, m.cs2_match_id),
                 event_name=match.event_name if match else None,
                 match_date=match.match_date if match else None,
                 estimated_start_time=match.estimated_start_time if match else None,

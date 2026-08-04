@@ -112,6 +112,45 @@ def find_duplicate_pairs(session: Session, model) -> list[tuple]:
     return trusted
 
 
+def canonical_fixture_ids(session: Session, model) -> dict[int, int]:
+    """{match_id: canonical_id} where duplicate twins share one canonical id.
+
+    Exists because two safety controls -- `crossPlatformKey` (dedupe the same
+    proposition across platforms) and `capToOneRowPerGame` (the per-match
+    concentration cap) -- both key on the MATCH ID. A LoL fixture stored as a
+    Kalshi row AND a Polymarket row has two ids, so both controls silently do
+    nothing and the same real match can be recommended twice and STAKED twice,
+    at double the intended exposure. Measured live: 9 pairs showing both halves.
+
+    Deliberately NOT a merge. The two rows are the two PLATFORMS -- different
+    prices, different liquidity -- and the divergence scanner needs both. This
+    only teaches the app that they are one fixture.
+
+    Union-find, so a chain (a~b, b~c) collapses to a single key rather than
+    leaving c pointing at a different representative than a.
+    """
+    parent: dict[int, int] = {}
+
+    def find(x: int) -> int:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            # Lowest id wins, so the key is stable across restarts and does not
+            # depend on which row happened to be visited first.
+            hi, lo = (rx, ry) if rx > ry else (ry, rx)
+            parent[hi] = lo
+
+    for a, b, _shared in find_duplicate_pairs(session, model):
+        union(a.id, b.id)
+    return {mid: find(mid) for mid in parent}
+
+
 def _copy_result(target, twin, shared_key: str) -> bool:
     """Put the twin's result onto `target`, oriented by the SHARED team's side.
 

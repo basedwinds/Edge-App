@@ -29,6 +29,7 @@ from app.api.schemas import FuturesMarketOut, LolMarketOut, ReasoningFactorOut, 
 from app.db.database import get_session
 from app.clients import flashscore_esports_client
 from app.db.chunked import fetch_in_chunks
+from app.models.duplicate_fixtures import canonical_fixture_ids
 from app.db.models import LolMatch, Market, MarketSnapshot
 from app.ingestion import market_catalog_lol
 from app.ingestion.market_matcher_lol import team_names_match
@@ -355,6 +356,11 @@ def list_lol_markets(session: Session = Depends(get_session)):
     def _match_live_on_flashscore(m: Market) -> bool:
         return getattr(m, "lol_match_id", None) in _fs_hidden
 
+    # One id per real FIXTURE: duplicate Kalshi/Polymarket rows of the same
+    # match share it, so the frontend's dedupe and per-match stake cap stop
+    # being bypassed by the two rows having different ids.
+    _fixture_keys = canonical_fixture_ids(session, LolMatch)
+
     markets = [
         m for m in markets
         if not _match_live_on_flashscore(m)
@@ -402,6 +408,7 @@ def list_lol_markets(session: Session = Depends(get_session)):
                 line=m.line,
                 match_label=f"{match.team_a} vs {match.team_b}" if match else None,
                 lol_match_id=m.lol_match_id,
+                fixture_key=_fixture_keys.get(m.lol_match_id, m.lol_match_id),
                 event_name=match.event_name if match else None,
                 match_date=match.match_date if match else None,
                 estimated_start_time=match.estimated_start_time if match else None,

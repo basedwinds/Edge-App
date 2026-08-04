@@ -547,6 +547,13 @@ export interface RecommendedBetRow {
   valorantMatchId: number | null;
   cs2MatchId: number | null;
   lolMatchId: number | null;
+  /** One id per real FIXTURE. An esports match can exist as TWO rows -- a
+   * Kalshi one and a Polymarket one that spell a team differently -- with
+   * different match ids. Both the cross-platform dedupe and the per-match
+   * stake cap key on the match id, so those two rows used to slip past both
+   * and the same real match could be recommended twice and STAKED twice.
+   * Backend-supplied (see duplicate_fixtures.py); absent for other sports. */
+  fixtureKey?: number | null;
   /** Racing (f1/nascar/irl) only -- links the placed bet to its RaceEvent for
    * start-time + CLV. Optional so the other builders don't set it. */
   raceEventId?: number | null;
@@ -743,6 +750,7 @@ export function crossPlatformKey(row: {
   valorantMatchId?: number | null;
   cs2MatchId?: number | null;
   lolMatchId?: number | null;
+  fixtureKey?: number | null;
   team: string | null;
   line: number | null;
   side: string | null;
@@ -786,9 +794,9 @@ export function crossPlatformKey(row: {
   // still-correct defensive habit rather than ripped out.
   const gameId =
     row.nflGameId || row.nbaGameId || row.wnbaGameId || row.mlbGameId || row.mmaFightId || row.tennisMatchId || row.soccerMatchId ||
-    (row.valorantMatchId ? `valorant:${row.valorantMatchId}` : null) ||
-    (row.cs2MatchId ? `cs2:${row.cs2MatchId}` : null) ||
-    (row.lolMatchId ? `lol:${row.lolMatchId}` : null);
+    (row.valorantMatchId ? `valorant:${row.fixtureKey ?? row.valorantMatchId}` : null) ||
+    (row.cs2MatchId ? `cs2:${row.fixtureKey ?? row.cs2MatchId}` : null) ||
+    (row.lolMatchId ? `lol:${row.fixtureKey ?? row.lolMatchId}` : null);
   if (gameId) return `${gameId}|${row.marketType}|${row.team ?? ""}|${row.line ?? ""}|${row.side ?? ""}`;
   // `sport` scopes the FUTURES fallback too (real risk unique to esports:
   // the 3 titles reuse the same market_type string, e.g. "tournament_winner",
@@ -1982,6 +1990,9 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
       valorantMatchId: sport === "valorant" ? matchId : null,
       cs2MatchId: sport === "cs2" ? matchId : null,
       lolMatchId: sport === "lol" ? matchId : null,
+      // Backend-supplied: the SAME value on both rows of a fixture that exists
+      // once per platform, so the dedupe + per-match cap treat them as one.
+      fixtureKey: (m as { fixture_key?: number | null }).fixture_key ?? null,
       groupKey: recommendedKey(m.market_type, m.source, m.team, label),
       // Esports have no "Wait" reason: the roster-change badge was retired
       // 2026-07-23 (no post-roster-change accuracy penalty -- see
