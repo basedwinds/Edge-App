@@ -187,6 +187,10 @@ VALORANT_POLYMARKET_LIVE_TRADING_MIN_VOLUME_DELTA = 500.0
 ESPORTS_LIVE_TRADING_MIN_PRICE_SWING = LIVE_TRADING_MIN_PRICE_SWING
 
 
+BIG_SWING_PRICE = 0.35
+BIG_SWING_MIN_VOLUME = 10_000.0
+
+
 def looks_already_live_by_trading(
     current_price: float | None,
     snapshots: list[tuple[float | None, float | None]],
@@ -217,7 +221,28 @@ def looks_already_live_by_trading(
         return False
     volume_delta = max(volumes) - min(volumes)
     price_swing = max(prices) - min(prices)
-    return volume_delta >= min_volume_delta and price_swing >= min_price_swing
+    if volume_delta >= min_volume_delta and price_swing >= min_price_swing:
+        return True
+    # SECOND ARM: a huge swing catches a live match EARLIER than the volume bar can.
+    #
+    # User-reported 2026-08-04: Hyunyee Lee vs Jialan Cai was recommended while
+    # already in play, priced 0.02/0.98. The gate above DID eventually fire and
+    # drop it -- but only after ~240,000 of volume had accumulated. On a thin ITF
+    # women's match that takes hours, and the whole time the match is live and
+    # being offered. The detector was lagging, not missing.
+    #
+    # A pre-match favourite sits quietly at an extreme price; it does not TRAVEL
+    # 35 points to get there. That swing, at an already-extreme current price, is
+    # the live/decided signature and it appears long before the volume bar is met.
+    # The volume floor here only rules out a near-dead market whose handful of
+    # stray quotes could otherwise manufacture a swing.
+    #
+    # Measured over 331 Kalshi tennis moneylines sitting at an extreme price: the
+    # existing rule catches 37, and this arm adds just 3 -- all with 40k-81k of
+    # real volume already traded, i.e. genuinely active markets that simply had
+    # not yet crossed 100k. Loosening to 0.30 adds only 2 more, so the threshold
+    # is not perched on a cliff.
+    return price_swing >= BIG_SWING_PRICE and volume_delta >= BIG_SWING_MIN_VOLUME
 
 
 # Minimum traded volume before an extreme two-sided price is treated as decided.
