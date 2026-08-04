@@ -101,12 +101,49 @@ def _fetch_priced() -> list[dict]:
     return out
 
 
+# A book spanning this much of the probability range has not told us what
+# anything is worth -- its mid is the midpoint of ignorance, not a price.
+# Chosen from live data rather than picked round: at 0.50, of the rows it
+# removes 76% are priced within 5pp of 0.50 (the placeholder signature) against
+# just 15% of the rows it keeps -- a 5x enrichment in exactly the thing being
+# targeted. Tighter thresholds catch too little (>=0.95 removes only 6% and
+# misses most of it); looser ones start cutting genuinely quoted thin markets
+# without improving that ratio.
+MAX_QUOTED_SPREAD = 0.50
+
+
 def _qualifies(row: dict, min_edge: float) -> bool:
     """Log a row if the app would bet it. Two ways in: it already has a sized
     stake (the staked sports' recommend gate), OR it's a tracking-only market
     (racing, futures) with a real positive edge >= min_edge and a real market
     price -- so unstaked-but-edged markets still accrue forward CLV (the whole
     point: everything unvalidated, let CLV judge uniformly)."""
+    # SPREAD GATE, applied before anything else -- including staked rows.
+    #
+    # This is the second CLV contamination mode, and the one the earlier
+    # volume-based attempt could not address. All 37 of soccer's closed CLV rows
+    # were logged at 0.49/0.50 on markets with no real quote; a genuine price
+    # appeared later at 0.80-0.96, reading as +20.68pp average CLV, individual
+    # rows to +47pp. An extremeness test cannot see it, since 0.50 is the least
+    # extreme price there is.
+    #
+    # It only became fixable once Polymarket bid/ask were actually stored (they
+    # were hardcoded None for every sport until 2026-08-04). The first attempt
+    # gated on "has a quote or has volume" and was measured as far too blunt --
+    # it cut logging 774 -> 158 on tennis, because NO Polymarket row had a quote
+    # and volume is legitimately absent on most untraded markets. Spread is the
+    # right discriminator: it says whether the market has an opinion, where
+    # volume only says whether anyone has acted on one.
+    #
+    # Deliberately applied to STAKED rows too. The question here is not "would we
+    # bet this" but "is this price real enough to measure CLV against", and a
+    # degenerate book fails that regardless of staking. The cost is tiny and
+    # measured: 2 of 374 currently-staked rows. Both are worth a second look in
+    # their own right -- e.g. a real $20 LoL recommendation on bid 0.08 / ask
+    # 0.93, whose "price" of 0.505 is meaningless.
+    bid, ask = row.get("yes_bid"), row.get("yes_ask")
+    if bid is not None and ask is not None and (ask - bid) >= MAX_QUOTED_SPREAD:
+        return False
     if row.get("suggested_stake_dollars"):
         return True
     edge = row.get("edge")
