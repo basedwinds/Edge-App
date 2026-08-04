@@ -435,8 +435,11 @@ def list_lol_markets(session: Session = Depends(get_session)):
 
 
 def _game_insight_lol(match: LolMatch, model_prob: float | None, market_prob: float | None) -> str:
-    a_rating = elo_service_lol.get_team_rating(match.team_a)
-    b_rating = elo_service_lol.get_team_rating(match.team_b)
+    # The ratings the PRICE came from, not the clean pool's -- see
+    # elo_service_lol.get_matchup_ratings for the reported 1500/1500 bug.
+    _mr = elo_service_lol.get_matchup_ratings(match.team_a, match.team_b)
+    a_rating = _mr["a_rating"] if _mr else None
+    b_rating = _mr["b_rating"] if _mr else None
     sentences = []
     if a_rating is not None and b_rating is not None:
         gap = a_rating - b_rating
@@ -488,12 +491,22 @@ def get_lol_market_reasoning(
         )
         if match.best_of:
             factors.append(ReasoningFactorOut(label="Best of", detail=str(match.best_of)))
-        a_rating = elo_service_lol.get_team_rating(match.team_a)
-        b_rating = elo_service_lol.get_team_rating(match.team_b)
-        if a_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f}"))
-        if b_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f}"))
+        mr = elo_service_lol.get_matchup_ratings(match.team_a, match.team_b)
+        if mr:
+            # Show the games behind each rating: a number with no evidence
+            # count is what made a well-founded price look like a guess.
+            factors.append(ReasoningFactorOut(
+                label=f"{match.team_a} Elo rating",
+                detail=f"{mr['a_rating']:.0f} ({mr['a_games']} maps)"))
+            factors.append(ReasoningFactorOut(
+                label=f"{match.team_b} Elo rating",
+                detail=f"{mr['b_rating']:.0f} ({mr['b_games']} maps)"))
+            if mr["pool"] == "expanded":
+                factors.append(ReasoningFactorOut(
+                    label="Rating pool",
+                    detail="Lower-tier pool (gol.gg). One or both teams never appear in "
+                           "the Primary-tier crawl, so the model prices them from the "
+                           "expanded pool -- real observed maps, a smaller sample."))
         insight = _game_insight_lol(match, model_prob, market_prob)
 
     elif m.market_type == "tournament_winner":

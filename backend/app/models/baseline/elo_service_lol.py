@@ -171,6 +171,43 @@ def get_team_rating(team: str) -> float | None:
     return state.get(team)
 
 
+def get_matchup_ratings(team_a: str, team_b: str) -> dict | None:
+    """The ratings the PRICE was actually computed from, plus their evidence.
+
+    REAL BUG this exists for (user-reported): a recommended bet's reasoning read
+    "both teams 1500" -- Elo's neutral default, i.e. "we know nothing" -- on a
+    match the model had priced from real games. `get_team_rating` reads only the
+    CLEAN Primary-tier pool, while `get_series_distribution` falls back to the
+    EXPANDED pool for teams Primary has never seen (the whole point of the
+    gol.gg tier expansion). Lower-tier matches are exactly the ones that fall
+    back, so the display contradicted the model on precisely the bets whose
+    reasoning most needed to be trusted -- BoostGate had 37 real map
+    observations, Team Phoenix 23, and the panel claimed 1500/1500.
+
+    Mirrors get_series_distribution's routing exactly rather than re-deriving
+    it, so the two cannot drift apart. Returns None when NEITHER pool can price
+    the matchup -- the honest "no rating" case, which the caller should render
+    as no rating rather than as 1500.
+    """
+    state = _cache.get("state")
+    if state is None:
+        return None
+    if state.games_played(team_a) >= MIN_GAMES and state.games_played(team_b) >= MIN_GAMES:
+        pool, name = state, "primary"
+    else:
+        pool = _cache.get("state_exp")
+        name = "expanded"
+        if pool is None or pool.games_played(team_a) < MIN_GAMES or pool.games_played(team_b) < MIN_GAMES:
+            return None
+    return {
+        "pool": name,
+        "a_rating": pool.get(team_a),
+        "b_rating": pool.get(team_b),
+        "a_games": pool.games_played(team_a),
+        "b_games": pool.games_played(team_b),
+    }
+
+
 MIN_GAMES = 5  # both teams need this many real map observations before a rating counts as trustworthy -- see get_series_distribution's own docstring for the real Brier-by-games-bucket data behind the number
 
 # Real head-to-head blending (2026-07-20 addition, see LolEloState.h2h's own
