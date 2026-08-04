@@ -34,6 +34,7 @@ from app.api.routers.markets import _batch_latest_snapshots, _edge_sentence, _im
 from app.api.routers.settings import get_staking_params, get_flat_params, get_unit_dollars, get_valorant_pool_dollars
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut, ValorantMarketOut
 from app.db.database import get_session
+from app.db.chunked import fetch_in_chunks
 from app.db.models import Market, MarketSnapshot, ValorantMatch
 from app.ingestion import market_catalog_valorant
 from app.ingestion.market_matcher_valorant import team_names_match
@@ -137,7 +138,11 @@ def list_valorant_futures(session: Session = Depends(get_session)):
     _decided = {g for g, ps in _by_group.items() if futures_group_decided("tournament_winner", ps)}
     if _decided:
         markets = [m for m in markets if (m.group_label or "") not in _decided]
-        snapshots_by_market = {k: v for k, v in snapshots_by_market.items() if k in {m.id for m in markets}}
+        # Hoisted: as an inline set literal this was rebuilt once per
+        # snapshots_by_market entry -- quadratic, and the dominant cost of the
+        # tennis endpoint at 34k markets (183M attribute reads, ~40s).
+        _kept_market_ids = {m.id for m in markets}
+        snapshots_by_market = {k: v for k, v in snapshots_by_market.items() if k in _kept_market_ids}
 
     priced = price_tournament_winners(markets, elo_service_valorant)
     # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
@@ -290,11 +295,14 @@ def list_valorant_markets(session: Session = Depends(get_session)):
     # comparable scales, same rule as every other sport in this app).
     LIVE_TRADING_LOOKBACK = datetime.timedelta(hours=6)  # see ladder_sanity.py's own module comment for why 6, not 1
     cutoff = datetime.datetime.utcnow() - LIVE_TRADING_LOOKBACK
-    recent_rows = (
-        session.query(MarketSnapshot)
-        .filter(MarketSnapshot.market_id.in_([m.id for m in markets]), MarketSnapshot.ts >= cutoff)
-        .all()
-    ) if markets else []
+    recent_rows = fetch_in_chunks(
+        [m.id for m in markets],
+        lambda chunk: (
+            session.query(MarketSnapshot)
+            .filter(MarketSnapshot.market_id.in_(chunk), MarketSnapshot.ts >= cutoff)
+            .all()
+        ),
+    )
     recent_snapshots_by_market: dict[int, list[MarketSnapshot]] = {}
     for snap in recent_rows:
         recent_snapshots_by_market.setdefault(snap.market_id, []).append(snap)
@@ -328,7 +336,11 @@ def list_valorant_markets(session: Session = Depends(get_session)):
         and not _market_stale(m)
         and not _match_looks_live_by_trading(m)
     ]
-    snapshots_by_market = {mid: s for mid, s in all_snapshots.items() if mid in {m.id for m in markets}}
+    # Hoisted: as an inline set literal this was rebuilt once per
+    # all_snapshots entry -- quadratic, and the dominant cost of the
+    # tennis endpoint at 34k markets (183M attribute reads, ~40s).
+    _kept_market_ids = {m.id for m in markets}
+    snapshots_by_market = {mid: s for mid, s in all_snapshots.items() if mid in _kept_market_ids}
     weekly_pool, futures_pool = get_valorant_pool_dollars(session)
     unit_dollars = get_unit_dollars(session)
     fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)

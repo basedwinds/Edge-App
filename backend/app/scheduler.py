@@ -334,11 +334,27 @@ def start():
         next_run_time=datetime.now() + timedelta(seconds=150),
         replace_existing=True,
     )
+    # REAL BUG these next_run_times fix (found 2026-08-04 chasing "tennis keeps
+    # vanishing from Recommended"). Registered without next_run_time, an interval
+    # job's first fire is one FULL interval after start() -- so a 6h/24h
+    # housekeeping job only ever runs if the process stays up that long. This
+    # backend is restarted far more often than that, so all three had effectively
+    # NEVER run. market_cleanup is the one that bit: it marks past-date game
+    # markets 'closed', and without it 25,071 of tennis's 26,306 "active" markets
+    # were finished matches. That pushed tennis past 32,766 total markets --
+    # SQLite's host-variable cap -- so /tennis/markets raised "too many SQL
+    # variables" and 500'd, and the frontend's guard() turned that into an empty
+    # tennis list. The pollers dodge this only because main.py runs them once
+    # explicitly at startup; these have no such thread, so they need the first
+    # run scheduled here. Staggered, and after the initial poll burst, so
+    # housekeeping never competes with the first price refresh for the write lock.
+    housekeeping_tick = datetime.now() + timedelta(minutes=8)
     scheduler.add_job(
         serialized(run_catalog_scan),
         "interval",
         hours=24,
         id="catalog_scan",
+        next_run_time=housekeeping_tick + timedelta(seconds=2 * JOB_STAGGER_SECONDS),
         replace_existing=True,
     )
     scheduler.add_job(
@@ -346,6 +362,7 @@ def start():
         "interval",
         hours=24,
         id="snapshot_prune",
+        next_run_time=housekeeping_tick + timedelta(seconds=JOB_STAGGER_SECONDS),
         replace_existing=True,
     )
     scheduler.add_job(
@@ -353,6 +370,7 @@ def start():
         "interval",
         hours=6,
         id="market_cleanup",
+        next_run_time=housekeeping_tick,
         replace_existing=True,
     )
     # Keep the response cache warm (see run_cache_warm). Every 200s < the 300s

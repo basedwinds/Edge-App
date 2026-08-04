@@ -128,12 +128,20 @@ def health_check(session: Session = Depends(get_session)):
     racing_ids = [rid for (rid,) in session.query(Market.id)
                   .filter(Market.status == "active", Market.sport.in_(_RACING)).all()]
     if racing_ids:
-        priced_racing = (
-            session.query(func.count(func.distinct(MarketSnapshot.market_id)))
-            .filter(MarketSnapshot.market_id.in_(racing_ids),
-                    (MarketSnapshot.yes_bid.isnot(None)) | (MarketSnapshot.last_price.isnot(None)))
-            .scalar() or 0
-        )
+        # Chunked for the reason app/db/chunked.py documents. Summing a
+        # COUNT(DISTINCT market_id) across chunks is exact here only because the
+        # chunks partition racing_ids -- no market_id can be counted twice.
+        from app.db.chunked import fetch_in_chunks
+
+        priced_racing = sum(fetch_in_chunks(
+            racing_ids,
+            lambda chunk: [(
+                session.query(func.count(func.distinct(MarketSnapshot.market_id)))
+                .filter(MarketSnapshot.market_id.in_(chunk),
+                        (MarketSnapshot.yes_bid.isnot(None)) | (MarketSnapshot.last_price.isnot(None)))
+                .scalar() or 0
+            )],
+        ))
         unpriced = len(racing_ids) - priced_racing
         if unpriced > 0:
             _issue(issues, "info", "no_market_price", "racing",

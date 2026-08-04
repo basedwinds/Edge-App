@@ -299,11 +299,16 @@ def _batch_recent_snapshots_for_live_check(session: Session, market_ids: list[in
         return {}
     from app.db.models import MarketSnapshot
 
+    from app.db.chunked import fetch_in_chunks
+
     cutoff = datetime.datetime.utcnow() - LIVE_TRADING_LOOKBACK
-    rows = (
-        session.query(MarketSnapshot)
-        .filter(MarketSnapshot.market_id.in_(market_ids), MarketSnapshot.ts >= cutoff)
-        .all()
+    rows = fetch_in_chunks(
+        market_ids,
+        lambda chunk: (
+            session.query(MarketSnapshot)
+            .filter(MarketSnapshot.market_id.in_(chunk), MarketSnapshot.ts >= cutoff)
+            .all()
+        ),
     )
     out: dict[int, list[MarketSnapshot]] = {}
     for snap in rows:
@@ -618,7 +623,11 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]
-    snapshots_by_market = {mid: s for mid, s in all_snapshots.items() if mid in {m.id for m in markets}}
+    # Hoisted: as an inline set literal this was rebuilt once per
+    # all_snapshots entry -- quadratic, and the dominant cost of the
+    # tennis endpoint at 34k markets (183M attribute reads, ~40s).
+    _kept_market_ids = {m.id for m in markets}
+    snapshots_by_market = {mid: s for mid, s in all_snapshots.items() if mid in _kept_market_ids}
     weekly_pool, futures_pool = get_tennis_pool_dollars(session)
     unit_dollars = get_unit_dollars(session)
     fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)
