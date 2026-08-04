@@ -364,6 +364,12 @@ class OpenBetOut(BaseModel):
     model_prob_now: float | None = None
     market_move_pp: float | None = None    # now - entry, in percentage points
     model_move_pp: float | None = None
+    # Where the position stands in the SPORT's terms -- "55-59 · needs 15 of 48
+    # left", "Out — lost to Halys Q.". Checkable by eye in a way a probability
+    # isn't. None wherever the results data can't support it (see
+    # models/futures_progress.py for exactly where, and why).
+    progress: str | None = None
+    progress_tone: str | None = None       # "good" | "neutral" | "dead"
 
 
 class SettledBetOut(BaseModel):
@@ -811,6 +817,12 @@ def get_open_bets(session: Session = Depends(get_session)):
             .all()
         ):
             _model_now[mid] = prob   # ordered ascending, so the last write wins
+
+    # Season records / knockout status, for the futures that have results
+    # behind them. Batched across all rows -- one query per sport, not per bet.
+    from app.models.futures_progress import progress_for
+    _progress = progress_for(session, [r for r in rows if r.stake_pool == "futures"])
+
     for r in rows:
         start_dt: datetime.datetime | None = None
         start_date: str | None = None
@@ -882,6 +894,8 @@ def get_open_bets(session: Session = Depends(get_session)):
             model_prob_now=_mdl_now,
             market_move_pp=_move(_mkt_now, r.market_prob_at_placement),
             model_move_pp=_move(_mdl_now, r.model_prob_at_placement),
+            progress=_progress.get(r.id, {}).get("text"),
+            progress_tone=_progress.get(r.id, {}).get("tone"),
         )))
     # Ordering: UPCOMING first (soonest start at top -- the actionable ones),
     # then genuinely-DELAYED bets (start already >4h past but still pending --

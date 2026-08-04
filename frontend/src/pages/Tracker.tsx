@@ -346,6 +346,14 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
  * toward the side that was backed since entry. Market for every bet; model
  * only for futures, which are the ones sampled hourly -- a dash there means
  * "not recorded", not "unchanged". */
+// "dead" is the one that has to stand out: a position that can no longer win
+// is the only progress line you'd act on. "good" is cleared/still-alive.
+const PROGRESS_TONE: Record<string, string> = {
+  good: "text-[var(--color-good)]",
+  neutral: "text-[var(--color-text-dim)]",
+  dead: "text-[var(--color-critical)]",
+};
+
 function NowCell({ marketNow, marketMove, modelNow, modelMove }: {
   marketNow: number | null; marketMove: number | null;
   modelNow?: number | null; modelMove?: number | null;
@@ -384,6 +392,7 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
     // Where an OPEN position stands now vs the entry above. Only open rows
     // carry these: a settled one has a result, which is the better answer.
     marketNow: number | null; modelNow: number | null; marketMove: number | null; modelMove: number | null;
+    progress: string | null; progressTone: string | null;
     resolves: string; resolveKey: number;
   };
   const mk = (b: OpenBetPayload | SettledBetPayload, status: string, profit: number | null): FRow => {
@@ -396,6 +405,8 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
       modelNow: (b as OpenBetPayload).model_prob_now ?? null,
       marketMove: (b as OpenBetPayload).market_move_pp ?? null,
       modelMove: (b as OpenBetPayload).model_move_pp ?? null,
+      progress: (b as OpenBetPayload).progress ?? null,
+      progressTone: (b as OpenBetPayload).progress_tone ?? null,
     };
   };
   // Open first (soonest to resolve → capital frees earliest), then settled.
@@ -449,6 +460,14 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
                   <div className="text-[11px] text-[var(--color-text-muted)]">
                     {futuresMarketName({ market_type: r.market_type, side: r.side, line: r.line, group_label: r.label })} · {SPORT_LABEL[r.sport] ?? r.sport}{r.league ? ` · ${r.league}` : ""}
                   </div>
+                  {/* Where the position stands in the sport's own terms. Absent
+                      whenever results data can't support it, and absent reads
+                      as nothing at all -- never a placeholder. */}
+                  {r.progress && (
+                    <div className={`text-[11px] mt-0.5 whitespace-nowrap ${PROGRESS_TONE[r.progressTone ?? "neutral"] ?? PROGRESS_TONE.neutral}`}>
+                      {r.progress}
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-2">
                   <span className="text-[11px] px-1.5 py-0.5 rounded-full border border-[var(--color-border)] text-[var(--color-text-dim)]">

@@ -2412,6 +2412,11 @@ export interface OpenBetPayload {
   model_prob_now: number | null;
   market_move_pp: number | null;
   model_move_pp: number | null;
+  // Where the position stands in the sport's own terms ("55–59 · needs 15 of
+  // 48 left", "Out — lost to Halys Q."). Null wherever results data can't
+  // support it, which is most non-MLB futures today.
+  progress: string | null;
+  progress_tone: "good" | "neutral" | "dead" | null;
   edge_at_placement: number | null;
   placed_at: string;
   start_time: string | null;
