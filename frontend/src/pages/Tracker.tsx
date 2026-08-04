@@ -8,7 +8,7 @@ import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, TRACKER_PERIODS, type TrackerPeriod, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
 import { futuresResolution, gameResolution } from "../utils/resolution";
 import { futuresMarketName, futuresThreshold } from "../utils/futuresLabel";
-import { describeTennisSpread, TENNIS_MARKET_TYPE_LABELS } from "../utils/tennisLabel";
+import { describePick, marketTypeLabel, type PickLike } from "../utils/pickLabel";
 import type { SportKey } from "../lib/sports";
 
 // Sports whose /reasoning endpoint exists (racing has no reasoning route yet).
@@ -117,20 +117,17 @@ function EquityCurve({ points, mode }: { points: PortfolioPointPayload[]; mode: 
 
 /** What a placed bet actually is, for the tracker's Bet column.
  *
- * Everything here still prints its raw market_type, which is terse but honest
- * for most types ("moneyline", "series_winner"). Tennis spreads are the
- * exception: "set_spread · Marta Kostyuk -1.5" gives no direction, and the sign
- * cannot be read off the number because game_spread and set_spread use opposite
- * conventions (see describeTennisSpread). Those get spelled out; everything
- * else is untouched. */
-function betPickLabel(b: { market_type: string; team: string | null; side: string | null; line: number | null; sport: string }): string {
-  if (b.sport === "tennis") {
-    const spread = describeTennisSpread(b.market_type, b.team, b.line);
-    if (spread) return `${TENNIS_MARKET_TYPE_LABELS[b.market_type] ?? b.market_type} · ${spread}`;
-  }
-  const side = b.side ? ` ${b.side}` : "";
-  const line = b.line != null ? (b.market_type === "map_winner" ? ` · Map ${b.line}` : ` ${b.line}`) : "";
-  return `${b.market_type}${b.team ? ` · ${b.team}` : ""}${side}${line}`;
+ * Reads "Team Total · WSH Over 3.5" instead of "team_total · WSH over 3.5" --
+ * the same wording the Recommended tables use, from the same function, so a bet
+ * is described identically before and after you place it. This column printed
+ * raw market_type strings until 2026-08-04. */
+function betPickLabel(b: {
+  market_type: string; team: string | null; side: string | null; line: number | null; sport: string;
+}): string {
+  const pick: PickLike = {
+    marketType: b.market_type, team: b.team, side: b.side, line: b.line, sport: b.sport,
+  };
+  return `${marketTypeLabel(b.market_type, b.sport)} · ${describePick(pick)}`;
 }
 
 // "in 3h", "in 12m", "in play", or "delayed?" — the last when a bet's scheduled
