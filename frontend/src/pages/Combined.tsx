@@ -77,7 +77,23 @@ function guard<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise<
  * tennis candidates rendered zero of them (user-reported 2026-08-04). */
 type SportPlan = { ranked: RecommendedBetRow[]; ceilings: Record<"weekly" | "futures", number> };
 
-async function loadCombined(): Promise<SportPlan[]> {
+/** Total live exposure allowed across ALL sports, as a share of bankroll.
+ *
+ * The per-sport ceilings alone cannot bound this: twelve sports at 6 slots
+ * each sum to $719 on a $2,000 bankroll (36%), and nothing stopped them
+ * stacking. That is fine on a Tuesday when three sports have candidates and
+ * fatal on a Saturday when CFB, NFL, MMA and racing all land at once -- the
+ * exact case a per-sport cap is blind to. This is the only number that
+ * bounds total risk, so it is the one to change if the appetite changes.
+ *
+ * Futures are separate and smaller because they do NOT recycle: a season
+ * future locks capital until spring, so it cannot share a budget sized
+ * around turnover. */
+const GLOBAL_CAP_PCT = { weekly: 0.30, futures: 0.10 } as const;
+
+type CombinedPlan = { plans: SportPlan[]; globalCeilings: Record<"weekly" | "futures", number> };
+
+async function loadCombined(): Promise<CombinedPlan> {
   const s = await fetchSettings();
   // Game/match markets only -- this is an "upcoming bets" view, and the
   // per-sport /futures endpoints are both the slowest (season-long models +
@@ -121,7 +137,18 @@ async function loadCombined(): Promise<SportPlan[]> {
       },
     };
   };
-  return [
+  // Global ceilings net off EVERYTHING already committed, same as the
+  // per-sport ones -- otherwise the total cap only binds on new capital.
+  let liveWeekly = 0, liveFutures = 0;
+  for (const b of openBets) {
+    if (b.stake_pool === "futures") liveFutures += b.stake_dollars;
+    else liveWeekly += b.stake_dollars;
+  }
+  const globalCeilings = {
+    weekly: Math.max(0, s.bankroll_dollars * GLOBAL_CAP_PCT.weekly - liveWeekly),
+    futures: Math.max(0, s.bankroll_dollars * GLOBAL_CAP_PCT.futures - liveFutures),
+  };
+  const plans = [
     plan("nfl", buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).ranked, s.weekly_pool_dollars, s.futures_pool_dollars),
     plan("nba", buildNbaRecommendedBets(nbaM, [], s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars).ranked, s.nba_weekly_pool_dollars, s.nba_futures_pool_dollars),
     plan("wnba", buildWnbaRecommendedBets(wnbaM, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars).ranked, s.wnba_weekly_pool_dollars, s.wnba_futures_pool_dollars),
@@ -137,6 +164,7 @@ async function loadCombined(): Promise<SportPlan[]> {
     // so the committed capital of all three has to net off together.
     plan("__racing", buildRacingRecommendedBets(racingM, s.racing_weekly_pool_dollars).ranked, s.racing_weekly_pool_dollars),
   ];
+  return { plans, globalCeilings };
 }
 
 // Cross-sport futures for the "Futures" window: every sport's /futures merged,
@@ -208,7 +236,7 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
 const MAX_FUTURES_PER_SPORT = 8; // futures shortlist: top-N per sport (fairness across sports)
 
 const EMPTY_IDS: Set<string> = new Set();
-const EMPTY_PLANS: SportPlan[] = []; // stable ref so the rows memo doesn't rerun while loading
+const EMPTY_PLAN: CombinedPlan = { plans: [], globalCeilings: { weekly: 0, futures: 0 } };
 
 function localDateStr(offsetDays = 0): string {
   return new Date(Date.now() + offsetDays * 86400000).toLocaleDateString("en-CA"); // YYYY-MM-DD, local
@@ -327,7 +355,8 @@ export function Combined() {
   const [reasoningRow, setReasoningRow] = useState<RecommendedBetRow | null>(null);
   const [win, setWin] = useState<WindowFilter>("all");
 
-  const plans = query.data ?? EMPTY_PLANS;
+  const combined = query.data ?? EMPTY_PLAN;
+  const plans = combined.plans;
   const windowed = useMemo(() => {
     // Bucket by the REAL start instant. Match sports (tennis/soccer/esports/MMA)
     // carry an accurate estimatedStartTime -- and a `gameday` derived from a
@@ -367,8 +396,12 @@ export function Combined() {
     // Each window therefore answers "the best use of this pool on THIS slate",
     // and the same bet can appear in more than one window -- correct, since the
     // ceiling is about how much to deploy at once, not a running total.
-    const out: RecommendedBetRow[] = [];
-    let cut = 0;                 // qualified, in-window, but the pool was full
+    // PASS 1 -- each sport spends its OWN ceiling. This is what guarantees every
+    // sport with real candidates is represented at all: without it a couple of
+    // high-edge sports absorb the whole budget (measured on the live board: the
+    // top 20 by raw edge contained zero MLB despite 21 qualifying candidates).
+    let cut = 0;                 // qualified and in-window, but a ceiling was full
+    const picked: RecommendedBetRow[] = [];
     for (const p of plans) {
       const spent = { weekly: 0, futures: 0 };
       for (const row of p.ranked) {
@@ -376,11 +409,25 @@ export function Combined() {
         const pool = row.stakePool;
         if (spent[pool] + row.suggestedStakeDollars > p.ceilings[pool]) { cut++; continue; }
         spent[pool] += row.suggestedStakeDollars;
-        out.push(row);
+        picked.push(row);
       }
     }
+
+    // PASS 2 -- the GLOBAL cap, the only thing bounding total risk. Ranked by
+    // edge so that when a weekend stacks (CFB + NFL + MMA + racing at once) the
+    // best bets across every sport win the remaining room, rather than whichever
+    // sport happens to be iterated first.
+    picked.sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+    const globalSpent = { weekly: 0, futures: 0 };
+    const out: RecommendedBetRow[] = [];
+    for (const row of picked) {
+      const pool = row.stakePool;
+      if (globalSpent[pool] + row.suggestedStakeDollars > combined.globalCeilings[pool]) { cut++; continue; }
+      globalSpent[pool] += row.suggestedStakeDollars;
+      out.push(row);
+    }
     return { rows: out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars), cut };
-  }, [plans, win]);
+  }, [plans, combined, win]);
   const rows = windowed.rows.filter((r) => !isRowNotReady(r, readinessQuery.data));
   const cutByPool = windowed.cut;
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
