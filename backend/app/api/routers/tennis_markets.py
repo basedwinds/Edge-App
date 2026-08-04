@@ -29,7 +29,12 @@ from app.ingestion.market_matcher_tennis import full_name_to_abbreviated_key
 from app.models import game_lines_tennis
 from app.models.baseline import elo_service_tennis
 from app.models.bracket_sim_tennis import simulate_tournament
-from app.models.ladder_sanity import find_resolved_entities, looks_already_live_by_trading, pair_looks_resolved
+from app.models.ladder_sanity import (
+    find_resolved_entities,
+    looks_already_live_by_trading,
+    pair_looks_live_by_travel,
+    pair_looks_resolved,
+)
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -510,8 +515,32 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         mid for mid, sides in moneyline_sides.items() if pair_looks_resolved(sides)
     }
 
+    # NINTH gap -- see ladder_sanity.pair_looks_live_by_travel for the reported
+    # case (Hanttu vs Roots) and why price TRAVEL, not price level, is what
+    # separates a live match from a genuine lopsided favourite. Reuses the
+    # already-loaded live-check window rather than querying again.
+    moneyline_travel: dict[int, list[tuple[float | None, float | None, float | None]]] = {}
+    for m in markets:
+        if m.market_type != "moneyline" or m.tennis_match_id is None:
+            continue
+        snap = all_snapshots.get(m.id)
+        if snap is None:
+            continue
+        window = recent_snapshots_for_live_check.get(m.id, [])
+        # 0.0 is "never traded", not a real quote -- counting it would invent a
+        # full-scale swing for a market that simply had no early trades.
+        seen = [s.last_price for s in window if s.last_price]
+        swing = (max(seen) - min(seen)) if len(seen) > 1 else 0.0
+        moneyline_travel.setdefault(m.tennis_match_id, []).append(
+            (_implied_prob(snap), snap.volume, swing)
+        )
+    matches_live_by_travel = {
+        mid for mid, sides in moneyline_travel.items() if pair_looks_live_by_travel(sides)
+    }
+
     def _match_pair_resolved(m: Market) -> bool:
-        return m.tennis_match_id in matches_pair_resolved
+        return (m.tennis_match_id in matches_pair_resolved
+                or m.tennis_match_id in matches_live_by_travel)
 
     # EIGHTH gap (2026-08-03, user-reported: Toby Martin, Kayla Day set 1, and
     # Miriam vs Calista Liu all recommended while already under way or finished).

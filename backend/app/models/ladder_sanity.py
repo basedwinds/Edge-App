@@ -285,6 +285,67 @@ def pair_looks_resolved(sides: list[tuple[float | None, float | None]]) -> bool:
     volumes = [v for _, v in sides if v is not None]
     return bool(volumes) and max(volumes) >= PAIR_RESOLVED_MIN_VOLUME
 
+
+# NINTH gap (2026-08-04, user-reported): Stella Hanttu vs Andrea Roots, a Kalshi
+# ITF women's moneyline, recommended at $20 with the match nearly over. Priced
+# 0.08/0.96 on 64k volume while estimated_start_time still claimed a start three
+# hours in the FUTURE.
+#
+# Every existing check misses it by construction:
+#   - pair_looks_resolved wants 0.02/0.98; this pair was 0.08/0.96.
+#   - looks_already_live_by_trading returns early unless the CURRENT price is
+#     itself past 0.02/0.98, and this one sat at 0.12.
+#   - its volume arm needs 100k; only 64k had traded.
+#   - _start_time_untrusted compares start against expiry, and Kalshi had both
+#     set to the same wrong instant, so they agreed and the start looked sound.
+#
+# The signal that does separate them is that the price TRAVELLED to the extreme
+# instead of starting there. Two live controls, same six-hour window:
+#   Hanttu (in play):      0.08/0.96, swing 0.31, volume 2.7k -> 64.8k
+#   Sabalenka v Uchijima:  0.06/0.95, swing 0.010, volume 34.4k -> 38.4k
+# Sabalenka is a genuine upcoming match with a world-#1 favourite -- lopsided and
+# well traded, and it MUST keep showing. The swing is what tells them apart, by a
+# factor of 30.
+#
+# Requiring all three (opposite extremes, real volume, and a real swing) is what
+# makes each threshold safe on its own:
+#   - the extremes bound rules out a market that merely opened and started
+#     trading (Rottoli vs Ferrari: 0.50/0.58, volume 0 -> 13k, plainly pre-match);
+#   - the swing bound rules out a standing favourite like Sabalenka;
+#   - the volume bound rules out a thin market whose stray quotes fake a swing.
+# Measured over every active Kalshi tennis moneyline: fires on 81 matches, and
+# the only two whose start is still in the future are this one and a 0.99/0.02
+# market -- both genuinely live. Stable at 79/81/91 for swings of 0.25/0.20/0.15,
+# so it is not perched on a cliff.
+PAIR_LIVE_LOW = 0.12
+PAIR_LIVE_HIGH = 0.88
+PAIR_LIVE_MIN_VOLUME = 20_000.0
+PAIR_LIVE_MIN_SWING = 0.20
+
+
+def pair_looks_live_by_travel(
+    sides: list[tuple[float | None, float | None, float | None]],
+) -> bool:
+    """Both sides of a moneyline now at opposite extremes, having MOVED there.
+
+    `sides` is one (current_price, volume, price_swing) triple per side, where
+    price_swing is that side's max-minus-min price across the recent window.
+
+    A price of exactly 0.0 must be excluded from the caller's swing as unpriced,
+    not treated as a real quote -- otherwise a market that simply had no trades
+    early in the window shows a full-scale swing it never made.
+    """
+    prices = [p for p, _, _ in sides if p is not None]
+    if len(prices) < 2:
+        return False
+    if not (min(prices) <= PAIR_LIVE_LOW and max(prices) >= PAIR_LIVE_HIGH):
+        return False
+    volumes = [v for _, v, _ in sides if v is not None]
+    if not volumes or max(volumes) < PAIR_LIVE_MIN_VOLUME:
+        return False
+    swings = [w for _, _, w in sides if w is not None]
+    return bool(swings) and max(swings) >= PAIR_LIVE_MIN_SWING
+
 # Futures market types where exactly ONE entity can win, so a leg trading at
 # near-certainty means the whole group is decided. Deliberately explicit rather
 # than inferred: "sum of prices ~ 1" looks like a clean test for mutual
