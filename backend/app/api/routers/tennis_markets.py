@@ -300,7 +300,15 @@ def _batch_recent_snapshots_for_live_check(session: Session, market_ids: list[in
     own docstring for why a single-snapshot comparison missed the real
     case this was built for). A flat `ts >= cutoff` filter, unlike
     markets.py's other batched-snapshot helpers, which all want exactly one
-    row per market_id."""
+    row per market_id.
+
+    Selects the THREE COLUMNS the callers read rather than whole entities. This
+    window spans every tennis market over six hours -- 358,068 rows measured
+    live -- and building an ORM instance for each cost 5.2s of a 12.6s response,
+    enough to push the endpoint past the 18s the cross-sport page allows a sport
+    before it drops it entirely (the reported "bets appear then disappear").
+    Row objects still expose .market_id/.last_price/.volume, so callers are
+    unchanged."""
     if not market_ids:
         return {}
     from app.db.models import MarketSnapshot
@@ -311,7 +319,9 @@ def _batch_recent_snapshots_for_live_check(session: Session, market_ids: list[in
     rows = fetch_in_chunks(
         market_ids,
         lambda chunk: (
-            session.query(MarketSnapshot)
+            session.query(
+                MarketSnapshot.market_id, MarketSnapshot.last_price, MarketSnapshot.volume
+            )
             .filter(MarketSnapshot.market_id.in_(chunk), MarketSnapshot.ts >= cutoff)
             .all()
         ),

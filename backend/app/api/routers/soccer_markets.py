@@ -346,7 +346,9 @@ def _batch_recent_snapshots_for_live_check(session: Session, market_ids: list[in
     rows = fetch_in_chunks(
         market_ids,
         lambda chunk: (
-            session.query(MarketSnapshot)
+            session.query(
+                MarketSnapshot.market_id, MarketSnapshot.last_price, MarketSnapshot.volume
+            )
             .filter(MarketSnapshot.market_id.in_(chunk), MarketSnapshot.ts >= cutoff)
             .all()
         ),

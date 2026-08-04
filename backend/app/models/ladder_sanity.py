@@ -375,8 +375,19 @@ def pair_looks_live_by_travel(
 # 50k-280k volume with swings of 0.29-0.78, i.e. every one genuinely in play.
 # The controls stay out: Sabalenka vs Uchijima (a real upcoming match with a
 # world-#1 favourite) swings 0.010, and Rottoli vs Ferrari holds only 13k.
+# A REAL BASE, not a big absolute number, is what makes the growth meaningful.
+# The first version required 50k of current volume, which was really a proxy for
+# "this market had already been trading" -- and it missed the second reported
+# case, Ahn vs Fakih, a thin ITF match in its SECOND SET carrying only 15k. Its
+# base was 145 and 753, i.e. genuinely traded before the surge; the market that
+# had merely OPENED (Rottoli vs Ferrari) started from 0. Requiring the base
+# directly says what was meant, and lets the absolute floor drop to 5k so a thin
+# live match is caught. Measured with the base rule: 82 matches fire and only 3
+# still claim a future start -- Ahn/Fakih, Victoria Gobbi/Vig and Rain/Pereira,
+# all ITF, all with swings of 0.27-0.78 on 15k-110k, i.e. all genuinely in play.
 PAIR_SURGE_MIN_SWING = 0.25
-PAIR_SURGE_MIN_VOLUME = 50_000.0
+PAIR_SURGE_MIN_BASE = 50.0
+PAIR_SURGE_MIN_VOLUME = 5_000.0
 PAIR_SURGE_GROWTH = 3.0
 
 
@@ -391,14 +402,16 @@ def pair_looks_live_by_surge(
     107k on one and 60k on the other.
     """
     for swing, current, base in sides:
-        if swing is None or current is None:
+        if swing is None or current is None or base is None:
             continue
         if swing < PAIR_SURGE_MIN_SWING or current < PAIR_SURGE_MIN_VOLUME:
             continue
-        # max(base, 1.0): a base of 0 is a market that just opened, not a surge.
-        # Pairing that with the absolute floor above is what keeps a newly listed
-        # market from reading as a live one.
-        if current >= PAIR_SURGE_GROWTH * max(base or 0.0, 1.0):
+        # The base gate is the one doing the real work: it demands the market was
+        # ALREADY trading before the surge. A market opening from nothing has a
+        # base of 0 and is not a live match, however fast its volume then climbs.
+        if base < PAIR_SURGE_MIN_BASE:
+            continue
+        if current >= PAIR_SURGE_GROWTH * base:
             return True
     return False
 

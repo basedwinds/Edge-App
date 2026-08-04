@@ -299,7 +299,9 @@ def list_valorant_markets(session: Session = Depends(get_session)):
     recent_rows = fetch_in_chunks(
         [m.id for m in markets],
         lambda chunk: (
-            session.query(MarketSnapshot)
+            session.query(
+                MarketSnapshot.market_id, MarketSnapshot.last_price, MarketSnapshot.volume
+            )
             .filter(MarketSnapshot.market_id.in_(chunk), MarketSnapshot.ts >= cutoff)
             .all()
         ),

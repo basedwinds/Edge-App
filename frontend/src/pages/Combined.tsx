@@ -39,10 +39,29 @@ import type { FuturesMarketRow } from "../types/market";
 // snapshot table -- must not hang or block the whole combined view). A fetch
 // that errors or exceeds the budget contributes nothing rather than failing
 // the page; the sports that DID load still render.
-function guard<T>(p: Promise<T>, fallback: T, ms = 18000): Promise<T> {
+// Last successful result per feed, so a slow or failed one degrades to STALE
+// rather than to EMPTY.
+//
+// REAL BUG this fixes (user-reported 2026-08-04: "bets show up and disappear").
+// Every feed here is wrapped so one slow sport cannot hold up the page -- but on
+// timeout the fallback was `[]`, which reads as "this sport has no bets today"
+// and makes the whole block vanish, then reappear on the next poll once the
+// backend cache is warm again. Tennis was the one crossing the line: measured at
+// 24.5s to recompute (and 35s while the startup pollers were competing for the
+// DB) against an 18s budget. The recompute itself has since been cut to ~4.5s,
+// but latency is not something this page can guarantee, so the failure mode is
+// fixed here too: showing the previous list for a few more seconds is honest and
+// stable, showing an empty one is neither.
+const lastGood = new Map<string, unknown>();
+
+function guard<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise<T> {
+  const remembered = () => (lastGood.has(key) ? (lastGood.get(key) as T) : fallback);
   return Promise.race([
-    p.catch(() => fallback),
-    new Promise<T>((res) => setTimeout(() => res(fallback), ms)),
+    p.then((v) => {
+      lastGood.set(key, v);
+      return v;
+    }).catch(remembered),
+    new Promise<T>((res) => setTimeout(() => res(remembered()), ms)),
   ]);
 }
 
@@ -55,11 +74,11 @@ async function loadCombined(): Promise<RecommendedBetRow[]> {
   const [
     nflM, nbaM, wnbaM, cfbM, mlbM, mmaM, tenM, socM, valM, cs2M, lolM, racingM,
   ] = await Promise.all([
-    guard(fetchMarkets(), []), guard(fetchNbaMarkets(), []),
-    guard(fetchWnbaMarkets(), []), guard(fetchCfbMarkets(), []),
-    guard(fetchMlbMarkets(), []), guard(fetchMmaMarkets(), []),
-    guard(fetchTennisMarkets(), []), guard(fetchSoccerMarkets(), []), guard(fetchValorantMarkets(), []),
-    guard(fetchCs2Markets(), []), guard(fetchLolMarkets(), []), guard(fetchRacingMarkets(), []),
+    guard("Markets", fetchMarkets(), []), guard("NbaMarkets", fetchNbaMarkets(), []),
+    guard("WnbaMarkets", fetchWnbaMarkets(), []), guard("CfbMarkets", fetchCfbMarkets(), []),
+    guard("MlbMarkets", fetchMlbMarkets(), []), guard("MmaMarkets", fetchMmaMarkets(), []),
+    guard("TennisMarkets", fetchTennisMarkets(), []), guard("SoccerMarkets", fetchSoccerMarkets(), []), guard("ValorantMarkets", fetchValorantMarkets(), []),
+    guard("Cs2Markets", fetchCs2Markets(), []), guard("LolMarkets", fetchLolMarkets(), []), guard("RacingMarkets", fetchRacingMarkets(), []),
   ]);
   const rows = [
     ...buildRecommendedBets(nflM, [], s.weekly_pool_dollars, s.futures_pool_dollars).rows,
@@ -84,9 +103,9 @@ async function loadCombined(): Promise<RecommendedBetRow[]> {
 // sorted by edge. WNBA/MMA have no futures, so they're omitted.
 async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
   const [nfl, nba, mlb, ten, soc, val, cs2, lol] = await Promise.all([
-    guard(fetchFutures(), []), guard(fetchNbaFutures(), []), guard(fetchMlbFutures(), []),
-    guard(fetchTennisFutures(), []), guard(fetchSoccerFutures(), []), guard(fetchValorantFutures(), []),
-    guard(fetchCs2Futures(), []), guard(fetchLolFutures(), []),
+    guard("Futures", fetchFutures(), []), guard("NbaFutures", fetchNbaFutures(), []), guard("MlbFutures", fetchMlbFutures(), []),
+    guard("TennisFutures", fetchTennisFutures(), []), guard("SoccerFutures", fetchSoccerFutures(), []), guard("ValorantFutures", fetchValorantFutures(), []),
+    guard("Cs2Futures", fetchCs2Futures(), []), guard("LolFutures", fetchLolFutures(), []),
   ]);
   const tag = (fr: FuturesMarketRow[], sport: CrossSportFuturesRow["sport"]) =>
     fr.map((r) => ({ ...r, sport }));
