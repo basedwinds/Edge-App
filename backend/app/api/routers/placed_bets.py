@@ -545,7 +545,30 @@ def get_bet_stats(sport: str = "nfl", session: Session = Depends(get_session)):
 # Rolling rather than calendar-anchored on purpose: "this month" means different
 # spans depending on the day you ask and on the viewer's timezone, whereas "last
 # 30 days" is the same question every time and needs no timezone handling.
-PORTFOLIO_PERIOD_DAYS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90, "365d": 365, "all": None}
+PORTFOLIO_PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "365d": 365, "all": None}
+
+
+def _parse_since(raw: str | None):
+    """Explicit cutoff instant, used for the calendar-day view.
+
+    "Today" cannot be computed here: the server stores UTC, so its idea of
+    midnight is not the viewer's. Rather than guess a timezone or ship a
+    tz-offset parameter that has to stay in sync, the client sends the exact
+    instant its own local day began and this just honours it. Rolling windows
+    (7d/30d/...) need none of that and still go through `period`.
+
+    Returns None on anything unparseable, so a malformed value degrades to the
+    selected period rather than erroring the whole dashboard.
+    """
+    if not raw:
+        return None
+    try:
+        stamp = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return stamp
 
 
 def _within_period(bet: PlacedBet, cutoff) -> bool:
@@ -564,7 +587,7 @@ def _within_period(bet: PlacedBet, cutoff) -> bool:
 
 
 @router.get("/portfolio", response_model=PortfolioOut)
-def get_portfolio(period: str = "all", session: Session = Depends(get_session)):
+def get_portfolio(period: str = "all", since: str | None = None, session: Session = Depends(get_session)):
     """Cross-sport bet-tracker rollup -- the "how am I actually doing"
     dashboard that replaces a standalone bet diary. REAL bets only (paper
     bets are the forward-CLV study, not real money). Realized P/L uses each
@@ -574,8 +597,12 @@ def get_portfolio(period: str = "all", session: Session = Depends(get_session)):
     (surfaced separately as at_risk_dollars). CLV is folded in here too so
     price-capture and money outcome sit side by side, exactly as asked."""
     rows = session.query(PlacedBet).filter(PlacedBet.paper == False).all()  # noqa: E712
-    days = PORTFOLIO_PERIOD_DAYS.get(period, None)
-    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days)) if days else None
+    explicit = _parse_since(since)
+    if explicit is not None:
+        cutoff = explicit
+    else:
+        days = PORTFOLIO_PERIOD_DAYS.get(period, None)
+        cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days)) if days else None
     rows = [r for r in rows if _within_period(r, cutoff)]
 
     def _blank() -> dict:

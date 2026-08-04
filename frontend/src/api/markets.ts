@@ -2398,7 +2398,7 @@ export interface OpenBetPayload {
 // ("this month" spans a different stretch depending on the day you ask, and needs
 // timezone handling; "last 30 days" is the same question every time).
 export const TRACKER_PERIODS = [
-  { key: "1d", label: "24h" },
+  { key: "today", label: "Today" },
   { key: "7d", label: "7d" },
   { key: "30d", label: "30d" },
   { key: "90d", label: "90d" },
@@ -2408,6 +2408,15 @@ export const TRACKER_PERIODS = [
 export type TrackerPeriod = (typeof TRACKER_PERIODS)[number]["key"];
 
 export async function fetchPortfolio(period: TrackerPeriod = "all"): Promise<PortfolioPayload> {
+  // "Today" is a calendar day in the VIEWER's timezone, not a rolling 24h and not
+  // the server's UTC day. The server stores UTC and cannot know where you are, so
+  // the client sends the exact instant its own local day began and the backend
+  // just honours it. The rolling windows need none of this.
+  if (period === "today") {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return apiGet<PortfolioPayload>(`/placed-bets/portfolio?since=${encodeURIComponent(start.toISOString())}`);
+  }
   return apiGet<PortfolioPayload>(`/placed-bets/portfolio?period=${encodeURIComponent(period)}`);
 }
 
