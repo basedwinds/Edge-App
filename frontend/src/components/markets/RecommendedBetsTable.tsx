@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpDown, CircleCheck, Hourglass, Info, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { perGamePoolLabel, fetchOpenBets, fetchSettledBets, fetchReadiness, isRowNotReady, crossPlatformKey, rowGameId, type RecommendedBetRow } from "../../api/markets";
+import { perGamePoolLabel, fetchOpenBets, fetchReadiness, isRowNotReady, crossPlatformKey, rowGameId, type RecommendedBetRow } from "../../api/markets";
 
 // Shared across every Recommended page: the cross-platform KEYS of bets already
 // placed (any pool, EITHER book), so a proposition you've marked reads "Placed"
@@ -26,9 +26,20 @@ function usePlacedKeys(enabled: boolean): Set<string> {
   const q = useQuery({
     queryKey: ["placed-market-ids"],
     queryFn: async () => {
-      const [open, settled] = await Promise.all([fetchOpenBets(), fetchSettledBets()]);
+      // SETTLED bets are deliberately NOT included.
+      //
+      // A settled bet's own market is closed -- the event finished. So a LIVE
+      // row sharing its cross_key can only be a DIFFERENT event, and counting
+      // settled bets here produces false "placed" badges and nothing else.
+      // Measured: cross_key for a tournament future is sport|market_type|team
+      // with no tournament in it, so Alexander Bublik losing ATP Kitzbuhel
+      // marked Bublik as already-placed in EVERY later tennis tournament, and
+      // three CS2 teams from BLAST Bounty did the same. Reported as "marked
+      // placed in futures but not in the Bet Tracker", which is exactly right:
+      // the tracker had nothing open, the badge was reading a finished bet.
+      const open = await fetchOpenBets();
       const keys = new Set<string>();
-      for (const b of [...open, ...settled]) {
+      for (const b of open) {
         keys.add(b.cross_key);
         if (b.game_key) keys.add(`game:${b.game_key}`);
       }

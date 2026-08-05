@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
-import { fetchSettings, fetchOpenBets, fetchSettledBets, markFuturesBetPlaced, fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
+import { fetchSettings, fetchOpenBets, markFuturesBetPlaced, fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { futuresMarketName, futuresThreshold } from "../../utils/futuresLabel";
 import { FALLBACK_FUTURES_UNITS } from "../../utils/futuresGroupCap";
 import { SourceBadge } from "./SourceBadge";
@@ -51,9 +51,20 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
   const placedQuery = useQuery({
     queryKey: ["placed-futures-keys"],
     queryFn: async () => {
-      const [open, settled] = await Promise.all([fetchOpenBets(), fetchSettledBets()]);
+      // SETTLED bets are deliberately NOT included.
+      //
+      // A settled bet's own market is closed -- the event finished. So a LIVE
+      // row sharing its cross_key can only be a DIFFERENT event, and counting
+      // settled bets here produces false "placed" badges and nothing else.
+      // Measured: cross_key for a tournament future is sport|market_type|team
+      // with no tournament in it, so Alexander Bublik losing ATP Kitzbuhel
+      // marked Bublik as already-placed in EVERY later tennis tournament, and
+      // three CS2 teams from BLAST Bounty did the same. Reported as "marked
+      // placed in futures but not in the Bet Tracker", which is exactly right:
+      // the tracker had nothing open, the badge was reading a finished bet.
+      const open = await fetchOpenBets();
       return new Set<string>(
-        [...open, ...settled].filter((b) => b.stake_pool === "futures").map((b) => propKey(b))
+        open.filter((b) => b.stake_pool === "futures").map((b) => propKey(b))
       );
     },
   });
