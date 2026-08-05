@@ -4,7 +4,6 @@ import { Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
 import { fetchSettings, fetchOpenBets, markFuturesBetPlaced, fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { futuresMarketName, futuresThreshold } from "../../utils/futuresLabel";
-import { FALLBACK_FUTURES_UNITS } from "../../utils/futuresGroupCap";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import { BetReasoningModal } from "./BetReasoningModal";
@@ -30,10 +29,14 @@ function pct(v: number | null) {
 
 const EMPTY_KEYS: Set<string> = new Set(); // stable ref while placed bets load
 
-// Cross-sport, place-able futures list for the All Bets "Futures" window: every
-// sport's edge-qualified futures in one screen, with Mark placed (falls back to
-// 1 unit when the model didn't size one -- many futures are approx/tracking-only)
-// and the reasoning modal. Placed futures land in the tracker's Futures section.
+// Cross-sport futures list for the All Bets "Futures" window: every sport's
+// edge-qualified futures in one screen, with the reasoning modal. Placed futures
+// land in the tracker's Futures section.
+//
+// A row is only PLACEABLE if the model actually sized it. Rows it declined show
+// "—" and a disabled button rather than a fabricated stake -- the fallback that
+// used to fill that gap was quietly offering a number for the very bets the
+// safety gates had just refused.
 export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFuturesRow[] }) {
   const queryClient = useQueryClient();
   // Hide not-ready season-sport futures (e.g. NFL before the season) -- same
@@ -72,13 +75,16 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
   const isPlaced = (row: CrossSportFuturesRow) => placedIds.has(row.id) || placedKeys.has(propKey(row));
 
   async function place(row: CrossSportFuturesRow) {
-    // Same fallback the per-sport page uses. This defaulted to a FULL unit --
-    // 4x what a model-sized future gets -- so the legs the model refused to
-    // size were booked biggest.
-    const stakeDollars = row.suggested_stake_dollars
-      ?? (unitDollars > 0 ? unitDollars * FALLBACK_FUTURES_UNITS : 2.5);
-    const stakeUnits = row.suggested_stake_units ?? FALLBACK_FUTURES_UNITS;
-    await markFuturesBetPlaced(row, row.sport, stakeDollars, stakeUnits);
+    // A row the model DECLINED to size is not placeable. It used to be booked at
+    // a fabricated fallback -- which meant the safety gates were showing a stake
+    // for exactly the bets they had just refused. User-reported: "Freecs to win
+    // LCK 2026 Season" offered at 0.25u while the market said 0.45% and the
+    // model said 12.6%, a 28x disagreement that implausible_disagreement had
+    // already blocked. 242 of 375 futures on the tab carried an invented stake,
+    // 12 of them guard-blocked.
+    if (row.suggested_stake_dollars == null) return;
+    await markFuturesBetPlaced(row, row.sport, row.suggested_stake_dollars,
+                               row.suggested_stake_units ?? 0);
     setPlacedIds((s) => new Set(s).add(row.id));
     queryClient.invalidateQueries({ queryKey: ["portfolio"] });
     queryClient.invalidateQueries({ queryKey: ["open-bets"] });
@@ -94,7 +100,7 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
       return `${u < 1 ? u.toFixed(2) : u.toFixed(1)}u`;
     }
     if (row.suggested_stake_dollars != null) return `$${row.suggested_stake_dollars.toLocaleString()}`;
-    return unitDollars > 0 ? `${FALLBACK_FUTURES_UNITS.toFixed(2)}u` : "$2.50"; // the fallback used on place
+    return "—";   // the model declined to size this one; do not invent a number
   }, [unitDollars]);
 
   if (rows.length === 0) {
@@ -149,14 +155,19 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
                   </button>
                   <button
                     onClick={() => place(r)}
-                    disabled={isPlaced(r)}
+                    disabled={isPlaced(r) || r.suggested_stake_dollars == null}
+                    title={r.suggested_stake_dollars == null
+                      ? "The model declined to size this one — shown for tracking, not a recommendation"
+                      : undefined}
                     className={
                       isPlaced(r)
                         ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-good)]/40 text-[var(--color-good)] whitespace-nowrap"
+                        : r.suggested_stake_dollars == null
+                        ? "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)]/40 text-[var(--color-text-muted)] whitespace-nowrap cursor-not-allowed"
                         : "text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] whitespace-nowrap"
                     }
                   >
-                    {isPlaced(r) ? "Placed ✓" : "Mark placed"}
+                    {isPlaced(r) ? "Placed ✓" : r.suggested_stake_dollars == null ? "Not sized" : "Mark placed"}
                   </button>
                 </div>
               </td>
