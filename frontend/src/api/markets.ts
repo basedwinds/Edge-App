@@ -64,8 +64,16 @@ export async function fetchWnbaMarkets(): Promise<WnbaMarketRow[]> {
   return apiGet<WnbaMarketRow[]>("/wnba/markets");
 }
 
+export async function fetchWnbaFutures(): Promise<FuturesMarketRow[]> {
+  return apiGet<FuturesMarketRow[]>("/wnba/futures");
+}
+
 export async function fetchCfbMarkets(): Promise<CfbMarketRow[]> {
   return apiGet<CfbMarketRow[]>("/cfb/markets");
+}
+
+export async function fetchCfbFutures(): Promise<FuturesMarketRow[]> {
+  return apiGet<FuturesMarketRow[]>("/cfb/futures");
 }
 
 export async function fetchMlbMarkets(): Promise<MlbMarketRow[]> {

@@ -20,7 +20,7 @@ function propKey(p: { sport: string; market_type: string; team: string | null; s
 }
 
 const SPORT_LABEL: Record<string, string> = {
-  nfl: "NFL", nba: "NBA", wnba: "WNBA", mlb: "MLB", mma: "MMA",
+  nfl: "NFL", nba: "NBA", wnba: "WNBA", cfb: "CFB", mlb: "MLB", mma: "MMA",
   tennis: "Tennis", soccer: "Soccer", valorant: "Valorant", cs2: "CS2", lol: "LoL",
 };
 

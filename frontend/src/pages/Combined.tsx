@@ -23,12 +23,13 @@ import {
   markBetPlaced,
   fetchFutures, fetchNbaFutures, fetchMlbFutures, fetchTennisFutures,
   fetchSoccerFutures, fetchValorantFutures, fetchCs2Futures, fetchLolFutures,
+  fetchWnbaFutures, fetchCfbFutures,
   type RecommendedBetRow,
   type SettingsPayload,
 } from "../api/markets";
 import { CrossSportFuturesTable, type CrossSportFuturesRow } from "../components/markets/CrossSportFuturesTable";
 import { LADDER_TYPES } from "../utils/futuresGroupCap";
-import { fetchReadiness, isRowNotReady } from "../api/markets";
+import { fetchReadiness, isRowNotReady, isFuturesSportNotReady } from "../api/markets";
 import { fetchOpenBets } from "../api/markets";
 import type { FuturesMarketRow } from "../types/market";
 
@@ -172,15 +173,23 @@ async function loadCombined(): Promise<CombinedPlan> {
 // tagged with sport, filtered to edge-qualified (>=3pp model-vs-market gap),
 // sorted by edge. WNBA/MMA have no futures, so they're omitted.
 async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
-  const [nfl, nba, mlb, ten, soc, val, cs2, lol] = await Promise.all([
-    guard("Futures", fetchFutures(), []), guard("NbaFutures", fetchNbaFutures(), []), guard("MlbFutures", fetchMlbFutures(), []),
+  // Every sport with a /futures route must be listed here. WNBA and CFB were
+  // missing -- their backend routes existed and returned real edge-qualified
+  // rows (CFB 139, the most of any sport; WNBA 12), but no fetcher ever called
+  // them, so neither could appear on this tab at all. That is not "crowded out
+  // by a bigger sport", it is absent, and no per-sport cap can fix absence.
+  const [nfl, nba, wnba, cfb, mlb, ten, soc, val, cs2, lol] = await Promise.all([
+    guard("Futures", fetchFutures(), []), guard("NbaFutures", fetchNbaFutures(), []),
+    guard("WnbaFutures", fetchWnbaFutures(), []), guard("CfbFutures", fetchCfbFutures(), []),
+    guard("MlbFutures", fetchMlbFutures(), []),
     guard("TennisFutures", fetchTennisFutures(), []), guard("SoccerFutures", fetchSoccerFutures(), []), guard("ValorantFutures", fetchValorantFutures(), []),
     guard("Cs2Futures", fetchCs2Futures(), []), guard("LolFutures", fetchLolFutures(), []),
   ]);
   const tag = (fr: FuturesMarketRow[], sport: CrossSportFuturesRow["sport"]) =>
     fr.map((r) => ({ ...r, sport }));
   const all: CrossSportFuturesRow[] = [
-    ...tag(nfl, "nfl"), ...tag(nba, "nba"), ...tag(mlb, "mlb"), ...tag(ten, "tennis"),
+    ...tag(nfl, "nfl"), ...tag(nba, "nba"), ...tag(wnba, "wnba"), ...tag(cfb, "cfb"),
+    ...tag(mlb, "mlb"), ...tag(ten, "tennis"),
     ...tag(soc, "soccer"), ...tag(val, "valorant"), ...tag(cs2, "cs2"), ...tag(lol, "lol"),
   ];
   // Curated to a number you can actually keep up with. Raw positive-edge is
@@ -466,7 +475,16 @@ export function Combined() {
 
   const unitsLabel = (d: number) => (unitDollars > 0 ? ` (${(d / unitDollars).toFixed(1)}u)` : "");
 
-  const futuresRows = futuresQuery.data ?? [];
+  // Gate out-of-season sports HERE, not only inside the table, so the summary
+  // tile counts the same rows the table shows. The tile used to read the raw
+  // list and the table filtered internally, so an out-of-season sport inflated
+  // the headline: "45 across 9 sports" above a table showing 29 across 7. The
+  // gap was small until NFL and CFB futures (114 and 139 candidates, both
+  // pre-season) started arriving, which made it obvious.
+  const futuresRows = useMemo(
+    () => (futuresQuery.data ?? []).filter((r) => !isFuturesSportNotReady(r.sport, readinessQuery.data)),
+    [futuresQuery.data, readinessQuery.data],
+  );
   const futuresStats = useMemo(() => {
     const sports = new Set(futuresRows.map((r) => r.sport)).size;
     const avgEdge = futuresRows.length ? futuresRows.reduce((s, r) => s + Math.abs(r.edge ?? 0), 0) / futuresRows.length : null;
