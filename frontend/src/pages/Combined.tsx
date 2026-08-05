@@ -377,6 +377,14 @@ export function Combined() {
       return { ms: null, date: r.gameday };
     };
     const inWindow = (r: RecommendedBetRow) => {
+      // Season-long markets belong on the Futures tab, not in a list of games
+      // kicking off. They leak in because CFB and WNBA have no /futures endpoint
+      // -- every other sport does -- so their win-total, playoff and conference
+      // ladders come through the GAME feed with stake_pool "futures" and no game
+      // date. Measured: 78 such rows (CFB win_total/cfb_playoff/
+      // conference_champion, WNBA win_total). Excluded here by pool rather than
+      // by a market-type list, so a new season market can't reintroduce it.
+      if (r.stakePool === "futures") return false;
       const { ms, date } = start(r);
       if (ms !== null && ms < now) return false;        // already started -> not "upcoming"
       if (until === null) return true;                   // "all": futures (date null) live only here
