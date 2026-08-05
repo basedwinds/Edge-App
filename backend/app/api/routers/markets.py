@@ -249,28 +249,31 @@ def _team_points_scores(ratings: dict, mode: str) -> dict[str, float]:
 
 
 def _implied_prob(snap):
-    """The price you would actually PAY to take this side -- the ask.
+    """The market's price for this side: the bid/ask MIDPOINT, or last_price when
+    there is no book.
 
-    This returned the bid/ask MIDPOINT until 2026-08-04, and the midpoint is not
-    a tradeable price: you buy at the ask. Every edge, ROI, stake and P/L number
-    in the app was therefore denominated in a price nobody can get.
+    I switched this to the ASK on 2026-08-04 and reverted it the same day. The
+    reasoning for the ask is real -- you cross the spread on a market order, and
+    at longshot prices a 1.5c difference is worth 13pp of ROI. But the evidence
+    did not support applying it here:
 
-    Measured before changing it. Both sides of a tennis moneyline, each recorded
-    at its own midpoint, summed to a median of 0.825 -- i.e. the pair looked like
-    it paid $1.00 for 82.5 cents, free money by construction. Re-pricing every
-    settled bet at the ask moved the automated harness from +12.6% to -13.4% ROI
-    (n=2,138, 95% CI [-19%, -7.8%]) and the hand-picked book from +21.6% to -9.0%
-    on the same win rates -- 15pp and 31pp of the apparent edge was the half-spread
-    the midpoint quietly handed back.
+      * It was checked against markets that HAVE a two-sided quote, which is 7%
+        of tennis bets (149 of 2,166) and 3 of 48 in the hand-picked book. Those
+        are the liquid ones -- systematically unlike the ITF/Challenger markets
+        where most bets actually live. Generalising from them was wrong.
+      * The supporting "both sides sum to 0.825" finding was contaminated: 99 of
+        117 pairs were the SAME player quoted on two venues, not opposite sides.
+      * On Kalshi you set a limit price. The user verifies the quote before
+        placing and gets it, so the midpoint is achievable in this workflow --
+        the ask is the worst case, not the expected case.
 
-    Falls back to last_price when there is no ask (Polymarket supplies no book on
-    many markets). last_price is not guaranteed tradeable either, but it is a real
-    print rather than a synthetic average of two sides.
+    The honest treatment is to show the spread alongside the price and let the
+    reader judge the fill, not to silently pick a bound for them.
     """
     if snap is None:
         return None
-    if snap.yes_ask is not None:
-        return round(snap.yes_ask, 4)
+    if snap.yes_bid is not None and snap.yes_ask is not None:
+        return round((snap.yes_bid + snap.yes_ask) / 2, 4)
     return snap.last_price
 
 

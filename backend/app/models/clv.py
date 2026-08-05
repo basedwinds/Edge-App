@@ -22,17 +22,13 @@ from app.db.models import CfbGame, Cs2Match, LolMatch, MmaFight, MarketSnapshot,
 
 
 def _implied_prob(snap: MarketSnapshot | None) -> float | None:
-    """The ask, matching markets.py::_implied_prob -- see its docstring for why
-    the midpoint was wrong and what re-pricing measured.
-
-    Both ends of a CLV comparison have to be quoted the same way. Entry is now
-    the ask, so the closing line is too; otherwise every CLV number would carry
-    a half-spread of drift that has nothing to do with the line moving.
-    """
+    """Midpoint, matching markets.py::_implied_prob -- see its docstring for the
+    ask experiment and why it was reverted. Both ends of a CLV comparison must be
+    quoted the same way."""
     if snap is None:
         return None
-    if snap.yes_ask is not None:
-        return round(snap.yes_ask, 4)
+    if snap.yes_bid is not None and snap.yes_ask is not None:
+        return round((snap.yes_bid + snap.yes_ask) / 2, 4)
     return snap.last_price
 
 
