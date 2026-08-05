@@ -53,7 +53,7 @@ from app.models.ladder_sanity import (
     VALORANT_POLYMARKET_LIVE_TRADING_MIN_VOLUME_DELTA,
     looks_already_live_by_trading,
 )
-from app.models.esports_start_time import trusted_start_time
+from app.models.esports_start_time import borrowed_start_times, corrected_start_time
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -411,6 +411,9 @@ def list_valorant_markets(session: Session = Depends(get_session)):
     # One id per real FIXTURE: duplicate Kalshi/Polymarket rows of the same
     # match share it, so the frontend's dedupe and per-match stake cap stop
     # being bypassed by the two rows having different ids.
+    # Built from EVERY match row, not just this request's, because the
+    # fixture whose clock was copied may not itself have a market here.
+    _borrowed = borrowed_start_times(session.query(ValorantMatch).all())
     _fixture_keys = canonical_fixture_ids(session, ValorantMatch)
 
     markets = [
@@ -470,10 +473,10 @@ def list_valorant_markets(session: Session = Depends(get_session)):
                 fixture_key=_fixture_keys.get(m.valorant_match_id, m.valorant_match_id),
                 event_name=match.event_name if match else None,
                 match_date=match.match_date if match else None,
-                # Guarded: a fixture's start time can belong to a DIFFERENT
-                # fixture between the same teams (see esports_start_time).
-                estimated_start_time=trusted_start_time(
-                    match.estimated_start_time, match.match_date) if match else None,
+                # A start time can be BORROWED from a rematch between the same
+                # teams -- corrected only for rows where that collision is
+                # provable (see esports_start_time).
+                estimated_start_time=corrected_start_time(match, _borrowed),
                 best_of=match.best_of if match else None,
                 group_label=m.group_label,
                 implied_prob=implied,
