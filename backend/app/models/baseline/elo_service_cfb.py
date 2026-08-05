@@ -36,7 +36,7 @@ log = logging.getLogger("elo_service_cfb")
 _DATA_DIR = Path(__file__).resolve().parents[4] / "data"
 _CACHE_FILE = _DATA_DIR / "cfb_game_cache.json"
 
-_cache: dict = {"state": None}
+_cache: dict = {"state": None, "fbs_share": {}}
 
 
 def _historical_games() -> list[dict]:
@@ -82,6 +82,43 @@ def _db_games() -> list[dict]:
         session.close()
 
 
+# Below this share of a team's games played against opponents in a mapped FBS
+# conference, its rating is not on the same scale as the rest of the league.
+#
+# Elo only makes two ratings comparable when the pool is CONNECTED: strength has
+# to flow between teams through actual results. A programme that has just moved
+# up from FCS carries a rating earned almost entirely inside the division it
+# left. Measured on the cache: NDSU is 63-11 across 74 games with SIX of those
+# 74 opponents in an FBS conference (8%), median opponent Elo 1432 -- against
+# UNLV at 92% and Ohio State at 96%, median opponent 1753. Its 1849 is a real
+# number about a different population.
+#
+# Exactly 5 of 138 mapped teams fall below this line, and all five are recent
+# FCS-to-FBS moves (NDSU, SAC, DEL, MOST, KENN) -- a coherent group, not noise.
+#
+# NOT a rating adjustment. Shrinking toward the mean was considered and
+# rejected: the bias could not be measured. Poorly-connected teams play so few
+# FBS games that the sample is n=54, and the neighbouring connectivity band
+# moves the opposite way (+7.1pp), while well-connected teams (n=1,915) are
+# calibrated to 0.0pp. There is no honest magnitude to fit, so this flags the
+# rating as out-of-scale and lets the caller decline to stake it, rather than
+# inventing a correction.
+MIN_FBS_CONNECTIVITY = 0.50
+
+
+def fbs_connectivity(team: str) -> float | None:
+    """Share of this team's played games that were against a team in a mapped
+    FBS conference. None when the team has no games on record."""
+    return _cache.get("fbs_share", {}).get(team)
+
+
+def is_weakly_connected(team: str) -> bool:
+    """True when this team's rating was built mostly outside the FBS pool, so it
+    is not comparable to the ratings it will be priced against."""
+    share = fbs_connectivity(team)
+    return share is not None and share < MIN_FBS_CONNECTIVITY
+
+
 def refresh_ratings():
     hist = _historical_games()
     seen = {g["id"] for g in hist}
@@ -99,6 +136,24 @@ def refresh_ratings():
             adv = effective_home_field_adv(bool(g.get("neutral")))
             update_ratings(state, g["home_team"], g["away_team"], g["home_score"], g["away_score"], adv)
             applied += 1
+    # Connectivity to the FBS pool, computed off the same replay so it can never
+    # disagree with the ratings it qualifies.
+    try:
+        from app.models.season_sim_cfb import load_conferences
+        conf = load_conferences()
+    except Exception:
+        conf = {}
+    if conf:
+        played: dict[str, int] = {}
+        vs_fbs: dict[str, int] = {}
+        for g in games:
+            if g.get("home_score") is None or g.get("away_score") is None:
+                continue
+            for me, opp in ((g["home_team"], g["away_team"]), (g["away_team"], g["home_team"])):
+                played[me] = played.get(me, 0) + 1
+                if conf.get(opp):
+                    vs_fbs[me] = vs_fbs.get(me, 0) + 1
+        _cache["fbs_share"] = {t: vs_fbs.get(t, 0) / n for t, n in played.items() if n}
     _cache["state"] = state
     log.info(
         "cfb elo ratings refreshed: %d teams rated from %d games (%d historical + %d live)",

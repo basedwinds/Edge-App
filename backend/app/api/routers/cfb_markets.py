@@ -31,6 +31,13 @@ from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fract
 
 router = APIRouter(prefix="/cfb", tags=["cfb"])
 
+# Shown on rows whose team's Elo was earned outside the FBS pool -- see
+# elo_service_cfb.MIN_FBS_CONNECTIVITY for why the rating is not comparable and
+# why no numerical correction is applied.
+WEAK_POOL_NOTE = "rating built outside FBS play - tracking only"
+
+
+
 GAME_MARKET_TYPES = {"moneyline"}
 # Season-long ladders -- no cfb_game_id, priced from the season Monte Carlo
 # rather than a single game's Elo.
@@ -420,6 +427,14 @@ def list_cfb_futures(session: Session = Depends(get_session)):
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full,
                                            unit_scale=FUTURES_UNIT_SCALE)
+        # A team whose rating was built almost entirely outside the FBS pool is
+        # priced on a scale the rest of this market is not on. Shown with its
+        # model number so it can be tracked, never staked -- same posture as the
+        # player-stat projections. Zeroed AFTER sizing so the edge still surfaces.
+        weak_pool = m.team is not None and elo_service_cfb.is_weakly_connected(m.team)
+        if weak_pool:
+            kelly = None
+            stake_dollars = None
         out.append(FuturesMarketOut(
             id=m.id, market_type=m.market_type, source=m.source, team=m.team,
             group_label=m.group_label, line=m.line, side=m.side,
@@ -436,6 +451,7 @@ def list_cfb_futures(session: Session = Depends(get_session)):
             suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
             stake_pool="futures" if kelly is not None else None,
             line_move_pp=None,
+            model_note=WEAK_POOL_NOTE if weak_pool else None,
         ))
     out.sort(key=lambda r: (r.market_type, -(r.implied_prob or 0)))
     return out
