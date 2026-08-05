@@ -38,6 +38,28 @@ log = logging.getLogger("season_sim_wnba")
 _SEASON_START = (4, 15)
 _SEASON_END = (9, 30)
 
+# Per-season, per-team Elo uncertainty, in Elo points -- the same fix already
+# shipped for CFB (225), NFL (100) and NBA (75). Without it each rating is
+# treated as EXACTLY known and every game as an independent coin, making a
+# 44-game season ~binomial and far too narrow. Real pre-season uncertainty is
+# about the TEAM and persists all season, which fattens the tails in a way
+# independent flips cannot.
+#
+# 100 is measured. Backtest on data/wnba_game_cache.json (2021-2026), seasons
+# 2023-2025 each projected from PRIOR-SEASONS-ONLY Elo with zero games played,
+# 280 team-threshold predictions:
+#
+#   sigma=0     mean abs gap 7.77pp, Brier 0.1040
+#   sigma=100   mean abs gap 1.50pp, Brier 0.0936  (every bucket within 3.7pp)
+#
+# Leave-one-season-out improved all 3 held-out seasons (7.23->5.37, 10.80->4.54,
+# 8.80->4.53) and fitted 100/100/125, so 100 is the modal AND the low end.
+#
+# WEAKER EVIDENCE THAN NBA'S, and deliberately noted: only 3 testable seasons
+# and n=280, versus NBA's 10 seasons and n=2,700. The DIRECTION is unanimous
+# across folds; the exact magnitude is not pinned down as tightly.
+TEAM_STRENGTH_SIGMA = 100.0
+
 _TTL = 3600
 # Retry window for a FAILED run (empty distribution) -- see warm().
 _FAILURE_TTL = 120
@@ -128,11 +150,28 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
     ai = np.array([x[1] for x in pair])
     rng = np.random.default_rng()
 
+    # Per-trial team-strength offsets (TEAM_STRENGTH_SIGMA). This module keeps
+    # PROBABILITIES rather than ratings, so the offset is applied in Elo space
+    # by inverting each probability back to the effective Elo diff it implies,
+    # shifting it, and converting back. Inverting rather than re-deriving from
+    # raw ratings deliberately preserves everything get_home_win_prob already
+    # folded in (home-court advantage, neutral sites), which a re-derivation
+    # would silently drop.
+    p_safe = np.clip(p_arr, 1e-6, 1 - 1e-6)
+    diff_arr = 400.0 * np.log10(p_safe / (1.0 - p_safe))
+
     wins = np.tile(banked, (trials, 1)).astype(np.int32)
     done = 0
     while done < trials:
         n = min(500, trials - done)
-        hw = rng.random((n, len(p_arr))) < p_arr
+        if TEAM_STRENGTH_SIGMA > 0:
+            # One draw per simulated season per team, held across all its games.
+            off = rng.normal(0.0, TEAM_STRENGTH_SIGMA, size=(n, len(teams)))
+            d = diff_arr[None, :] + off[:, hi] - off[:, ai]
+            p_mat = 1.0 / (1.0 + 10.0 ** (-d / 400.0))
+            hw = rng.random((n, len(p_arr))) < p_mat
+        else:
+            hw = rng.random((n, len(p_arr))) < p_arr
         np.add.at(wins[done:done + n], (slice(None), hi), hw)
         np.add.at(wins[done:done + n], (slice(None), ai), ~hw)
         done += n

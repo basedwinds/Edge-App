@@ -28,7 +28,9 @@ much this shapes the whole simulator:
     pattern (higher seed hosts games 1,2,5,7), stopping at 4 wins.
 
 Elo ratings held STATIC across all remaining games within a single trial,
-same simplification as the NFL version.
+same simplification as the NFL version -- but each trial now draws its own
+per-team strength offset (see TEAM_STRENGTH_SIGMA), so a team is the same team
+all season while the SEASON-TO-SEASON uncertainty in its rating is modelled.
 """
 import random
 
@@ -37,6 +39,28 @@ from app.models.baseline.elo_nba import effective_home_court_adv, win_prob
 
 N_TRIALS = 2000
 MAX_REG_WINS = 82  # NBA regular season length; win-count histograms use indices 0..82
+
+# Per-season, per-team Elo uncertainty, in Elo points. Same fix as CFB
+# (sigma=225) and NFL (sigma=100): treating each rating as EXACTLY known and
+# every game as an independent coin makes an 82-game season ~binomial, which is
+# far too narrow. Real pre-season uncertainty is about the TEAM (trades, a
+# rookie leap, health) and PERSISTS across all 82 games, fattening the tails in
+# a way independent flips cannot.
+#
+# 75 is measured, not assumed. Backtest over 10 seasons (2016-2026), each
+# projected from PRIOR-SEASONS-ONLY Elo with zero games played -- exactly what
+# a pre-season futures market prices -- 2,700 team-threshold predictions:
+#
+#   sigma=0    predicted 99.5% -> happened 92.4%; 88.7% -> 72.8%; 11.4% -> 28.2%
+#              mean abs gap 8.70pp, Brier 0.1245
+#   sigma=75   every bucket within 2.0pp
+#              mean abs gap 1.30pp, Brier 0.1134
+#
+# Leave-one-season-out picked 75 in 9 of 10 folds and improved the held-out
+# season in 9 of 10 (only 2017 got worse). AUC RISES 0.9181 -> 0.9201, so this
+# widens the distribution (win-total sd 4.26 -> 8.57 wins) without flattening
+# the ranking. Evidence is stronger than NFL's and comparable to CFB's.
+TEAM_STRENGTH_SIGMA = 75.0
 
 # Which games (1-indexed) the HIGHER seed hosts in a best-of-7 series --
 # real NBA format since 2014 (previously 2-3-2), confirmed via the same
@@ -142,12 +166,28 @@ def run_simulation(
         wins = {t: starting_wins.get(t, 0) for t in all_teams}
         head_to_head: dict[tuple, str] = {}
 
+        # ONE team-strength draw per simulated season, applied by building the
+        # trial's rating table up front rather than threading an `offsets`
+        # argument through all 11 _simulate_game/_simulate_series call sites.
+        # That is deliberate: the NFL version of this fix threaded a parameter
+        # and silently missed the four playoff calls, which would have given a
+        # team one strength in the regular season and another in the playoffs.
+        # Substituting the table makes that class of miss impossible -- every
+        # downstream call reads the same per-trial ratings by construction.
+        if TEAM_STRENGTH_SIGMA > 0:
+            ratings_t = {
+                t: ratings.get(t, 1500.0) + rng.gauss(0.0, TEAM_STRENGTH_SIGMA)
+                for t in all_teams
+            }
+        else:
+            ratings_t = ratings
+
         for g in remaining:
             home, away = g["home_team"], g["away_team"]
             if home not in wins or away not in wins:
                 continue
             adv = effective_home_court_adv(home, g.get("location"), g.get("home_rest"), g.get("away_rest"))
-            winner = _simulate_game(ratings, home, away, adv, rng)
+            winner = _simulate_game(ratings_t, home, away, adv, rng)
             loser = away if winner == home else home
             wins[winner] += 1
             head_to_head[(winner, loser)] = winner
@@ -179,11 +219,11 @@ def run_simulation(
                 tallies[t]["play_in"] += 1
 
             # Play-in: 7v8 (winner -> 7-seed bracket slot), 9v10 (loser eliminated)
-            seven_v_eight_winner = _simulate_game(ratings, seven, eight, effective_home_court_adv(seven, None, None, None), rng)
+            seven_v_eight_winner = _simulate_game(ratings_t, seven, eight, effective_home_court_adv(seven, None, None, None), rng)
             seven_v_eight_loser = eight if seven_v_eight_winner == seven else seven
-            nine_v_ten_winner = _simulate_game(ratings, nine, ten, effective_home_court_adv(nine, None, None, None), rng)
+            nine_v_ten_winner = _simulate_game(ratings_t, nine, ten, effective_home_court_adv(nine, None, None, None), rng)
             eighth_seed_winner = _simulate_game(
-                ratings, seven_v_eight_loser, nine_v_ten_winner,
+                ratings_t, seven_v_eight_loser, nine_v_ten_winner,
                 effective_home_court_adv(seven_v_eight_loser, None, None, None), rng,
             )
 
@@ -194,17 +234,17 @@ def run_simulation(
             # First round: 1v8, 2v7, 3v6, 4v5 -- FIXED bracket, no reseeding later
             r1_winners = []
             for hi_idx, lo_idx in ((0, 7), (3, 4), (2, 5), (1, 6)):
-                w = _simulate_series(ratings, bracket[hi_idx], bracket[lo_idx], rng)
+                w = _simulate_series(ratings_t, bracket[hi_idx], bracket[lo_idx], rng)
                 r1_winners.append(w)
             # Conf semis: winner(1v8) vs winner(4v5); winner(2v7) vs winner(3v6)
-            semi1 = _simulate_series(ratings, r1_winners[0], r1_winners[1], rng)
-            semi2 = _simulate_series(ratings, r1_winners[2], r1_winners[3], rng)
-            conf_champ = _simulate_series(ratings, semi1, semi2, rng)
+            semi1 = _simulate_series(ratings_t, r1_winners[0], r1_winners[1], rng)
+            semi2 = _simulate_series(ratings_t, r1_winners[2], r1_winners[3], rng)
+            conf_champ = _simulate_series(ratings_t, semi1, semi2, rng)
             conf_champs[conf] = conf_champ
             tallies[conf_champ]["conf_champ"] += 1
 
         conf_names = list(CONFERENCES.keys())
-        champion = _simulate_series(ratings, conf_champs[conf_names[0]], conf_champs[conf_names[1]], rng)
+        champion = _simulate_series(ratings_t, conf_champs[conf_names[0]], conf_champs[conf_names[1]], rng)
         tallies[champion]["championship"] += 1
 
     results = {
