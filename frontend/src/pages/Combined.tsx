@@ -418,6 +418,16 @@ export function Combined() {
       }
       return { ms: null, date: r.gameday };
     };
+    // Is this bet still placeable at all? This is what the ALLOCATION uses, so
+    // the funded set never depends on which tab is open.
+    const isUpcoming = (r: RecommendedBetRow) => {
+      if (r.stakePool === "futures") return false;   // season-long -> Futures tab
+      const { ms, date } = start(r);
+      if (ms !== null) return ms >= now;             // already started -> not placeable
+      return date !== null;                          // no clock: keep, the day-level test below filters it
+    };
+
+    // Is it inside the selected view? Applied to the funded set only.
     const inWindow = (r: RecommendedBetRow) => {
       // Season-long markets belong on the Futures tab, not in a list of games
       // kicking off. They leak in because CFB and WNBA have no /futures endpoint
@@ -438,24 +448,42 @@ export function Combined() {
       return date >= localDateStr(0) && date <= localDateStr(Math.ceil(hours! / 24) - 1);
     };
 
-    // The window is applied FIRST, then each sport's portfolio ceiling is spent
-    // on what survived. Done the other way round -- ceiling first, window second
-    // -- a narrow window shows only the leftovers of a global ranking, which is
-    // how Today rendered 3 MLB bets and nothing else while 69 tennis candidates
-    // sat qualified and unshown behind 3 higher-edge ones starting tomorrow.
-    // Each window therefore answers "the best use of this pool on THIS slate",
-    // and the same bet can appear in more than one window -- correct, since the
-    // ceiling is about how much to deploy at once, not a running total.
+    // ALLOCATE ONCE OVER THE WHOLE UPCOMING SLATE, THEN FILTER BY WINDOW.
+    //
+    // This used to run the other way: the window was applied first and each
+    // sport's ceiling was spent on whatever survived, so every window answered
+    // "the best use of this pool on THIS slate". That reads reasonable and is
+    // actively harmful, because a narrow window hides the competition rather
+    // than losing to it. Measured on the live board: Valorant's six slots go to
+    // Enterprise +61.0pp, Eintracht +56.5pp, Joblife +48.3pp and REBORN +43.0pp,
+    // all starting Aug 6-7. Under "Next 24h" those are invisible, so the same
+    // pool funded GiantX GC at +14.1pp -- the app told you to place a 14pp bet
+    // while your Valorant money was better spent on a 61pp one two days out.
+    //
+    // It also made the windows contradict each other: a bet funded under "Next
+    // 24h" simply vanished under "All upcoming". Reported three times (Dplus
+    // KIA, New Meta vs Fennel, G2 Gozen vs GiantX GC).
+    //
+    // So the allocation is now one decision over every upcoming bet, and the
+    // windows are pure views on it -- which is what they are for. "All upcoming"
+    // is a true superset of "Next 48h" is a true superset of "Next 24h", and a
+    // row means the same thing in all three.
+    //
+    // The old comment warned this makes narrow windows sparse. It does, and that
+    // is the honest answer: if the best use of a pool starts on Thursday, the
+    // right number of bets to place today is small. Sparse-but-correct beats
+    // full-of-second-best.
+    //
     // PASS 1 -- each sport spends its OWN ceiling. This is what guarantees every
     // sport with real candidates is represented at all: without it a couple of
     // high-edge sports absorb the whole budget (measured on the live board: the
     // top 20 by raw edge contained zero MLB despite 21 qualifying candidates).
-    let cut = 0;                 // qualified and in-window, but a ceiling was full
+    let cut = 0;                 // qualified and upcoming, but a ceiling was full
     const picked: RecommendedBetRow[] = [];
     for (const p of plans) {
       const spent = { weekly: 0, futures: 0 };
       for (const row of p.ranked) {
-        if (!inWindow(row)) continue;
+        if (!isUpcoming(row)) continue;
         const pool = row.stakePool;
         if (spent[pool] + row.suggestedStakeDollars > p.ceilings[pool]) { cut++; continue; }
         spent[pool] += row.suggestedStakeDollars;
@@ -476,16 +504,24 @@ export function Combined() {
       globalSpent[pool] += row.suggestedStakeDollars;
       out.push(row);
     }
-    // ONLY funded rows. This list is the set of bets to actually place, so a row
-    // that qualified but got no room does not belong in it -- they were briefly
-    // appended (dimmed) to explain why a bet can differ between windows, and the
-    // clutter was worse than the confusion: dozens of unactionable tennis rows
-    // buried the handful that mattered. The window note below carries the
-    // explanation instead, which is where it belongs.
-    return { rows: out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars), cut };
+    // The window now filters the FUNDED set rather than feeding the allocation,
+    // so switching tabs can only ever remove rows, never change what a row says.
+    const funded = out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars);
+    return { rows: funded.filter(inWindow), funded, cut };
   }, [plans, combined, win]);
   const rows = windowed.rows.filter((r) => !isRowNotReady(r, readinessQuery.data));
   const cutByPool = windowed.cut;
+  // Funded bets that start beyond the selected window. Distinct from cutByPool:
+  // these ARE bets to place, just not yet -- the narrow view is short by timing,
+  // not by budget.
+  //
+  // Counted AFTER the readiness filter, on both sides. Reading it off the raw
+  // memo said "24 more" while "All upcoming" listed 14 more, because
+  // out-of-season sports are dropped here rather than in the allocation.
+  const laterCount = Math.max(
+    0,
+    windowed.funded.filter((r) => !isRowNotReady(r, readinessQuery.data)).length - rows.length,
+  );
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
   const stats = useMemo(() => {
@@ -579,8 +615,8 @@ export function Combined() {
               {isFutures ? "season-long / tournament markets — place to track for calibration" : win === "all" ? "everything not yet started" : "games kicking off in this window"}
             </span>
           </div>
-          {/* Each window sizes against the FULL pool, independently -- so working
-              two windows in one sitting can double-commit without warning. */}
+          {/* Allocation happens once over the whole upcoming slate, so the pool is
+              committed once no matter how many windows you look at. */}
           {!isFutures && settingsQuery.data && <PoolExposure settings={settingsQuery.data} />}
 
           {isFutures ? (
@@ -588,16 +624,19 @@ export function Combined() {
           ) : (
             <>
               <RecommendedBetsTable rows={rows} onMarkPlaced={handleMarkPlaced} onShowReasoning={setReasoningRow} placedMarketIds={placedMarketIds} showSport />
-              {/* Say out loud that the list is money-capped, not quality-capped.
-                  Without this a bet that was 4th silently isn't there, which
-                  reads as the app dropping it -- reported twice. */}
+              {/* Two different reasons a bet you expected is absent, kept apart:
+                  it starts outside this view, or the pool had no room for it. */}
+              {laterCount > 0 && (
+                <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+                  {laterCount} more funded {laterCount === 1 ? "bet starts" : "bets start"} after this window —
+                  see &ldquo;All upcoming&rdquo;.
+                </p>
+              )}
               {cutByPool > 0 && (
                 <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
-                  {cutByPool} more {cutByPool === 1 ? "bet qualifies" : "bets qualify"} in this window but
-                  {" "}{cutByPool === 1 ? "has" : "have"} no room — the pool is already fully allocated above.
-                  Each window is funded on its own slate, so a match can be worth backing under
-                  &ldquo;Next 24h&rdquo; and lose its place under &ldquo;All upcoming&rdquo;, where it competes
-                  with every later fixture. Raise a sport&rsquo;s pool in Settings to fund more.
+                  {cutByPool} more {cutByPool === 1 ? "bet qualifies" : "bets qualify"} but
+                  {" "}{cutByPool === 1 ? "has" : "have"} no room — the pool is fully allocated to higher
+                  edges. Raise a sport&rsquo;s pool in Settings to fund more.
                 </p>
               )}
             </>
