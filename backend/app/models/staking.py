@@ -371,15 +371,36 @@ FUTURES_UNIT_SCALE = 0.25
 # against a 25% model is a 3x disagreement, nowhere near the 10x trigger -- and
 # that band is the one both samples agree loses.
 #
-# WHY FUTURES ONLY, for now. The floor is applied where it is best supported and
-# where the harm is worst: a futures bet locks capital for months, and the
-# season-sim models are measurably least reliable in exactly this tail (soccer
-# relegation predicted 40-60% happened 35.8%, and no historically top-half club
-# has ever been rated above 30% relegation in 1,072 backtested team-seasons -- so
-# a longshot future is an overstated tail probability meeting a market longshot).
-# 9 of the 12 losing bets above were GAME bets, so the same floor would very
-# likely help there too -- flagged for the user, deliberately not applied
-# unilaterally, since that changes the main betting flow rather than this list.
+# READ THIS BEFORE TRUSTING THE ROI TABLE ABOVE. Extending this floor to GAME
+# bets was built, measured, and REVERTED, and the same measurement weakened the
+# case for the numbers above:
+#
+#  - **0-for-12 is not a significant result.** At a true 12% win rate in that
+#    band, P(0 wins in 12) = 21.6%; for the 9 game bets alone, P(0 in 9) = 31.6%.
+#    A run like that turns up about one time in four. It is not evidence of a
+#    broken band, and quoting it as though it were was overstating the case.
+#  - **The band effect is SPORT-DEPENDENT, not general.** Splitting the paper
+#    harness under 10c: tennis n=91 ROI **+7.5%** (positive, and the largest
+#    sub-10c sample there is); all other sports n=35 ROI -32.1%; racing n=0.
+#    The pooled "5-10% is -12.0%" was largely tennis, whose 0-5% is +30.7%.
+#  - **A blanket game floor would have gutted racing on zero evidence**: 70.6% of
+#    F1, 62.9% of IndyCar and 52.3% of NASCAR recommendations price under 10c,
+#    and racing has 193 paper bets ALL STILL PENDING -- not one settled outcome
+#    at any price. Same shape as the 15%-futures-floor mistake, which would have
+#    deleted every LoL/tennis/Valorant row.
+#
+# SO WHY KEEP IT FOR FUTURES? Not because the price band is proven -- it isn't.
+# It is a PRECAUTIONARY rule, and the asymmetry is real:
+#   - Futures have essentially NO forward validation: 7 settled real bets and 1
+#     of 180 paper. Betting the extreme tail of a model nothing has yet checked
+#     is a different proposition from betting its middle.
+#   - The one futures market type that COULD be tested is overstated in exactly
+#     that tail (soccer relegation predicted 40-60% happened 35.8%, and no
+#     historically top-half club has ever been rated above 30% relegation in
+#     1,072 backtested team-seasons).
+#   - Being wrong locks capital for months, and it costs 4 rows.
+# Game bets have none of those: they settle in hours, they carry the bulk of the
+# validation, and the biggest sub-10c sample in them is positive.
 FUTURES_MIN_MARKET_PRICE = 0.10
 
 
