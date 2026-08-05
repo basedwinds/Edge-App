@@ -41,6 +41,8 @@ for the validated rest/fatigue adjustment applied at PREDICTION time only
 elo_service_cs2.py's own version)."""
 import datetime
 import json
+import unicodedata
+import re
 import logging
 from pathlib import Path
 
@@ -183,6 +185,16 @@ def refresh_ratings():
         if match_date and m["winner"] is not None:
             last_played_date[m["team_a"]] = match_date
             last_played_date[m["team_b"]] = match_date
+    # Count real, settled appearances per spelling -- that asymmetry is what
+    # makes the alias redirect safe (see _build_name_aliases).
+    match_counts: dict[str, int] = {}
+    for m in all_matches:
+        if m.get("winner") is None:
+            continue
+        for side in ("team_a", "team_b"):
+            match_counts[m[side]] = match_counts.get(m[side], 0) + 1
+    _cache["match_counts"] = match_counts
+    _cache["canonical_by_key"] = _build_canonical_by_key(match_counts)
     _cache["state"] = state
     _cache["last_played_date"] = last_played_date
     log.info(
@@ -191,11 +203,70 @@ def refresh_ratings():
     )
 
 
+_CORPORATE_SUFFIXES = ("esports club", "e sports", "esports", "gaming", "club")
+
+
+def _name_key(name: str) -> str:
+    """Orthographic key: accents folded, case dropped, punctuation collapsed, one
+    trailing corporate token removed. Empty for names with no ASCII content."""
+    t = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    for suf in sorted(_CORPORATE_SUFFIXES, key=len, reverse=True):
+        if t.endswith(" " + suf):
+            return t[: -len(suf) - 1].strip()
+    return t
+
+
+def _build_canonical_by_key(match_counts: dict[str, int]) -> dict[str, str]:
+    """{orthographic key: the spelling that owns the match history}.
+
+    Keyed by NAME KEY, not by source spelling, and that distinction is the whole
+    point. An earlier version mapped source->target over names seen in MATCHES,
+    which silently did nothing: the spellings that need resolving are the ones
+    the MARKETS use, and those often appear in no match at all ("Gen.G Esports",
+    "Leviatan Esports", "Pcific"). Resolving by key handles a market spelling
+    that has never been seen before.
+
+    A key is only usable when EXACTLY ONE spelling under it clears MIN_GAMES.
+    Zero targets, or two plausible ones, resolve to nothing -- ambiguity is
+    dropped rather than guessed, the same discipline lol_team_aliases.py states:
+    an unresolved name costs one unpriced market, a wrong one prices a bet off
+    another team's strength.
+    """
+    by_key: dict[str, list[str]] = {}
+    for name, n in match_counts.items():
+        k = _name_key(name)
+        if k:
+            by_key.setdefault(k, []).append(name)
+    out: dict[str, str] = {}
+    for k, names in by_key.items():
+        strong = [n for n in names if match_counts.get(n, 0) >= MIN_GAMES]
+        if len(strong) == 1:
+            out[k] = strong[0]
+    return out
+
+
+def resolve_team_name(team: str) -> str:
+    """The spelling that owns this team's match history, or the input unchanged.
+
+    A name that already has its own real history is never redirected -- this only
+    rescues spellings the match data does not use.
+    """
+    if not team:
+        return team
+    counts = _cache.get("match_counts") or {}
+    if counts.get(team, 0) >= MIN_GAMES:
+        return team
+    canon = (_cache.get("canonical_by_key") or {}).get(_name_key(team))
+    return canon or team
+
+
 def get_team_rating(team: str) -> float | None:
     state = _cache.get("state")
     if state is None:
         return None
-    return state.get(team)
+    return state.get(resolve_team_name(team))
 
 
 MIN_GAMES = 5  # both teams need this many real map observations before a rating counts as trustworthy -- see get_series_distribution's own docstring for the real Brier-by-games-bucket data behind the number
@@ -311,6 +382,13 @@ def get_series_distribution(team_a: str, team_b: str, best_of: int, match_date: 
     state = _cache.get("state")
     if state is None or not best_of:
         return None
+    # Resolve each side onto the spelling that owns its match history BEFORE the
+    # games gate. Doing it only in get_team_rating left this gate reading the raw
+    # market spelling, so a team whose history lives under another spelling still
+    # failed MIN_GAMES and the whole match stayed unpriced -- the redirect had no
+    # effect on the one code path that decides whether a market can be priced.
+    team_a = resolve_team_name(team_a)
+    team_b = resolve_team_name(team_b)
     if state.games_played(team_a) < MIN_GAMES or state.games_played(team_b) < MIN_GAMES:
         return None
     dist = _blend_h2h(state, team_a, team_b, predict_series(state, team_a, team_b, best_of))
