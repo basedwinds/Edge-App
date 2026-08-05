@@ -305,7 +305,11 @@ const columns = [
       return (
         <div className="flex flex-col gap-1">
           <span className="tabular-nums font-mono text-[var(--color-good)] font-medium whitespace-nowrap">
-            {r.suggestedStakeUnits !== null ? `${r.suggestedStakeUnits.toFixed(1)}u` : "—"}
+            {/* 2dp below one unit: 1dp renders a 0.25u stake as "0.3u", a number
+                nobody set. Above a unit 1dp is plenty. */}
+            {r.suggestedStakeUnits !== null
+              ? `${r.suggestedStakeUnits < 1 ? r.suggestedStakeUnits.toFixed(2) : r.suggestedStakeUnits.toFixed(1)}u`
+              : "—"}
             <span className="text-[var(--color-text-muted)] ml-1 font-normal">
               (${r.suggestedStakeDollars.toLocaleString()})
             </span>

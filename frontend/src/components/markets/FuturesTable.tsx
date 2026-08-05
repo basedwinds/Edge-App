@@ -184,7 +184,12 @@ const columns = [
       }
       return (
         <span className="tabular-nums font-mono text-[var(--color-good)]">
-          {units !== null ? `${units.toFixed(1)}u` : `$${info.getValue()!.toLocaleString()}`}
+          {units !== null
+            // 1dp renders a 0.25u futures stake as "0.3u", which reads as a
+            // number nobody set. Sub-unit stakes get 2dp so the figure on
+            // screen is the one the pool cap actually produced.
+            ? `${units < 1 ? units.toFixed(2) : units.toFixed(1)}u`
+            : `$${info.getValue()!.toLocaleString()}`}
           <span className="text-[var(--color-text-muted)] ml-1">(${info.getValue()!.toLocaleString()}, {(kelly * 100).toFixed(1)}%)</span>
         </span>
       );
