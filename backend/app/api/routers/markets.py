@@ -270,9 +270,39 @@ def _implied_prob(snap):
     The honest treatment is to show the spread alongside the price and let the
     reader judge the fill, not to silently pick a bound for them.
     """
+    NO_BOOK_SPREAD = 0.90
+
     if snap is None:
         return None
     if snap.yes_bid is not None and snap.yes_ask is not None:
+        # A >=90c spread is not a wide market, it is the ABSENCE of one: two
+        # token orders parked at the extremes. Averaging them yields ~0.50
+        # regardless of what the contract is worth, which manufactures a huge
+        # edge against any confident model. Found on PHI 80+ wins -- bid 0.01,
+        # ask 0.99, last trade 0.90, printed as "market says 50%" for a +46.9pp
+        # edge that was the largest on the MLB board. Real edge ~7pp.
+        #
+        # The threshold is measured, not chosen for neatness. Median |mid -
+        # last_price| by spread, over 19,190 active two-sided markets:
+        #
+        #   spread <5c    0.5pp     30-50c   19.5pp
+        #   5-15c         2.0pp     50-70c   35.0pp
+        #   15-30c        9.0pp     >=90c     0.0pp (bimodal: 37% off by >20pp)
+        #
+        # Note what this does NOT do: the 30-70c band has the worst midpoints,
+        # but last_price sits inside [bid, ask] only 43.6% of the time there, so
+        # neither number is trustworthy and there is no evidence-backed choice
+        # between them. Overriding that band would repeat the mid-vs-ask mistake
+        # -- generalising a rule from markets it wasn't measured on. Left alone.
+        #
+        # At >=90c the median difference is 0.0pp, so this is a no-op wherever
+        # the two already agree and only bites on the ~37% tail where the book
+        # is pure noise and an actual trade is the better evidence.
+        # The 1e-9 is not decoration: prices are cents-as-floats, and a literal
+        # 5c/95c book gives 0.95 - 0.05 = 0.8999999999999999, which silently
+        # fails a bare >= 0.90 and leaves the exact case this guards for broken.
+        if snap.yes_ask - snap.yes_bid >= NO_BOOK_SPREAD - 1e-9 and snap.last_price is not None:
+            return snap.last_price
         return round((snap.yes_bid + snap.yes_ask) / 2, 4)
     return snap.last_price
 
@@ -596,7 +626,7 @@ def list_markets(session: Session = Depends(get_session)):
     # split and was querying EVERY sport's game markets (34k rows, ~11s),
     # showing e.g. NBA/MLB markets on the NFL page with a null NFL model_prob.
     # Each other sport's router already scopes to its own sport; NFL must too.
-    markets = session.query(Market).filter(Market.sport == "nfl", Market.market_type.notin_(excluded)).all()
+    markets = session.query(Market).filter(Market.sport == "nfl", Market.market_type.notin_(excluded), Market.status == "active").all()
     # Skip markets tied to a game that's already final -- once the poller
     # stops refreshing a played game's market, its price is frozen while this
     # endpoint would otherwise keep computing a fresh model_prob off current
@@ -809,7 +839,7 @@ def list_futures(session: Session = Depends(get_session)):
     )
     # sport=="nfl" required for the same reason as list_markets above -- this
     # futures endpoint was returning every sport's futures (2,779 rows, ~18s).
-    markets = session.query(Market).filter(Market.sport == "nfl", Market.market_type.in_(included)).all()
+    markets = session.query(Market).filter(Market.sport == "nfl", Market.market_type.in_(included), Market.status == "active").all()
     weekly_pool, futures_pool = get_pool_dollars(session)
     unit_dollars = get_unit_dollars(session)
     fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)

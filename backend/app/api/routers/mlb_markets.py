@@ -279,7 +279,7 @@ def _futures_model_prob(m: Market, sim_results: dict) -> float | None:
 
 @router.get("/futures", response_model=list[FuturesMarketOut])
 def list_mlb_futures(session: Session = Depends(get_session)):
-    markets = session.query(Market).filter(Market.sport == "mlb", Market.market_type.in_(FUTURES_MARKET_TYPES)).all()
+    markets = session.query(Market).filter(Market.sport == "mlb", Market.market_type.in_(FUTURES_MARKET_TYPES), Market.status == "active").all()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     sim_results = get_mlb_season_sim_results()
     weekly_pool, futures_pool = get_mlb_pool_dollars(session)
@@ -333,7 +333,7 @@ def _batch_mlb_news_adjustments(session: Session, game_ids: set[str]) -> dict[st
 
 @router.get("/markets", response_model=list[MlbMarketOut])
 def list_mlb_markets(session: Session = Depends(get_session)):
-    markets = session.query(Market).filter(Market.sport == "mlb", Market.market_type.in_(GAME_MARKET_TYPES)).all()
+    markets = session.query(Market).filter(Market.sport == "mlb", Market.market_type.in_(GAME_MARKET_TYPES), Market.status == "active").all()
     game_ids = {m.mlb_game_id for m in markets if m.mlb_game_id}
     games_by_id = {g.id: g for g in session.query(MlbGame).filter(MlbGame.id.in_(game_ids)).all()} if game_ids else {}
     # REAL BUG caught live via the Recommended Bets page (2026-07-17): once a

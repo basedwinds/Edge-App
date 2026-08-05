@@ -186,7 +186,7 @@ def _cfb_season_model_prob(m, win_dist, sim_trials, po_sim, conf_sim):
 @router.get("/markets", response_model=list[CfbMarketOut])
 def list_cfb_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(
-        Market.sport == "cfb", Market.market_type.in_(ALL_MARKET_TYPES)
+        Market.sport == "cfb", Market.market_type.in_(ALL_MARKET_TYPES), Market.status == "active"
     ).all()
     win_dist, sim_trials = season_sim_cfb.get()
     from app.ingestion.poller_cfb import _CONF_SIM
@@ -389,7 +389,7 @@ def list_cfb_futures(session: Session = Depends(get_session)):
     """
     markets = (
         session.query(Market)
-        .filter(Market.sport == "cfb", Market.market_type.in_(SEASON_MARKET_TYPES | {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"}))
+        .filter(Market.sport == "cfb", Market.market_type.in_(SEASON_MARKET_TYPES | {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"}), Market.status == "active")
         .all()
     )
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])

@@ -186,7 +186,7 @@ def _futures_model_prob(m: Market, sim_results: dict) -> float | None:
 
 @router.get("/futures", response_model=list[FuturesMarketOut])
 def list_nba_futures(session: Session = Depends(get_session)):
-    markets = session.query(Market).filter(Market.sport == "nba", Market.market_type.in_(FUTURES_MARKET_TYPES)).all()
+    markets = session.query(Market).filter(Market.sport == "nba", Market.market_type.in_(FUTURES_MARKET_TYPES), Market.status == "active").all()
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     sim_results = get_season_sim_results()
     weekly_pool, futures_pool = get_nba_pool_dollars(session)
@@ -242,7 +242,7 @@ def _batch_news_adjustments(session: Session, game_ids: set[str]) -> dict[str, N
 
 @router.get("/markets", response_model=list[NbaMarketOut])
 def list_nba_markets(session: Session = Depends(get_session)):
-    markets = session.query(Market).filter(Market.sport == "nba", Market.market_type.in_(GAME_MARKET_TYPES)).all()
+    markets = session.query(Market).filter(Market.sport == "nba", Market.market_type.in_(GAME_MARKET_TYPES), Market.status == "active").all()
     game_ids = {m.nba_game_id for m in markets if m.nba_game_id}
     games_by_id = {g.id: g for g in session.query(NbaGame).filter(NbaGame.id.in_(game_ids)).all()} if game_ids else {}
     # Skip markets tied to a game that's already final -- once the poller

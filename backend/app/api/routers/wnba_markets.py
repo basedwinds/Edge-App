@@ -192,7 +192,7 @@ def _wnba_season_model_prob(m, win_dist, sim_trials):
 
 @router.get("/markets", response_model=list[WnbaMarketOut])
 def list_wnba_markets(session: Session = Depends(get_session)):
-    markets = session.query(Market).filter(Market.sport == "wnba", Market.market_type.in_(ALL_MARKET_TYPES)).all()
+    markets = session.query(Market).filter(Market.sport == "wnba", Market.market_type.in_(ALL_MARKET_TYPES), Market.status == "active").all()
     # Computed ONCE per request, not per market: there are ~60 total markets per
     # slate and this walks every finished game in the season.
     scoring = scoring_ratings_wnba.compute_current_scoring_ratings()
@@ -389,7 +389,7 @@ def list_wnba_futures(session: Session = Depends(get_session)):
     """
     markets = (
         session.query(Market)
-        .filter(Market.sport == "wnba", Market.market_type.in_(SEASON_MARKET_TYPES))
+        .filter(Market.sport == "wnba", Market.market_type.in_(SEASON_MARKET_TYPES), Market.status == "active")
         .all()
     )
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
