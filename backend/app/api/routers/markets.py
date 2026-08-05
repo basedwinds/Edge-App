@@ -249,10 +249,28 @@ def _team_points_scores(ratings: dict, mode: str) -> dict[str, float]:
 
 
 def _implied_prob(snap):
+    """The price you would actually PAY to take this side -- the ask.
+
+    This returned the bid/ask MIDPOINT until 2026-08-04, and the midpoint is not
+    a tradeable price: you buy at the ask. Every edge, ROI, stake and P/L number
+    in the app was therefore denominated in a price nobody can get.
+
+    Measured before changing it. Both sides of a tennis moneyline, each recorded
+    at its own midpoint, summed to a median of 0.825 -- i.e. the pair looked like
+    it paid $1.00 for 82.5 cents, free money by construction. Re-pricing every
+    settled bet at the ask moved the automated harness from +12.6% to -13.4% ROI
+    (n=2,138, 95% CI [-19%, -7.8%]) and the hand-picked book from +21.6% to -9.0%
+    on the same win rates -- 15pp and 31pp of the apparent edge was the half-spread
+    the midpoint quietly handed back.
+
+    Falls back to last_price when there is no ask (Polymarket supplies no book on
+    many markets). last_price is not guaranteed tradeable either, but it is a real
+    print rather than a synthetic average of two sides.
+    """
     if snap is None:
         return None
-    if snap.yes_bid is not None and snap.yes_ask is not None:
-        return round((snap.yes_bid + snap.yes_ask) / 2, 4)
+    if snap.yes_ask is not None:
+        return round(snap.yes_ask, 4)
     return snap.last_price
 
 
