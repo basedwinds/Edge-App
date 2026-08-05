@@ -41,6 +41,31 @@ from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
 
+# Map markets are priced but NEVER STAKED.
+#
+# The model has no map-specific view at all: prob_map_n_win_a takes a map number
+# and uses it only to bounds-check, returning the SAME per-map probability for
+# every map in the series. Verified live -- across 84 LoL matches pricing a team
+# on multiple maps, every one had exactly ONE distinct model probability.
+#
+# The market plainly models something we do not. BoostGate vs SU Esports, a Bo3
+# that had not been played: our model said 35.55% for map 1 AND map 2, while
+# Kalshi said 39.0%/16.5% and Polymarket 24.5%/15.0% -- both venues independently
+# pricing map 2 far below map 1 for the same team. Whatever that structure is
+# (side selection, draft, map order), we do not represent it, so an "edge" here
+# measures our blind spot rather than an advantage.
+#
+# The settled record cannot settle the question either way: filtered to bets that
+# were actually tradeable and cleared the 10pp gate, LoL is +5.5% on n=26, CS2
+# +8.4% on n=7, Valorant -100% on n=6. Those samples are noise, and the headline
+# paper numbers (+12% to +22%) come almost entirely from untradeable rows.
+#
+# So they stay PRICED and VISIBLE -- that is what keeps calibration data
+# accruing so the question becomes answerable -- and carry no stake, the same
+# posture as the esports tournament futures and the player-stat projections.
+MAP_MARKET_NOTE = "no map-specific model (same probability every map) - tracking only, not staked"
+
+
 router = APIRouter(prefix="/lol", tags=["lol"])
 
 GAME_MARKET_TYPES = {"map_winner", "series_total", "series_winner"}
@@ -412,6 +437,12 @@ def list_lol_markets(session: Session = Depends(get_session)):
         pool = futures_pool if m.market_type == "tournament_winner" else weekly_pool
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)
+        # Zeroed AFTER sizing so the model number and edge still surface for
+        # tracking (see MAP_MARKET_NOTE).
+        _map_only = m.market_type == "map_winner"
+        if _map_only:
+            kelly = None
+            stake_dollars = None
         out.append(
             LolMarketOut(
                 id=m.id,
