@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { FALLBACK_FUTURES_UNITS } from "../utils/futuresGroupCap";
 import { fetchSettings, markFuturesBetPlaced } from "../api/markets";
 import type { FuturesMarketRow } from "../types/market";
 
@@ -6,8 +7,6 @@ import type { FuturesMarketRow } from "../types/market";
  * 1-unit stake when the model didn't size one (many futures are tracking-only /
  * untraded), and invalidates the tracker + placed-bet queries so the new
  * position shows up immediately in the tracker's Futures section. */
-const FALLBACK_FUTURES_UNITS = 0.25;
-
 export function useFuturesMarkPlaced(sport: string) {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });

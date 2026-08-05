@@ -24,6 +24,12 @@
  */
 export const MAX_STAKED_LEGS_PER_GROUP = 4;
 
+/** Stake booked when the model DECLINED to size a future (approximate bracket,
+ * no volume, tracking-only). Matches what the pool cap gives a sized future, so
+ * the least-trustworthy legs are not booked biggest -- which is what a 1-unit
+ * fallback did, 4x the sized ones, in BOTH mark-placed paths. */
+export const FALLBACK_FUTURES_UNITS = 0.25;
+
 type GroupLike = {
   id: number;
   market_type: string;
@@ -68,7 +74,7 @@ export function stakeableLegIds<T extends GroupLike>(
  * rungs arrive with group_label null, so the per-group cap sees every team's
  * win-total ladder as ONE group and can't tell teams apart.
  */
-const LADDER_TYPES = new Set([
+export const LADDER_TYPES = new Set([
   "win_total", "exact_win_total", "wins_any", "team_points",
   "conference_regtop", "top_n", "division_wins", "h2h_wins",
 ]);

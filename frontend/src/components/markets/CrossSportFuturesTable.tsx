@@ -4,6 +4,7 @@ import { Info } from "lucide-react";
 import type { FuturesMarketRow } from "../../types/market";
 import { fetchSettings, fetchOpenBets, fetchSettledBets, markFuturesBetPlaced, fetchReadiness, isFuturesSportNotReady } from "../../api/markets";
 import { futuresMarketName, futuresThreshold } from "../../utils/futuresLabel";
+import { FALLBACK_FUTURES_UNITS } from "../../utils/futuresGroupCap";
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import { BetReasoningModal } from "./BetReasoningModal";
@@ -60,8 +61,12 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
   const isPlaced = (row: CrossSportFuturesRow) => placedIds.has(row.id) || placedKeys.has(propKey(row));
 
   async function place(row: CrossSportFuturesRow) {
-    const stakeDollars = row.suggested_stake_dollars ?? (unitDollars > 0 ? unitDollars : 10);
-    const stakeUnits = row.suggested_stake_units ?? (unitDollars > 0 ? 1 : null);
+    // Same fallback the per-sport page uses. This defaulted to a FULL unit --
+    // 4x what a model-sized future gets -- so the legs the model refused to
+    // size were booked biggest.
+    const stakeDollars = row.suggested_stake_dollars
+      ?? (unitDollars > 0 ? unitDollars * FALLBACK_FUTURES_UNITS : 2.5);
+    const stakeUnits = row.suggested_stake_units ?? FALLBACK_FUTURES_UNITS;
     await markFuturesBetPlaced(row, row.sport, stakeDollars, stakeUnits);
     setPlacedIds((s) => new Set(s).add(row.id));
     queryClient.invalidateQueries({ queryKey: ["portfolio"] });
@@ -72,9 +77,13 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
   }
 
   const stakeLabel = useMemo(() => (row: CrossSportFuturesRow) => {
-    if (row.suggested_stake_units != null) return `${row.suggested_stake_units.toFixed(1)}u`;
+    // 2dp below a unit: 1dp renders 0.25u as "0.3u", a number nobody set.
+    if (row.suggested_stake_units != null) {
+      const u = row.suggested_stake_units;
+      return `${u < 1 ? u.toFixed(2) : u.toFixed(1)}u`;
+    }
     if (row.suggested_stake_dollars != null) return `$${row.suggested_stake_dollars.toLocaleString()}`;
-    return unitDollars > 0 ? "1u" : "$10"; // fallback used on place
+    return unitDollars > 0 ? `${FALLBACK_FUTURES_UNITS.toFixed(2)}u` : "$2.50"; // the fallback used on place
   }, [unitDollars]);
 
   if (rows.length === 0) {

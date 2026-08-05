@@ -27,6 +27,7 @@ import {
   type SettingsPayload,
 } from "../api/markets";
 import { CrossSportFuturesTable, type CrossSportFuturesRow } from "../components/markets/CrossSportFuturesTable";
+import { LADDER_TYPES } from "../utils/futuresGroupCap";
 import { fetchReadiness, isRowNotReady } from "../api/markets";
 import { fetchOpenBets, fetchSettledBets } from "../api/markets";
 import type { FuturesMarketRow } from "../types/market";
@@ -204,7 +205,12 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
 
   const bestByProp = new Map<string, CrossSportFuturesRow>();
   for (const r of candidates) {
-    const key = `${r.sport}|${r.market_type}|${r.team ?? ""}|${r.side ?? ""}|${r.line ?? ""}`;
+    // `line` is part of the identity for a normal proposition, but NOT for a
+    // ladder: COL 35+ wins, 40+ and 45+ are one nested opinion about Colorado
+    // (45+ implies 40+ implies 35+), and keying on line let all three through as
+    // separate "props" -- which is exactly what showed up as COL three times.
+    const ladder = LADDER_TYPES.has(r.market_type);
+    const key = `${r.sport}|${r.market_type}|${r.team ?? ""}|${r.side ?? ""}|${ladder ? "" : r.line ?? ""}`;
     if (!bestByProp.has(key)) bestByProp.set(key, r); // candidates already sorted desc, first = best
   }
 
