@@ -54,3 +54,39 @@ export function stakeableLegIds<T extends GroupLike>(
   }
   return allowed;
 }
+
+/** Ladder market types: several rungs of the SAME question at different
+ * thresholds, one team at a time.
+ *
+ * COL 35+ wins, 40+ wins and 45+ wins are not three opinions -- they are one
+ * opinion about Colorado, stated three times, and they are NESTED: 45+ implies
+ * 40+ implies 35+. Staking all three is a single directional view tripled, with
+ * the added twist that the rungs cannot all lose independently.
+ *
+ * The game side already collapses ladders this way (see GAME_LADDER_MARKET_TYPES
+ * and tennisLadderKey) -- futures never got the same treatment because their
+ * rungs arrive with group_label null, so the per-group cap sees every team's
+ * win-total ladder as ONE group and can't tell teams apart.
+ */
+const LADDER_TYPES = new Set([
+  "win_total", "exact_win_total", "wins_any", "team_points",
+  "conference_regtop", "top_n", "division_wins", "h2h_wins",
+]);
+
+/** One rung per (market_type, team) for ladder markets -- the best-edge one.
+ * Non-ladder futures pass through untouched. */
+export function collapseLadderRungs<T extends GroupLike & { team?: string | null; line?: number | null }>(
+  rows: T[],
+): Set<number> {
+  const best = new Map<string, T>();
+  const keep = new Set<number>();
+  for (const r of rows) {
+    if (r.suggested_stake_dollars == null) continue;
+    if (!LADDER_TYPES.has(r.market_type)) { keep.add(r.id); continue; }
+    const key = `${r.market_type}|${r.team ?? ""}`;
+    const cur = best.get(key);
+    if (!cur || (r.edge ?? 0) > (cur.edge ?? 0)) best.set(key, r);
+  }
+  for (const r of best.values()) keep.add(r.id);
+  return keep;
+}

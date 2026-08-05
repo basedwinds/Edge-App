@@ -16,7 +16,7 @@ import { EdgeBadge } from "./EdgeBadge";
 import { FuturesTrendModal } from "./FuturesTrendModal";
 import { BetReasoningModal } from "./BetReasoningModal";
 import type { SportKey } from "../../lib/sports";
-import { stakeableLegIds, MAX_STAKED_LEGS_PER_GROUP } from "../../utils/futuresGroupCap";
+import { stakeableLegIds, collapseLadderRungs, MAX_STAKED_LEGS_PER_GROUP } from "../../utils/futuresGroupCap";
 
 
 export const MARKET_TYPE_LABELS: Record<string, string> = {
@@ -214,7 +214,10 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
   // correlation (16 staked legs of one win-total ladder is one opinion sixteen
   // times), not mutual exclusivity, which measured out fine.
   const capped = useMemo(() => {
-    const allowed = stakeableLegIds(rows);
+    // Two passes: collapse each team's ladder to its best rung FIRST (COL 35+/
+    // 40+/45+ is one nested opinion, not three), then cap legs per group.
+    const unladdered = collapseLadderRungs(rows);
+    const allowed = stakeableLegIds(rows.filter((r) => unladdered.has(r.id)));
     return rows.map((r) =>
       r.suggested_stake_dollars != null && !allowed.has(r.id)
         ? { ...r, suggested_stake_dollars: null, suggested_stake_units: null, kelly_fraction: null }
