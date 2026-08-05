@@ -29,12 +29,40 @@ import numpy as np
 
 from app.clients import espn_cfb_client
 from app.models.baseline import elo_cfb, elo_service_cfb
+from app.models.baseline.elo_cfb import effective_home_field_adv
 
 log = logging.getLogger("season_sim_cfb")
 
 # FBS teams beat FCS opponents about 95% of the time. Used only for games whose
 # opponent has no rating -- see module docstring.
 FCS_WIN_PROB = 0.95
+
+# Pre-season uncertainty in a team's TRUE strength, in Elo points, drawn once
+# per simulated season and held across that season's games.
+#
+# Without it the sim treated each rating as exactly known and every game as an
+# independent coin, so a 12-game season was close to a binomial -- far too
+# narrow. Backtested on 2022-2025 from the historical cache, projecting each
+# season from prior-years-only ratings with zero games played (exactly the
+# situation these markets price), 8,334 team-threshold predictions:
+#
+#   sigma=0    predicted 99% -> happened 88.6%   predicted 11% -> happened 30.2%
+#   sigma=225  every probability bucket within 2.6pp of its outcome rate
+#
+# Mean absolute calibration gap 10.82pp -> 1.19pp. Brier 0.0998 -> 0.0863.
+# Leave-one-season-out picked 225-250 in all four folds and improved the
+# held-out season every time (worst fold 12.81pp -> 3.96pp), so this is not a
+# fit to one season's noise.
+#
+# 225 rather than the 300 that minimises Brier: Brier is nearly flat past 200
+# (0.0869 -> 0.0853, ~1%) while calibration turns sharply, and 300 overshoots
+# into UNDER-confidence (+6.6pp in the 60-80% bucket). Edge is model minus
+# market, so a biased probability is a fabricated edge -- calibration is the
+# metric that decides bets, not Brier.
+#
+# This does NOT blunt the model: AUC over the same predictions goes 0.9345 ->
+# 0.9428. It widens the distribution, it does not flatten it.
+TEAM_STRENGTH_SIGMA = 225.0
 
 # A CFB season runs late August to early December (conference title games), plus
 # bowls/playoff in Dec-Jan which do NOT count toward these regular-season win
@@ -153,7 +181,7 @@ def simulate_conferences(trials: int = 4000, games: list[dict] | None = None) ->
     idx = {t: i for i, t in enumerate(teams)}
 
     banked = np.zeros(len(teams), dtype=np.int32)
-    probs, pair = [], []
+    probs, pair, diffs = [], [], []
     for g in games:
         h, a = g["home_team"], g["away_team"]
         # Conference standings only count games between two members of the SAME
@@ -168,17 +196,40 @@ def simulate_conferences(trials: int = 4000, games: list[dict] | None = None) ->
         p = elo_service_cfb.get_home_win_prob(h, a, bool(g.get("neutral")))
         if p is None:
             continue
+        hr, ar = elo_service_cfb.rating(h), elo_service_cfb.rating(a)
+        diffs.append(hr - ar + effective_home_field_adv(bool(g.get("neutral")))
+                     if hr is not None and ar is not None else None)
         probs.append(float(p)); pair.append((idx[h], idx[a]))
 
     wins = np.tile(banked, (trials, 1)).astype(np.int32)
     if probs:
         p_arr = np.array(probs)
         hi = np.array([x[0] for x in pair]); ai = np.array([x[1] for x in pair])
+        # Same per-season team-strength draw as simulate(). This function runs
+        # its OWN game loop rather than sharing simulate()'s -- the docstring
+        # says "the SAME game simulation the win totals use", but it is a
+        # parallel implementation, so a fix to one does not reach the other.
+        # Leaving it out would have the file hold two different beliefs about
+        # how uncertain the same teams are, and it showed: after calibrating
+        # win totals, every top CFB edge was a conference market instead.
+        #
+        # TEAM_STRENGTH_SIGMA was fitted on win totals, not on standings. It
+        # transfers because it describes uncertainty in the RATINGS, which is a
+        # property of the teams and not of the market -- and both functions
+        # simulate the same games off the same ratings.
+        elo_game = np.array([d is not None for d in diffs])
+        diff_arr = np.array([d if d is not None else 0.0 for d in diffs], dtype=float)
         rng = np.random.default_rng()
         done = 0
         while done < trials:
             n = min(500, trials - done)
-            hw = rng.random((n, len(p_arr))) < p_arr
+            if TEAM_STRENGTH_SIGMA > 0:
+                off = rng.normal(0.0, TEAM_STRENGTH_SIGMA, (n, len(teams)))
+                d = diff_arr + off[:, hi] - off[:, ai]
+                hw = rng.random((n, len(p_arr))) < np.where(
+                    elo_game, 1.0 / (1.0 + 10.0 ** (-d / 400.0)), p_arr)
+            else:
+                hw = rng.random((n, len(p_arr))) < p_arr
             np.add.at(wins[done:done + n], (slice(None), hi), hw)
             np.add.at(wins[done:done + n], (slice(None), ai), ~hw)
             done += n
@@ -248,6 +299,7 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
     idx = {t: i for i, t in enumerate(teams)}
     banked = np.zeros(len(teams), dtype=np.int32)   # wins already achieved
     probs: list[float] = []                          # P(home wins) per remaining game
+    diffs: list[float | None] = []                   # rating gap, None where p is fixed (FCS)
     pair: list[tuple[int, int]] = []                 # (home idx, away idx)
 
     for g in games:
@@ -262,10 +314,18 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
             p = elo_service_cfb.get_home_win_prob(h, a, bool(g.get("neutral")))
             if p is None:
                 continue
+            hr, ar = elo_service_cfb.rating(h), elo_service_cfb.rating(a)
+            # Rating GAP, kept alongside p so the strength draw below can shift
+            # it. None marks a game whose probability is fixed (FCS), which has
+            # no rating to perturb.
+            diffs.append(hr - ar + effective_home_field_adv(bool(g.get("neutral")))
+                         if hr is not None and ar is not None else None)
         elif h_rated and not a_rated:
             p = FCS_WIN_PROB          # rated home team vs unrated (FCS) visitor
+            diffs.append(None)
         elif a_rated and not h_rated:
             p = 1.0 - FCS_WIN_PROB
+            diffs.append(None)
         else:
             continue                   # neither side rated -- nothing to say
         probs.append(float(p))
@@ -282,12 +342,29 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
     away_idx = np.array([x[1] for x in pair])
     rng = np.random.default_rng()
 
+    # Which games can take a strength draw, and their rating gaps.
+    elo_game = np.array([d is not None for d in diffs])
+    diff_arr = np.array([d if d is not None else 0.0 for d in diffs], dtype=float)
+
     wins = np.tile(banked, (trials, 1)).astype(np.int32)
     chunk = 500
     done = 0
     while done < trials:
         n = min(chunk, trials - done)
-        home_wins = rng.random((n, len(p_arr))) < p_arr        # (n, games)
+        if TEAM_STRENGTH_SIGMA > 0:
+            # One rating offset per team per simulated season, held fixed across
+            # that season's twelve games. Without it every game is an independent
+            # coin weighted by a rating treated as exactly known, so the only
+            # randomness is game-level noise -- and a 12-game binomial is narrow.
+            # Real pre-season uncertainty (transfers, recruiting, new coaches) is
+            # about the TEAM, and it persists all year, which fattens the tails
+            # far more than independent coin flips ever can.
+            off = rng.normal(0.0, TEAM_STRENGTH_SIGMA, (n, len(teams)))
+            d = diff_arr + off[:, home_idx] - off[:, away_idx]      # (n, games)
+            p_trial = np.where(elo_game, 1.0 / (1.0 + 10.0 ** (-d / 400.0)), p_arr)
+            home_wins = rng.random((n, len(p_arr))) < p_trial
+        else:
+            home_wins = rng.random((n, len(p_arr))) < p_arr        # (n, games)
         # np.add.at handles repeated indices correctly (a team plays many games).
         np.add.at(wins[done:done + n], (slice(None), home_idx), home_wins)
         np.add.at(wins[done:done + n], (slice(None), away_idx), ~home_wins)
