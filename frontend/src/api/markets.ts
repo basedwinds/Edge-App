@@ -846,7 +846,12 @@ export function crossPlatformKey(row: {
   // shared one combined candidate list -- left in place as a harmless,
   // still-correct defensive habit rather than ripped out.
   const gameId =
-    row.nflGameId || row.nbaGameId || row.wnbaGameId || row.mlbGameId || row.mmaFightId || row.tennisMatchId || row.soccerMatchId ||
+    row.nflGameId || row.nbaGameId || row.wnbaGameId || row.mlbGameId || row.mmaFightId ||
+    // Tennis stores one real match as two rows when the same fixture is
+    // ingested under different tour/tier prefixes, so it needs fixtureKey
+    // here for the same reason the esports titles do -- otherwise the two
+    // halves read as separate propositions and both survive the dedupe.
+    (row.tennisMatchId ? `tennis:${row.fixtureKey ?? row.tennisMatchId}` : null) || row.soccerMatchId ||
     (row.valorantMatchId ? `valorant:${row.fixtureKey ?? row.valorantMatchId}` : null) ||
     (row.cs2MatchId ? `cs2:${row.fixtureKey ?? row.cs2MatchId}` : null) ||
     (row.lolMatchId ? `lol:${row.fixtureKey ?? row.lolMatchId}` : null);
@@ -1792,6 +1797,10 @@ export function buildTennisRecommendedBets(
       mlbGameId: null,
       mmaFightId: null,
       tennisMatchId: m.tennis_match_id,
+      // Two rows can be ONE real match (same players + start, different
+      // tour/tier prefix). gameIdForRow prefers fixtureKey, which is what
+      // lets capToOneRowPerGame see them as a single fixture.
+      fixtureKey: (m as { fixture_key?: number | null }).fixture_key ?? null,
       soccerMatchId: null,
       valorantMatchId: null,
       cs2MatchId: null,

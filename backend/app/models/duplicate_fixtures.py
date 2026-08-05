@@ -47,6 +47,7 @@ import re
 
 from sqlalchemy.orm import Session
 
+from app.db.models import TennisMatch
 from app.ingestion.lol_team_aliases import base_key, tier_of
 from app.ingestion.market_matcher_lol import normalize_team_name
 
@@ -190,3 +191,50 @@ def apply_twin_results(session: Session, model) -> int:
         log.info("duplicate-fixture backfill: %d %s rows resolved from their twin",
                  resolved, model.__name__)
     return resolved
+
+def canonical_tennis_fixture_ids(session: Session) -> dict[int, int]:
+    """{tennis_match_id: canonical_id} collapsing rows that are the SAME match.
+
+    Tennis needs its own rule because its duplicates are a different shape from
+    the esports ones above. There the two rows spell a team differently and
+    share exactly ONE name, which is what that detector keys on. Here BOTH names
+    are already identical -- the same match is simply ingested twice under
+    different tour/tier prefixes:
+
+        id=1476  live:wta:itf:Gabriella Price:Misa Malkin
+        id=1535  live:atp:tour:Gabriella Price:Misa Malkin
+
+    Same players, same date, same start, same score. It also appears as two
+    spellings of one event ("ATP Montreal" vs "Canadian Open"). Measured: 203
+    duplicate groups / 227 redundant rows out of 1,682 settled matches, every
+    one with a DIFFERENT source_match_id, so id-based dedupe cannot see them.
+
+    No alias inference is needed or wanted, so this asks for far more than the
+    esports detector does: identical player keys AND the same start minute. Two
+    distinct matches between the same two players (a rematch in another event)
+    cannot start in the same minute, and a same-minute coincidence between
+    DIFFERENT pairings is impossible because the pairing is part of the key.
+
+    WHY IT MATTERS: capToOneRowPerGame and crossPlatformKey both key on the
+    match id, so one real match holding two ids silently disables both -- the
+    per-match concentration cap included. Measured live: 148 fixtures had both
+    rows carrying markets. Nothing is merged or deleted; both rows keep their
+    own markets and prices, exactly like the esports version.
+    """
+    rows = session.query(TennisMatch).filter(
+        TennisMatch.estimated_start_time.isnot(None)
+    ).all()
+    groups: dict[tuple, list[int]] = {}
+    for r in rows:
+        if not r.player_a_key or not r.player_b_key:
+            continue
+        key = (frozenset((r.player_a_key, r.player_b_key)), str(r.estimated_start_time)[:16])
+        groups.setdefault(key, []).append(r.id)
+    out: dict[int, int] = {}
+    for ids in groups.values():
+        if len(ids) < 2:
+            continue
+        canonical = min(ids)          # stable across refreshes
+        for i in ids:
+            out[i] = canonical
+    return out

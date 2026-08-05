@@ -36,6 +36,7 @@ from app.models.ladder_sanity import (
     pair_looks_live_by_travel,
     pair_looks_resolved,
 )
+from app.models.duplicate_fixtures import canonical_tennis_fixture_ids
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -696,6 +697,11 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         )
 
     out = []
+    # One real match can hold two rows (same players, same start, different
+    # tour/tier prefix). Both safety controls key on the match id, so without
+    # this the per-match stake cap silently does nothing for them.
+    _fixture_keys = canonical_tennis_fixture_ids(session)
+
     for m in markets:
         match = matches_by_id.get(m.tennis_match_id) if m.tennis_match_id else None
         snap = snapshots_by_market.get(m.id)
@@ -720,6 +726,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
                 side=m.side,
                 match_label=f"{match.player_a_name} vs {match.player_b_name}" if match else None,
                 tennis_match_id=m.tennis_match_id,
+                fixture_key=_fixture_keys.get(m.tennis_match_id, m.tennis_match_id),
                 tour=match.tour if match else None,
                 tier=match.tier if match else None,
                 match_date=match.match_date if match else None,

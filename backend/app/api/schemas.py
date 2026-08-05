@@ -143,6 +143,9 @@ class TennisMarketOut(BaseModel):
     side: str | None  # exact_score: "{player_sets}-{opponent_sets}" e.g. "2-1"
     match_label: str | None
     tennis_match_id: int | None
+    # Collapses rows that are the SAME real match (see
+    # duplicate_fixtures.canonical_tennis_fixture_ids); None when unique.
+    fixture_key: int | None = None
     tour: str | None  # atp | wta
     tier: str | None  # tour | challenger | itf
     match_date: str | None
