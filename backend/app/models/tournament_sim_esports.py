@@ -250,6 +250,82 @@ def simulate_tournament_winner(
     return {t: wins[t] / trials for t, _ in rated}
 
 
+def simulate_with_group_stage(
+    field_ratings: list[tuple[str, float]],
+    standings: dict[str, dict],
+    playoff_slots: int,
+    win_prob_fn: WinProbFn,
+    trials: int = DEFAULT_TRIALS,
+) -> dict[str, float] | None:
+    """Title probabilities that respect a group stage that has ALREADY happened.
+
+    `standings` is {team: {"group", "rank", ...}} read off the event page, and
+    `playoff_slots` is how many teams the real playoff bracket holds. Teams are
+    seeded into that bracket by their group finish, not by rating, and teams who
+    did not make the cut get exactly 0 -- they cannot win the event.
+
+    This is the fix for the failure that motivated it: pricing VCT EMEA Stage 2
+    purely off Elo put Karmine Corp, who WON Group Omega at 4-1, tenth of twelve
+    at 0.9%, while Eternal Fire (fourth in the same group at 2-3) got 16.4%. The
+    group stage is the most informative thing that has happened in the event and
+    the model was ignoring all of it.
+
+    Qualification rule: the top `playoff_slots / number_of_groups` of each group
+    advance. For the VCT stages that is a clean 4 of 6 from each of two groups
+    into an 8-team bracket. It is a simplification of the real path (the middle
+    seeds route through a play-in), but it cuts the same teams, and it is driven
+    by real results rather than by a rating.
+
+    Falls back to None when the standings don't cover the field, so the caller
+    keeps the rating-seeded model rather than pricing off a half-read page.
+    """
+    rated = [(t, r) for t, r in field_ratings if r is not None]
+    if len(rated) < 2 or not standings or playoff_slots < 2:
+        return None
+    known = [(t, r) for t, r in rated if t in standings]
+    if len(known) < len(rated):
+        return None                      # partial standings: don't guess the rest
+
+    groups: dict[str, list[str]] = {}
+    for t, _ in known:
+        groups.setdefault(standings[t]["group"], []).append(t)
+    if not groups:
+        return None
+    per_group = max(1, playoff_slots // len(groups))
+
+    qualified: list[str] = []
+    for g, members in groups.items():
+        members.sort(key=lambda t: standings[t]["rank"])
+        qualified.extend(members[:per_group])
+    if len(qualified) < 2:
+        return None
+
+    # Seed by group finish, interleaving groups so the two winners land on
+    # opposite halves -- the standard way a two-group bracket is drawn.
+    qualified.sort(key=lambda t: (standings[t]["rank"], standings[t]["group"]))
+    ranked_ratings = [(t, dict(rated)[t]) for t in qualified]
+    slots = _seed_field_in_order(qualified)
+
+    field = [t for t in qualified]
+    mat = _memoized_matrix(field, win_prob_fn)
+    rng = _stable_rng(ranked_ratings)
+    wins = {t: 0 for t, _ in rated}       # non-qualifiers stay at zero
+    for _ in range(trials):
+        champ = _run_double_elim(list(slots), mat, rng)
+        if champ is not None:
+            wins[champ] += 1
+    return {t: wins[t] / trials for t, _ in rated}
+
+
+def _seed_field_in_order(ranked: list[str]) -> list[str | None]:
+    """Bracket slots for an already-ordered seed list (strongest first), padding
+    to a power of two with byes on the weakest lines."""
+    n = _next_pow2(len(ranked))
+    def team_for_seed(s: int) -> str | None:
+        return ranked[s - 1] if s <= len(ranked) else None
+    return [team_for_seed(s) for s in _bracket_seed_positions(n)]
+
+
 def simulate_reach(
     field_ratings: list[tuple[str, float]],
     win_prob_fn: WinProbFn,

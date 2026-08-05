@@ -15,7 +15,41 @@ across only the RATED field, so they still sum to ~1 among priceable teams.
 """
 from collections import defaultdict
 
-from app.models.tournament_sim_esports import DEFAULT_BEST_OF, DEFAULT_TRIALS, simulate_tournament_winner
+import logging
+import re
+
+from app.models.tournament_sim_esports import (
+    DEFAULT_BEST_OF, DEFAULT_TRIALS, simulate_tournament_winner, simulate_with_group_stage,
+)
+
+log = logging.getLogger("esports_tournament_pricing")
+
+# Words that carry no identity when matching a market's label to an event page.
+_STOP = {"the", "a", "of", "to", "winner", "win", "wins", "2026", "2027"}
+# Kalshi/Polymarket abbreviate regions that vlr.gg spells out.
+_ALIAS = {"amer": "americas", "na": "north"}
+# Real matches score 1.00 and unrelated labels score 0.00, so anything in the
+# middle is ambiguous and not worth acting on.
+_MIN_EVENT_MATCH = 0.5
+
+
+def _tokens(text: str) -> set[str]:
+    raw = {w for w in re.split(r"[^a-z0-9]+", (text or "").lower()) if w and w not in _STOP}
+    return {_ALIAS.get(w, w) for w in raw}
+
+
+def find_event_path(label: str, events: list[tuple[str, str]]) -> str | None:
+    """The vlr.gg event page whose slug best matches this market's label."""
+    want = _tokens(label)
+    if not want:
+        return None
+    best_score, best_path = 0.0, None
+    for _eid, path in events:
+        have = _tokens(path.rsplit("/", 1)[-1])
+        score = len(want & have) / max(1, len(want | have))
+        if score > best_score:
+            best_score, best_path = score, path
+    return best_path if best_score >= _MIN_EVENT_MATCH else None
 
 # A single-elim bracket sim only models a SINGLE real event. Two kinds of
 # "tournament_winner" market are NOT that and must be skipped, or the sim
@@ -49,7 +83,7 @@ def _is_single_event(label: str, field_size: int) -> bool:
 
 
 def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_OF,
-                             trials: int = DEFAULT_TRIALS) -> dict[int, float]:
+                             trials: int = DEFAULT_TRIALS, event_state_for=None) -> dict[int, float]:
     """Returns {market_id: model_prob} for the tournament_winner markets it can
     price. `elo_service` is a title's elo_service_* module (needs
     get_team_rating + get_series_distribution). Markets whose team is unrated,
@@ -79,7 +113,26 @@ def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_O
 
         if not _is_single_event(_label, len(group)):
             continue  # season-long aggregate / not a single bracket -- leave unpriced
-        sim = simulate_tournament_winner(field, win_prob_fn, trials=trials)
+
+        # If the event's group stage has already been played, USE IT. Pricing a
+        # tournament purely off ratings ignores the most informative thing that
+        # has happened in it: on VCT EMEA Stage 2 that put Karmine Corp, who WON
+        # their group at 4-1, tenth of twelve at 0.9%, and gave FNATIC 9.6%
+        # despite finishing fifth and missing the playoff entirely.
+        #
+        # Falls back to the rating-seeded bracket whenever the event can't be
+        # identified, has no group stage, or the standings don't cover the whole
+        # field -- a partially-read page must not silently eliminate teams.
+        sim = None
+        state = event_state_for(_label) if event_state_for else None
+        if state:
+            standings = state.get("standings") or {}
+            slots = (state.get("format") or {}).get("slots") or 0
+            sim = simulate_with_group_stage(field, standings, slots, win_prob_fn, trials=trials)
+            if sim is not None:
+                log.info("tournament %r priced from real group standings (%d slots)", _label, slots)
+        if sim is None:
+            sim = simulate_tournament_winner(field, win_prob_fn, trials=trials)
         if sim is None:
             continue
         for m in group:

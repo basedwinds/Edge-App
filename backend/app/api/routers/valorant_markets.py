@@ -41,7 +41,10 @@ from app.db.models import Market, MarketSnapshot, ValorantMatch
 from app.ingestion import market_catalog_valorant
 from app.ingestion.market_matcher_valorant import team_names_match
 from app.models.baseline import elo_service_valorant
-from app.models.esports_tournament_pricing import price_tournament_winners
+import logging
+
+from app.clients import vlr_client
+from app.models.esports_tournament_pricing import find_event_path, price_tournament_winners
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import (
     futures_group_decided,
@@ -54,6 +57,8 @@ from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fract
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
+
+log = logging.getLogger("valorant_markets")
 
 router = APIRouter(prefix="/valorant", tags=["valorant"])
 
@@ -151,7 +156,20 @@ def list_valorant_futures(session: Session = Depends(get_session)):
         if _p is not None and _p >= 0.5 and _m.team:
             _winner_by_group[g] = _m.team
 
-    priced = price_tournament_winners(markets, elo_service_valorant)
+    # vlr.gg knows which teams have already been knocked out of each event's
+    # group stage; without it the sim quotes real title odds on teams that
+    # cannot win (FNATIC 9.3%, KIWOOM DRX 6.3% -- both eliminated). Guarded
+    # because a scrape failure must degrade to the old pricing, not to nothing.
+    def _event_state_for(label: str):
+        try:
+            path = find_event_path(label, vlr_client.list_events())
+            return vlr_client.event_state(path) if path else None
+        except Exception:
+            log.warning("vlr event state unavailable for %r -- rating-seeded fallback", label)
+            return None
+
+    priced = price_tournament_winners(markets, elo_service_valorant,
+                                      event_state_for=_event_state_for)
     # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
     # kelly_fraction=None on the reasoning that the bracket is an approximation.
     # That reasoning was inverted: the paper logger only records rows the app
