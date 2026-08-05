@@ -450,13 +450,6 @@ export function Combined() {
     // sport with real candidates is represented at all: without it a couple of
     // high-edge sports absorb the whole budget (measured on the live board: the
     // top 20 by raw edge contained zero MLB despite 21 qualifying candidates).
-    // Rows that qualify in this window but that a full ceiling turned away. They
-    // used to be dropped, which is what made a bet appear in "Next 24h" and be
-    // missing from "All upcoming" -- the ceiling is spent on whatever is in the
-    // window, so a match with few competitors gets funded and the same match
-    // competing against every future fixture does not. Both answers are right;
-    // showing one and hiding the other is what made it read as a contradiction.
-    const cappedRows: RecommendedBetRow[] = [];
     let cut = 0;                 // qualified and in-window, but a ceiling was full
     const picked: RecommendedBetRow[] = [];
     for (const p of plans) {
@@ -464,7 +457,7 @@ export function Combined() {
       for (const row of p.ranked) {
         if (!inWindow(row)) continue;
         const pool = row.stakePool;
-        if (spent[pool] + row.suggestedStakeDollars > p.ceilings[pool]) { cut++; cappedRows.push(row); continue; }
+        if (spent[pool] + row.suggestedStakeDollars > p.ceilings[pool]) { cut++; continue; }
         spent[pool] += row.suggestedStakeDollars;
         picked.push(row);
       }
@@ -479,30 +472,27 @@ export function Combined() {
     const out: RecommendedBetRow[] = [];
     for (const row of picked) {
       const pool = row.stakePool;
-      if (globalSpent[pool] + row.suggestedStakeDollars > combined.globalCeilings[pool]) { cut++; cappedRows.push(row); continue; }
+      if (globalSpent[pool] + row.suggestedStakeDollars > combined.globalCeilings[pool]) { cut++; continue; }
       globalSpent[pool] += row.suggestedStakeDollars;
       out.push(row);
     }
-    // Funded first (biggest stake down), then everything that qualified but got
-    // no room, best edge first. One list, so a bet is never simply absent.
-    const funded = out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars);
-    const overflow = cappedRows
-      .sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0))
-      .map((r) => ({ ...r, cappedOut: true }));
-    return { rows: [...funded, ...overflow], cut };
+    // ONLY funded rows. This list is the set of bets to actually place, so a row
+    // that qualified but got no room does not belong in it -- they were briefly
+    // appended (dimmed) to explain why a bet can differ between windows, and the
+    // clutter was worse than the confusion: dozens of unactionable tennis rows
+    // buried the handful that mattered. The window note below carries the
+    // explanation instead, which is where it belongs.
+    return { rows: out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars), cut };
   }, [plans, combined, win]);
   const rows = windowed.rows.filter((r) => !isRowNotReady(r, readinessQuery.data));
   const cutByPool = windowed.cut;
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
-  // Headline numbers describe what is actually being STAKED, so capped rows are
-  // excluded from every one of them -- they are shown for context, not funded.
   const stats = useMemo(() => {
-    const funded = rows.filter((r) => !r.cappedOut);
-    const totalStake = funded.reduce((sum, r) => sum + r.suggestedStakeDollars, 0);
-    const sports = new Set(funded.map((r) => r.sport)).size;
-    const avgEdge = funded.length ? funded.reduce((sum, r) => sum + Math.abs(r.edge ?? 0), 0) / funded.length : null;
-    return { count: funded.length, totalStake, sports, avgEdge };
+    const totalStake = rows.reduce((sum, r) => sum + r.suggestedStakeDollars, 0);
+    const sports = new Set(rows.map((r) => r.sport)).size;
+    const avgEdge = rows.length ? rows.reduce((sum, r) => sum + Math.abs(r.edge ?? 0), 0) / rows.length : null;
+    return { count: rows.length, totalStake, sports, avgEdge };
   }, [rows]);
 
   const unitsLabel = (d: number) => (unitDollars > 0 ? ` (${(d / unitDollars).toFixed(1)}u)` : "");
@@ -603,11 +593,11 @@ export function Combined() {
                   reads as the app dropping it -- reported twice. */}
               {cutByPool > 0 && (
                 <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
-                  {cutByPool} {cutByPool === 1 ? "bet qualifies" : "bets qualify"} in this window but
-                  {" "}{cutByPool === 1 ? "has" : "have"} no room left — shown dimmed at the bottom rather
-                  than hidden, since the pool is spent on whatever is in the CURRENT window (a match can
-                  be funded under &ldquo;Next 24h&rdquo; and crowded out under &ldquo;All upcoming&rdquo;,
-                  where it competes with every later fixture). Raise a sport&rsquo;s pool in Settings to fund more.
+                  {cutByPool} more {cutByPool === 1 ? "bet qualifies" : "bets qualify"} in this window but
+                  {" "}{cutByPool === 1 ? "has" : "have"} no room — the pool is already fully allocated above.
+                  Each window is funded on its own slate, so a match can be worth backing under
+                  &ldquo;Next 24h&rdquo; and lose its place under &ldquo;All upcoming&rdquo;, where it competes
+                  with every later fixture. Raise a sport&rsquo;s pool in Settings to fund more.
                 </p>
               )}
             </>

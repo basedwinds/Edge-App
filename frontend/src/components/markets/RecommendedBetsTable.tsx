@@ -313,19 +313,6 @@ const columns = [
     header: () => <span title="Quarter Kelly, capped at 5% of its pool -- see Settings">Stake</span>,
     cell: ({ row }) => {
       const r = row.original;
-      // Qualified but unfunded: the pool was already full when this row came up.
-      // Shown rather than hidden -- dropping it is what made the same bet appear
-      // in one time window and vanish from another.
-      if (r.cappedOut) {
-        return (
-          <div className="flex flex-col gap-1">
-            <span className="tabular-nums font-mono text-[var(--color-text-muted)] whitespace-nowrap">no room</span>
-            <span className="text-[10px] text-[var(--color-text-muted)] whitespace-nowrap">
-              pool full — higher edges first
-            </span>
-          </div>
-        );
-      }
       return (
         <div className="flex flex-col gap-1">
           <span className="tabular-nums font-mono text-[var(--color-good)] font-medium whitespace-nowrap">
@@ -509,9 +496,7 @@ export function RecommendedBetsTable({
                 onClick={gameId ? () => navigate(`/markets/${encodeURIComponent(gameId)}:${row.original.source}`) : undefined}
                 className={
                   "border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-hover)] transition-colors" +
-                  (gameId ? " cursor-pointer" : "") +
-                  // Dimmed, not hidden: it still qualifies, it just has no room.
-                  (row.original.cappedOut ? " opacity-50" : "")
+                  (gameId ? " cursor-pointer" : "")
                 }
               >
                 {row.getVisibleCells().map((cell) => (

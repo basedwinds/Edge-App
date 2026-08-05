@@ -542,13 +542,6 @@ export interface RecommendedBetRow {
   suggestedStakeDollars: number;
   suggestedStakeUnits: number | null;
   stakePool: "weekly" | "futures";
-  /** Qualified, but a pool ceiling was already full when this row was reached,
-   * so it carries NO stake. Set per window rather than on the row itself: the
-   * ceiling is spent on whatever is in the current window, so the same bet can
-   * be funded in "Next 24h" (few competitors) and capped in "All upcoming"
-   * (every future match competing). It stays VISIBLE either way -- silently
-   * dropping it is what made a bet appear to exist in one tab and not another. */
-  cappedOut?: boolean;
   volume: number | null;
   nflGameId: string | null;
   /** Which sport this row belongs to -- "nfl" for every row built by
