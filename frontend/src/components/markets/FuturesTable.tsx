@@ -16,6 +16,7 @@ import { EdgeBadge } from "./EdgeBadge";
 import { FuturesTrendModal } from "./FuturesTrendModal";
 import { BetReasoningModal } from "./BetReasoningModal";
 import type { SportKey } from "../../lib/sports";
+import { stakeableLegIds, MAX_STAKED_LEGS_PER_GROUP } from "../../utils/futuresGroupCap";
 
 
 export const MARKET_TYPE_LABELS: Record<string, string> = {
@@ -203,8 +204,25 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
   // reading as finished (the reported case: a champion market disappearing).
   // It is returned flagged now and filed below, collapsed, so the live list
   // stays short instead of being padded with dead legs.
-  const activeRows = useMemo(() => rows.filter((r) => !r.group_settled), [rows]);
-  const settledRows = useMemo(() => rows.filter((r) => r.group_settled), [rows]);
+  // Cap real exposure per futures group: past the cap a leg still renders, it
+  // just carries no suggested stake. See futuresGroupCap -- the hazard is
+  // correlation (16 staked legs of one win-total ladder is one opinion sixteen
+  // times), not mutual exclusivity, which measured out fine.
+  const capped = useMemo(() => {
+    const allowed = stakeableLegIds(rows);
+    return rows.map((r) =>
+      r.suggested_stake_dollars != null && !allowed.has(r.id)
+        ? { ...r, suggested_stake_dollars: null, suggested_stake_units: null, kelly_fraction: null }
+        : r,
+    );
+  }, [rows]);
+  const cappedOut = useMemo(
+    () => rows.filter((r) => r.suggested_stake_dollars != null).length
+      - capped.filter((r) => r.suggested_stake_dollars != null).length,
+    [rows, capped],
+  );
+  const activeRows = useMemo(() => capped.filter((r) => !r.group_settled), [capped]);
+  const settledRows = useMemo(() => capped.filter((r) => r.group_settled), [capped]);
   const [showSettled, setShowSettled] = useState(false);
   // Collapsed to ONE LINE PER EVENT: 32 dead legs of a finished tournament is
   // scrolling, not information. The winner is the only part still worth reading.
@@ -330,6 +348,13 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
           )}
         </tbody>
       </table>
+      {cappedOut > 0 && (
+        <p className="px-4 pb-3 text-[11px] text-[var(--color-text-muted)]">
+          {cappedOut} more {cappedOut === 1 ? "leg qualifies" : "legs qualify"} but {cappedOut === 1 ? "is" : "are"} shown
+          without a stake — at most {MAX_STAKED_LEGS_PER_GROUP} legs of one group get sized, so a single
+          ladder can't turn one model opinion into a dozen correlated positions.
+        </p>
+      )}
       {settledRows.length > 0 && (
         <div className="border-t border-[var(--color-border)]">
           <button
