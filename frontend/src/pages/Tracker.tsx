@@ -1,11 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import { PageShell } from "../components/layout/PageShell";
 import { StatTile } from "../components/markets/StatTile";
 import { BetReasoningModal } from "../components/markets/BetReasoningModal";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
-import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, TRACKER_PERIODS, type TrackerPeriod, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
+import { fetchPortfolio, fetchOpenBets, fetchSettledBets, fetchSettings, fetchStuckBets, settleBet, TRACKER_PERIODS, type TrackerPeriod, type PortfolioPointPayload, type OpenBetPayload, type SettledBetPayload } from "../api/markets";
 import { futuresResolution, gameResolution } from "../utils/resolution";
 import { futuresMarketName, futuresThreshold } from "../utils/futuresLabel";
 import { describePick, marketTypeLabel, type PickLike } from "../utils/pickLabel";
@@ -669,6 +669,7 @@ export function Tracker() {
 
   return (
     <PageShell title="Bet Tracker">
+      <StuckBetsPanel />
       {/* Period selector. Every headline number below (P/L, ROI, record, CLV,
           per-sport and per-source splits) reflects the selected window; a bet
           counts in the window its OUTCOME landed in -- settlement date for a
@@ -1011,5 +1012,72 @@ export function Tracker() {
         soccer ~May), not a precise date.
       </p>
     </PageShell>
+  );
+}
+
+/** Bets whose event ended long ago but which never settled.
+ *
+ * These are not cosmetic. A pending bet holds its stake inside the sport's
+ * pool, so each one silently displaces a live bet -- three cancelled ITF
+ * matches were holding $60 and suppressing tennis recommendations, and the
+ * only reason anyone noticed is that the user read the tracker and asked.
+ *
+ * stuck_bet_check has detected exactly this since it was written and wrote it
+ * to a log file. Detection was never the gap; the gap was that nothing put it
+ * in front of a person who could act on it.
+ *
+ * Void is offered rather than won/lost because a stuck bet is overwhelmingly a
+ * cancelled or never-played event, and void returns the stake at zero profit
+ * without inventing a result. Grading a real outcome stays a manual decision.
+ */
+function StuckBetsPanel() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["stuck-bets"], queryFn: fetchStuckBets });
+  const [busy, setBusy] = useState<number | null>(null);
+  const rows = data ?? [];
+  if (rows.length === 0) return null;
+
+  async function doVoid(betId: number) {
+    setBusy(betId);
+    try {
+      await settleBet(betId, "void", "Voided from tracker: event long past with no result.");
+      qc.invalidateQueries({ queryKey: ["stuck-bets"] });
+      qc.invalidateQueries({ queryKey: ["open-bets"] });
+      qc.invalidateQueries({ queryKey: ["portfolio"] });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-4 py-3">
+      <div className="text-sm font-medium text-[var(--color-text)]">
+        {rows.length} bet{rows.length === 1 ? "" : "s"} stuck unsettled
+      </div>
+      <div className="text-xs text-[var(--color-text-dim)] mt-0.5 mb-2">
+        The event is long over but no result arrived — usually a cancelled or never-played
+        match. Each one still holds its stake in that sport&apos;s pool, so it crowds out live bets.
+      </div>
+      <div className="space-y-1">
+        {rows.map((r) => (
+          <div key={r.bet_id} className="flex items-center justify-between gap-3 text-xs">
+            <div className="min-w-0">
+              <span className="text-[var(--color-text)]">{r.label ?? `bet ${r.bet_id}`}</span>
+              <span className="text-[var(--color-text-muted)]">
+                {" "}· {r.sport} · {r.market_type} · {Math.round(r.hours_overdue)}h overdue
+                {!r.has_event_row && " · no result row"}
+              </span>
+            </div>
+            <button
+              onClick={() => doVoid(r.bet_id)}
+              disabled={busy === r.bet_id}
+              className="shrink-0 px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-50"
+            >
+              {busy === r.bet_id ? "Voiding…" : "Void"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

@@ -1057,6 +1057,29 @@ def create_placed_bet(body: PlacedBetIn, session: Session = Depends(get_session)
     return _to_out(session, row)
 
 
+@router.get("/stuck")
+def stuck_placed_bets(session: Session = Depends(get_session)):
+    """Real (non-paper) pending bets whose event finished long ago.
+
+    stuck_bet_check has detected these correctly since it was written, and only
+    ever wrote them to a log -- which is why three cancelled ITF matches sat
+    pending for 44, 21 and 12 hours holding $60 of the weekly pool, and were
+    found by the user reading the tracker rather than by the app telling anyone.
+    Detection was never the gap; reachability was.
+
+    Paper rows are excluded: the harness has thousands of them, they hold no
+    real capital, and burying three actionable bets in that list would recreate
+    the problem this endpoint exists to solve.
+
+    Reports only. Voiding still goes through /{bet_id}/settle, so deciding a
+    real-money bet stays an explicit action.
+    """
+    from app.models.stuck_bet_check import find_stuck_bets
+    rows = [b for b in find_stuck_bets(session) if not b.get("paper")]
+    rows.sort(key=lambda b: -(b.get("hours_overdue") or 0))
+    return rows
+
+
 @router.post("/{bet_id}/settle", response_model=PlacedBetOut)
 def settle_placed_bet(bet_id: int, body: SettleIn, session: Session = Depends(get_session)):
     if body.status not in VALID_SETTLE_STATUSES:

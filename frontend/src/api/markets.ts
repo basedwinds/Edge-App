@@ -2538,6 +2538,31 @@ export async function fetchOpenBets(): Promise<OpenBetPayload[]> {
   return apiGet<OpenBetPayload[]>(`/placed-bets/open`);
 }
 
+/** A real bet still pending long after its event should have ended. */
+export interface StuckBetRow {
+  bet_id: number;
+  sport: string;
+  market_type: string;
+  label: string | null;
+  started: string | null;
+  hours_overdue: number;
+  has_event_row: boolean;
+}
+
+/** Bets whose event is long over but which never settled -- a cancelled match,
+ * a fixture the scraper can't resolve, a settlement bug. They hold real capital
+ * inside the sport's pool, so every one of them silently crowds out a live bet.
+ * Detected since stuck_bet_check was written; only ever logged until now. */
+export async function fetchStuckBets(): Promise<StuckBetRow[]> {
+  return apiGet<StuckBetRow[]>("/placed-bets/stuck");
+}
+
+/** Settle a bet by hand. `void` returns the stake at zero profit, which is the
+ * correct treatment for a match that was cancelled or never played. */
+export async function settleBet(betId: number, status: "won" | "lost" | "push" | "void", note?: string) {
+  return apiPost(`/placed-bets/${betId}/settle`, { status, note });
+}
+
 export interface SettledBetPayload {
   id: number;
   market_id: number;
