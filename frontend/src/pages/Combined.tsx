@@ -249,8 +249,25 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
   // HAD placed kept re-appearing as unplaced. Showing the full list with a
   // placed badge is clearer and stops duplicate placements.
   const isPhantom = (mt: string) => mt.startsWith("season_") || mt.startsWith("leader_");
+  // ONLY futures the model actually SIZED reach this tab. This is the
+  // cross-sport "what should I place" list, so a row it declined to stake does
+  // not belong in it, whatever its headline edge.
+  //
+  // The tab used to list anything from 5pp up while the app only BETS from 10pp,
+  // and the table filled the gap with a fabricated 0.25u -- so 243 of 379 rows
+  // read as recommendations that no gate had ever approved. Breakdown of those
+  // 243: 165 under the 10pp betting gate, 67 stopped by another gate (CLV
+  // bucket, untraded, kelly<=0), and 11 outright blocked as implausible (the
+  // reported "Freecs to win LCK 2026" at a 28x model-vs-market disagreement).
+  //
+  // Testing suggested_stake_dollars rather than re-checking the edge is
+  // deliberate: it is the single output every one of those gates already feeds
+  // into, so this cannot drift out of step with them the way a duplicated
+  // threshold would. The per-sport Futures pages still show the full list --
+  // that is where tracking and calibration live.
   const candidates = all
-    .filter((r) => r.edge !== null && r.edge >= 0.05 && r.volume && !isPhantom(r.market_type))
+    .filter((r) => r.edge !== null && r.edge >= 0.05 && r.volume && !isPhantom(r.market_type)
+                   && r.suggested_stake_dollars != null)
     .sort((a, b) => b.edge! - a.edge!);
 
   const bestByProp = new Map<string, CrossSportFuturesRow>();
