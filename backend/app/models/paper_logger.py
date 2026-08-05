@@ -112,6 +112,20 @@ def _fetch_priced() -> list[dict]:
 MAX_QUOTED_SPREAD = 0.50
 
 
+# The harness deliberately logs BELOW the recommend gate.
+#
+# min_edge_to_bet was raised to 10pp so the recommended list stops spending
+# ceiling on bets that don't pay -- measured: 3-5pp returns +1.6% and 5-8pp
+# +1.1%, i.e. break-even, while 12-20pp returns +16.9% and 20-35pp +41.8%. The
+# sub-10pp rows were also sized LARGER on average ($8.10 vs $7.32), so they were
+# displacing capital, not merely cluttering the list.
+#
+# But that measurement only exists BECAUSE the harness logged those bands. If
+# this followed the recommend gate up, the app would immediately go blind to the
+# region it just learned about and could never notice the threshold drifting
+# wrong in either direction. Recommend narrowly; measure broadly.
+PAPER_MIN_EDGE = 0.03
+
 def _qualifies(row: dict, min_edge: float) -> bool:
     """Log a row if the app would bet it. Two ways in: it already has a sized
     stake (the staked sports' recommend gate), OR it's a tracking-only market
@@ -325,7 +339,7 @@ def run_paper_log():
     with db_write_lock():
         session = SessionLocal()
         try:
-            _, _, min_edge = get_staking_params(session)
+            min_edge = PAPER_MIN_EDGE   # NOT the recommend gate -- see PAPER_MIN_EDGE
             alert_cfg = get_alert_config(session)
             open_paper = (
                 session.query(PlacedBet)
