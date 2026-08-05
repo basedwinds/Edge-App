@@ -28,6 +28,15 @@ from app.models.tournament_sim_esports import DEFAULT_BEST_OF, DEFAULT_TRIALS, s
 _AGGREGATE_PHRASES = (
     "qualify", "win an international", "to win a", "champs 20", "champions 20",
     "any international", "make champs", "make it to",
+    # Not aggregates but equally not a bracket, and each was being priced live:
+    #   "LCK Legend Group Win Totals 2026 Rounds 3-4" -- asks how many GAMES a
+    #     team wins, not who lifts the trophy; a bracket sim answers a different
+    #     question and its numbers do not even sum the same way.
+    #   "Worlds 2026 Winning Region" -- the candidates are REGIONS ("CBLOL
+    #     (Brazil)"), not teams. It was priced at 12.3% off whatever the Elo
+    #     lookup happened to fuzzy-match, which is worse than being unpriced.
+    #   "Team to Make Grand Finals" -- reaching the final is top-2, not winning.
+    "win total", "winning region", "grand final", "power ranking",
 )
 _MAX_SINGLE_EVENT_FIELD = 32
 

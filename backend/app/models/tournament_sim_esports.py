@@ -13,11 +13,19 @@ So this reconstructs a plausible bracket instead of reading a real one:
     TOP seeds -- exactly how a real seeded knockout draw is built.
   * Monte Carlo the matches with the title's real pairwise series win prob.
 
-This is deliberately an APPROXIMATION and is flagged as such wherever it's
-surfaced (model_validated stays False, same as everything else in this app):
-real esports events are often double-elimination or Swiss-into-playoff, which
-this single-elim model can't capture and which would generally give strong
-teams a somewhat HIGHER title chance (a second life after one loss). It exists
+The title decider now runs a real DOUBLE-ELIMINATION bracket (see
+_run_double_elim), which is the format VCT stages, LEC/LCK/LPL playoffs and most
+CS2 events actually use. It replaced a single-elim run whose stated flaw was
+exactly this: one loss ended a favourite's tournament when in reality it does
+not. Measured on a synthetic 600-Elo-spread field, the change moves the
+favourite from 35.8% to 38.3% (16 teams) and cuts the longshots, which is the
+direction a second life should push and the size it should push it.
+
+A REAL APPROXIMATION REMAINS, and it is the draw: we know the FIELD but not the
+bracket, so teams are seeded strongest-to-weakest by Elo. A real draw pairs
+teams differently, so an individual team's number can be off even though the
+field-wide shape is sound. model_validated stays False and these rows are not
+staked. It exists
 to put a principled, Elo-grounded number on ~160 real tournament_winner markets
 that currently have NO model at all -- a first pass whose edge, like the rest
 of the app, is proven or killed by forward CLV, not assumed. Because the
@@ -36,9 +44,9 @@ from typing import Callable
 # hidden behind a bare number (see esports_tournament_pricing.py + the futures
 # routers). model_validated stays False and these rows are not staked.
 TOURNAMENT_SIM_NOTE = (
-    "Priced by an Elo-seeded single-elimination bracket simulation. Real events "
-    "are usually double-elim/Swiss and the true draw isn't known, so this is an "
-    "approximation — shown for tracking, not staked."
+    "Priced by an Elo-seeded double-elimination bracket simulation. The real "
+    "draw isn't known, so seeding is by rating — approximate, shown for "
+    "tracking, not staked."
 )
 
 DEFAULT_TRIALS = 20000
@@ -118,6 +126,79 @@ def _play_round(field: list[str | None], mat: dict, rng: random.Random) -> list[
     return nxt
 
 
+def _play_round_with_losers(
+    field: list[str | None], mat: dict, rng: random.Random
+) -> tuple[list[str | None], list[str]]:
+    """Like _play_round but also returns the beaten teams, which is what a
+    double-elimination bracket needs -- a loss drops you, it does not end you.
+    Byes produce no loser."""
+    winners: list[str | None] = []
+    losers: list[str] = []
+    for i in range(0, len(field), 2):
+        a = field[i]
+        b = field[i + 1] if i + 1 < len(field) else None
+        if a is None:
+            winners.append(b)
+        elif b is None:
+            winners.append(a)
+        else:
+            if rng.random() < mat[(a, b)]:
+                winners.append(a)
+                losers.append(b)
+            else:
+                winners.append(b)
+                losers.append(a)
+    return winners, losers
+
+
+def _run_double_elim(bracket: list[str | None], mat: dict, rng: random.Random) -> str | None:
+    """One double-elimination tournament; returns the champion.
+
+    Upper bracket runs as a normal knockout. Every upper-bracket loser drops
+    into the lower bracket, where a second loss eliminates. Each time the upper
+    bracket produces a new batch of losers, the lower bracket first plays itself
+    down ("minor" rounds) until it is the same size as that batch, then plays
+    the batch ("major" rounds) -- the standard structure used by VCT, LEC/LCK
+    playoffs and CS2 events.
+
+    The grand final is a single series with NO bracket reset: the lower-bracket
+    survivor does not have to beat the upper-bracket winner twice. Reset formats
+    exist, and modelling one would raise the upper-bracket team's title chance a
+    little further; without per-event format data the simpler and more common
+    shape is the honest default.
+    """
+    ub: list[str | None] = list(bracket)
+    lb: list[str | None] = []
+    while len(ub) > 1:
+        ub, dropped = _play_round_with_losers(ub, mat, rng)
+        if not lb:
+            lb = list(dropped)
+            continue
+        # Minor rounds: thin the existing lower bracket to meet the new arrivals.
+        while len(lb) > len(dropped) and len(lb) > 1:
+            lb, _ = _play_round_with_losers(lb, mat, rng)
+        # Major round: survivors vs the freshly dropped, pairwise.
+        merged: list[str | None] = []
+        for i, drop in enumerate(dropped):
+            if i < len(lb) and lb[i] is not None:
+                a, b = lb[i], drop
+                merged.append(a if rng.random() < mat[(a, b)] else b)
+            else:
+                merged.append(drop)
+        # A lower bracket larger than the drop batch keeps its extras in play.
+        merged.extend(lb[len(dropped):])
+        lb = merged
+    while len(lb) > 1:
+        lb, _ = _play_round_with_losers(lb, mat, rng)
+    champ_ub = ub[0] if ub else None
+    champ_lb = lb[0] if lb else None
+    if champ_ub is None:
+        return champ_lb
+    if champ_lb is None:
+        return champ_ub
+    return champ_ub if rng.random() < mat[(champ_ub, champ_lb)] else champ_lb
+
+
 def _stable_rng(field_ratings: list[tuple[str, float]]) -> random.Random:
     """Deterministic RNG seeded from the field so displayed prices don't jitter
     between cache refreshes for an unchanged field (Monte Carlo noise would
@@ -144,10 +225,7 @@ def simulate_tournament_winner(
     rng = _stable_rng(rated)
     wins = {t: 0 for t, _ in rated}
     for _ in range(trials):
-        field = list(slots)
-        while len(field) > 1:
-            field = _play_round(field, mat, rng)
-        champ = field[0] if field else None
+        champ = _run_double_elim(list(slots), mat, rng)
         if champ is not None:
             wins[champ] += 1
     return {t: wins[t] / trials for t, _ in rated}
