@@ -14,9 +14,11 @@ import datetime
 import logging
 import re
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.db.models import Market
+from app.clients.kalshi_client import get_markets_by_tickers
+from app.db.models import Market, MarketSnapshot
 
 log = logging.getLogger("market_cleanup")
 
@@ -60,3 +62,80 @@ def close_stale_game_markets(session: Session, days: int = 2, commit: bool = Tru
         session.commit()
     log.info("market cleanup: closed %d stale game markets (ticker date < %s)", closed, cutoff)
     return closed
+
+
+# Statuses Kalshi reports for a market that is no longer tradeable.
+_DEAD = {"closed", "determined", "finalized", "settled"}
+
+
+def reconcile_vanished_market_status(
+    session: Session, stale_hours: int = 24, limit: int = 4000, commit: bool = True
+) -> dict[str, int]:
+    """Asks Kalshi the true status of active markets that stopped updating.
+
+    close_stale_game_markets above reads the DATE out of the ticker, which only
+    works for per-game tickers (`KXMLBGAME-26JUL17...`). Futures tickers carry a
+    season or an event code instead (`KXCS2-BBS2F26-FAL`, `KXNFLAFCWEST-27-DEN`),
+    so that function deliberately never touches them -- and nothing else did
+    either. A finished tournament therefore stayed `active` forever: BLAST Bounty
+    Season 2 Finals settled on 2026-07-25 and was still being recommended as a
+    bet, with a Mark placed button, eleven days later.
+
+    Scale of the gap when this was written: 27,755 of 54,575 markets marked
+    active (51%) had not received a snapshot in 24 hours. A 100-ticker sample
+    came back 100/100 `finalized`.
+
+    Rather than infer death from silence, this ASKS. Silence only selects which
+    markets to ask about; the status written is Kalshi's own. That distinction
+    matters -- a market can go quiet because a poller crashed or a series was
+    temporarily dropped, and guessing "closed" from silence alone would retire
+    live markets. A market Kalshi still calls open is explicitly left alone.
+
+    `limit` bounds one run (4,000 markets = 40 requests) so the daily job stays
+    polite; the backlog drains over a few days and the steady state is small.
+    """
+    latest = (
+        session.query(MarketSnapshot.market_id, func.max(MarketSnapshot.ts).label("mx"))
+        .group_by(MarketSnapshot.market_id).subquery()
+    )
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=stale_hours)
+    rows = (
+        session.query(Market)
+        .join(latest, latest.c.market_id == Market.id)
+        .filter(Market.status == "active", Market.source == "kalshi",
+                Market.source_ticker.isnot(None), latest.c.mx < cutoff)
+        .order_by(latest.c.mx)          # oldest silence first
+        .limit(limit).all()
+    )
+    if not rows:
+        return {"checked": 0, "closed": 0, "still_open": 0, "unknown": 0}
+
+    by_ticker = {m.source_ticker: m for m in rows}
+    try:
+        live = get_markets_by_tickers(list(by_ticker))
+    except Exception:
+        log.exception("status reconcile: Kalshi lookup failed -- nothing changed")
+        return {"checked": 0, "closed": 0, "still_open": 0, "unknown": 0}
+
+    closed = still_open = 0
+    seen = set()
+    for m in live:
+        row = by_ticker.get(m.get("ticker"))
+        if row is None:
+            continue
+        seen.add(m["ticker"])
+        status = (m.get("status") or "").lower()
+        if status in _DEAD:
+            row.status = status
+            closed += 1
+        else:
+            still_open += 1
+    # A ticker Kalshi did not return is NOT assumed dead: an unrecognised or
+    # delisted ticker looks identical to a transient API omission from here.
+    unknown = len(by_ticker) - len(seen)
+    if commit:
+        session.commit()
+    log.info("status reconcile: checked %d, closed %d, still open %d, no answer %d",
+             len(by_ticker), closed, still_open, unknown)
+    return {"checked": len(by_ticker), "closed": closed,
+            "still_open": still_open, "unknown": unknown}

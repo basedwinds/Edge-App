@@ -21,7 +21,7 @@ from app.ingestion.poller_wnba import refresh_wnba_season_sim, run_full_refresh_
 from app.ingestion.poller_lock import serialized
 from app.models.dead_market_sanity_check import run_dead_market_sanity_check
 from app.models.snapshot_maintenance import prune_market_snapshots
-from app.models.market_cleanup import close_stale_game_markets
+from app.models.market_cleanup import close_stale_game_markets, reconcile_vanished_market_status
 from app.models.tennis_surface_backfill import run_tennis_surface_backfill
 
 log = logging.getLogger("scheduler")
@@ -145,12 +145,21 @@ def run_snapshot_prune():
 def run_market_cleanup():
     """Daily -- marks past-date game markets 'closed' so Kalshi markets that
     dropped off the open list don't linger as 'active' forever (see
-    market_cleanup.py). Only logs, never raises."""
+    market_cleanup.py), then asks Kalshi directly about the ones whose ticker
+    carries no date. Only logs, never raises.
+
+    The second pass exists because the first cannot see futures: their tickers
+    hold a season or event code rather than a date, so a settled tournament
+    stayed 'active' indefinitely and kept being offered as a bet."""
     session = SessionLocal()
     try:
         close_stale_game_markets(session)
     except Exception:
         log.exception("market cleanup failed")
+    try:
+        reconcile_vanished_market_status(session)
+    except Exception:
+        log.exception("market status reconcile failed")
     finally:
         session.close()
 

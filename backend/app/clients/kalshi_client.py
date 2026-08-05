@@ -96,6 +96,26 @@ def get_open_events(series_ticker: str) -> list[dict]:
     return paginate(url_builder, list_key="events", cursor_style="cursor")
 
 
+def get_markets_by_tickers(tickers: list[str]) -> list[dict]:
+    """Current state of specific markets by ticker, regardless of status.
+
+    Every other fetch in this client asks for `status=open`, which is right for
+    pricing but means a market DISAPPEARS from our view the moment it closes --
+    and the poller only updates what it can still see, so the closed row keeps
+    whatever status it last had. This is the one call that can ask about a
+    market we can no longer find, which is what makes reconciliation possible.
+
+    Batched: /markets accepts a comma-separated `tickers` list, measured at 100
+    tickers per call in ~0.3s.
+    """
+    out: list[dict] = []
+    for i in range(0, len(tickers), 100):
+        batch = tickers[i:i + 100]
+        d = get_json(f"{BASE}/markets?limit=1000&tickers=" + ",".join(batch))
+        out.extend((d or {}).get("markets", []))
+    return out
+
+
 def get_markets_for_event(event_ticker: str) -> list[dict]:
     d = get_json(f"{BASE}/markets?event_ticker={event_ticker}")
     return d.get("markets", [])
