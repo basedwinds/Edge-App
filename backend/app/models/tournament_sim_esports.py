@@ -21,11 +21,30 @@ not. Measured on a synthetic 600-Elo-spread field, the change moves the
 favourite from 35.8% to 38.3% (16 teams) and cuts the longshots, which is the
 direction a second life should push and the size it should push it.
 
-A REAL APPROXIMATION REMAINS, and it is the draw: we know the FIELD but not the
-bracket, so teams are seeded strongest-to-weakest by Elo. A real draw pairs
-teams differently, so an individual team's number can be off even though the
-field-wide shape is sound. model_validated stays False and these rows are not
-staked. It exists
+DOUBLE-ELIM IS NOT A GUESS -- it was measured. Surveying vlr.gg's published
+brackets across 16 live Valorant events: 8 of the 9 that publish a bracket are
+double-elimination (every VCT stage and Champions, with a 3-round upper bracket),
+1 is single-elim (a minor invitational), 7 publish none. So the default here
+matches ~89% of real events that state a format.
+
+TWO APPROXIMATIONS REMAIN, and neither is fixable by scraping harder:
+
+  1. THE DRAW. We know the FIELD but not the bracket, so teams are seeded
+     strongest-to-weakest by Elo. Checked directly on vlr.gg: for every event we
+     price, the playoff bracket slots hold GROUP PLACEHOLDERS ("Omega #2",
+     "Play-In #1-2"), not teams -- the draw does not exist yet because the group
+     stage has not finished. Nobody has it, so this is inherent to pricing a
+     tournament before its playoffs, not a data gap.
+
+  2. THE GROUP STAGE. Bigger, and previously unnamed. Our market field for
+     "VCT EMEA Stage 2 2026: Winner" is 12 teams; the real playoff bracket is
+     8 (Upper Round 1 = 4 matches). Four of those twelve must be eliminated
+     BEFORE any bracket exists, but this model brackets all twelve directly, so
+     it hands a bracket path to teams that in reality must first survive a
+     group stage. Modelling it properly means two phases (group -> seeded
+     playoff), which is a real change, not a constant.
+
+model_validated stays False and these rows are not staked. It exists
 to put a principled, Elo-grounded number on ~160 real tournament_winner markets
 that currently have NO model at all -- a first pass whose edge, like the rest
 of the app, is proven or killed by forward CLV, not assumed. Because the
