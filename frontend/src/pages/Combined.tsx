@@ -27,6 +27,8 @@ import {
   type RecommendedBetRow,
   type SettingsPayload,
 } from "../api/markets";
+import { crossPlatformKey } from "../api/markets";
+import { gameIdForRow } from "../lib/sports";
 import { CrossSportFuturesTable, type CrossSportFuturesRow } from "../components/markets/CrossSportFuturesTable";
 import { LADDER_TYPES } from "../utils/futuresGroupCap";
 import { fetchReadiness, isRowNotReady, isFuturesSportNotReady } from "../api/markets";
@@ -129,10 +131,33 @@ async function loadCombined(): Promise<CombinedPlan> {
     guard("TennisMarkets", fetchTennisMarkets(), []), guard("SoccerMarkets", fetchSoccerMarkets(), []), guard("ValorantMarkets", fetchValorantMarkets(), []),
     guard("Cs2Markets", fetchCs2Markets(), []), guard("LolMarkets", fetchLolMarkets(), []), guard("RacingMarkets", fetchRacingMarkets(), []),
   ]);
+  // Keys of everything already placed, so a bet you have ALREADY TAKEN cannot be
+  // offered again.
+  //
+  // It was being counted TWICE against its sport. Its stake is subtracted from
+  // the ceiling below (`locked`), and the same market also stayed in `ranked`
+  // and consumed the ceiling a second time -- so placing one $10 bet burned $20
+  // of a $60 sport budget, which is why marking a bet made OTHER bets vanish.
+  // Measured on the live board: 14 of 18 open bets were simultaneously locking
+  // capital and still being offered, $140 double-counted.
+  //
+  // Same key the "Placed" badge uses (cross_key + game key), so a proposition
+  // placed on Kalshi is also recognised on its Polymarket twin.
+  const placedKeys = new Set<string>();
+  for (const b of openBets) {
+    placedKeys.add(b.cross_key);
+    if (b.game_key) placedKeys.add(`game:${b.game_key}`);
+  }
+  const notPlaced = (r: RecommendedBetRow) => {
+    if (placedKeys.has(crossPlatformKey(r))) return false;
+    const gid = gameIdForRow(r);
+    return !(gid && placedKeys.has(`game:${gid}`));
+  };
+
   const plan = (sport: string, ranked: RecommendedBetRow[], weeklyPool: number, futuresPool = 0): SportPlan => {
     const l = locked.get(sport) ?? { weekly: 0, futures: 0 };
     return {
-      ranked,
+      ranked: ranked.filter(notPlaced),
       ceilings: {
         weekly: Math.max(0, weeklyPool * PORTFOLIO_CEILING_PCT - l.weekly),
         futures: Math.max(0, futuresPool * PORTFOLIO_CEILING_PCT - l.futures),
