@@ -36,6 +36,7 @@ from app.ingestion.market_matcher_lol import team_names_match
 from app.models.baseline import elo_service_lol
 from app.models.esports_tournament_pricing import price_tournament_winners
 from app.models.ladder_sanity import futures_group_decided, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
+from app.models.esports_start_time import trusted_start_time
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -456,7 +457,10 @@ def list_lol_markets(session: Session = Depends(get_session)):
                 fixture_key=_fixture_keys.get(m.lol_match_id, m.lol_match_id),
                 event_name=match.event_name if match else None,
                 match_date=match.match_date if match else None,
-                estimated_start_time=match.estimated_start_time if match else None,
+                # Guarded: a fixture's start time can belong to a DIFFERENT
+                # fixture between the same teams (see esports_start_time).
+                estimated_start_time=trusted_start_time(
+                    match.estimated_start_time, match.match_date) if match else None,
                 best_of=match.best_of if match else None,
                 group_label=m.group_label,
                 implied_prob=implied,
