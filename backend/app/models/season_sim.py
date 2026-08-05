@@ -40,8 +40,42 @@ N_TRIALS = 2000
 MAX_REG_WINS = 17  # current NFL regular season length; win-count histograms below use indices 0..17
 
 
-def _simulate_game(ratings: dict, home: str, away: str, home_field_adv: float, rng: random.Random) -> str:
-    p_home = win_prob(ratings.get(home, 1500.0), ratings.get(away, 1500.0), home_field_adv)
+# Pre-season uncertainty in a team's TRUE strength, in Elo points, drawn once per
+# simulated season and held across that season's games.
+#
+# Without it every game is an independent coin off a rating treated as exactly
+# known, so a 17-game season is close to a binomial -- far too narrow. Real
+# pre-season uncertainty is about the TEAM (free agency, the draft, a new QB) and
+# it persists all year, which fattens the tails in a way independent flips cannot.
+#
+# Measured the same way as the CFB version (see season_sim_cfb), projecting each
+# season from prior-years-only Elo with zero games played -- exactly what these
+# futures price. 1,760 team-threshold predictions over 2021-2025:
+#
+#   sigma=0    predicted 88.5% -> happened 76.3%   predicted 11.4% -> happened 18.9%
+#   sigma=100  mean absolute calibration gap 6.94pp -> ~1.5pp
+#
+# Brier 0.1507 -> 0.1444.
+#
+# EVIDENCE IS WEAKER THAN CFB'S AND THE NUMBER REFLECTS THAT. Leave-one-season-out
+# improved only 3 of 5 folds (2021 and 2023 got worse) and the fitted sigma ranged
+# 100-150, where CFB improved all 4 folds at a tight 225-250. So this takes the
+# LOW end of that range -- 100 was the modal fold pick -- rather than the 125 that
+# minimises full-sample gap. The DIRECTION is not in doubt: the sim demonstrably
+# does not represent pre-season roster turnover, and unmodelled uncertainty can
+# only ever produce overconfidence. The magnitude is the uncertain part, so it is
+# deliberately under-applied.
+TEAM_STRENGTH_SIGMA = 100.0
+
+
+def _simulate_game(ratings: dict, home: str, away: str, home_field_adv: float, rng: random.Random,
+                   offsets: dict | None = None) -> str:
+    ra = ratings.get(home, 1500.0)
+    rb = ratings.get(away, 1500.0)
+    if offsets is not None:
+        ra += offsets.get(home, 0.0)
+        rb += offsets.get(away, 0.0)
+    p_home = win_prob(ra, rb, home_field_adv)
     return home if rng.random() < p_home else away
 
 
@@ -146,13 +180,19 @@ def run_simulation(
     for _ in range(n_trials):
         wins = {t: starting_wins.get(t, 0) for t in all_teams}
         head_to_head: dict[tuple, str] = {}
+        # ONE strength draw per simulated season, shared by the regular season and
+        # the playoffs below -- a team is the same team all year, so redrawing per
+        # game would just be extra coin-flip noise and would leave the win-total
+        # distribution as narrow as before (see TEAM_STRENGTH_SIGMA).
+        offsets = ({t: rng.gauss(0.0, TEAM_STRENGTH_SIGMA) for t in all_teams}
+                   if TEAM_STRENGTH_SIGMA > 0 else None)
 
         for g in remaining:
             home, away = g["home_team"], g["away_team"]
             if home not in wins or away not in wins:
                 continue
             hfa = effective_home_field_adv(home, g.get("location"))
-            winner = _simulate_game(ratings, home, away, hfa, rng)
+            winner = _simulate_game(ratings, home, away, hfa, rng, offsets)
             loser = away if winner == home else home
             wins[winner] += 1
             head_to_head[(winner, loser)] = winner
@@ -214,7 +254,7 @@ def run_simulation(
             wc_winners = [seeds[0]]  # 1-seed byes
             for hi, lo in ((1, 6), (2, 5), (3, 4)):  # seed2v7, seed3v6, seed4v5
                 home, away = home_away(seeds[hi], seeds[lo])
-                w = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng)
+                w = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng, offsets)
                 wc_winners.append(w)
                 trial_stage[seeds[lo] if w == seeds[hi] else seeds[hi]] = "wc"  # WC loser
 
@@ -223,19 +263,19 @@ def run_simulation(
             middle_two = survivors[1:3]
 
             home, away = home_away(one_seed_team, lowest_remaining)
-            dw1 = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng)
+            dw1 = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng, offsets)
             trial_stage[one_seed_team if dw1 == lowest_remaining else lowest_remaining] = "div"
             home, away = home_away(middle_two[0], middle_two[1])
-            dw2 = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng)
+            dw2 = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng, offsets)
             trial_stage[middle_two[0] if dw2 == middle_two[1] else middle_two[1]] = "div"
 
             home, away = home_away(dw1, dw2)
-            conf_champ = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng)
+            conf_champ = _simulate_game(ratings, home, away, effective_home_field_adv(home, None), rng, offsets)
             trial_stage[dw1 if conf_champ == dw2 else dw2] = "conf"  # conf-championship-game loser
             conf_champs[conf] = conf_champ
             tallies[conf_champ]["conf_champ"] += 1
 
-        sb_champ = _simulate_game(ratings, conf_champs["AFC"], conf_champs["NFC"], 0.0, rng)  # neutral site
+        sb_champ = _simulate_game(ratings, conf_champs["AFC"], conf_champs["NFC"], 0.0, rng, offsets)  # neutral site
         tallies[sb_champ]["sb_champ"] += 1
         sb_loser = conf_champs["NFC"] if sb_champ == conf_champs["AFC"] else conf_champs["AFC"]
         trial_stage[sb_champ] = "sb_win"
