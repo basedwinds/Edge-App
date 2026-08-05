@@ -30,6 +30,7 @@ Also tracks each team's own most recent real match date (no new scraping)
 for the validated rest/fatigue adjustment applied at PREDICTION time only
 (see REST_POINTS_PER_DAY's own module comment below, same technique as
 elo_service_cs2.py's own version)."""
+from app.models.baseline import team_name_resolver as _tnr
 import datetime
 import json
 import logging
@@ -138,6 +139,13 @@ def refresh_ratings():
     # POOL 1 (clean): Primary tier only -- drives every Primary-vs-Primary
     # prediction, byte-identical to the pre-expansion model.
     state, last_played_date, rated = _train(all_matches, resolver)
+    # Market and match feeds spell teams differently and Elo lookups are exact,
+    # so a market's spelling can hold a rating built from no games while another
+    # spelling holds the history. See team_name_resolver for the guards and for
+    # the blanket-merge approach that was tried and rejected on the data.
+    _match_counts = _tnr.count_appearances(all_matches)
+    _cache["match_counts"] = _match_counts
+    _cache["canonical_by_key"] = _tnr.build_canonical_by_key(_match_counts, MIN_GAMES)
     _cache["state"] = state
     _cache["last_played_date"] = last_played_date
 
@@ -162,6 +170,12 @@ def refresh_ratings():
         len(state.ratings), len(state_exp.ratings), len(lower), rated,
         len(historical_matches), len(live_matches), len(all_matches),
     )
+
+
+def resolve_team_name(team: str) -> str:
+    """The spelling that owns this team's match history, or the input unchanged."""
+    return _tnr.resolve(team, _cache.get("match_counts") or {},
+                        _cache.get("canonical_by_key") or {}, MIN_GAMES)
 
 
 def get_team_rating(team: str) -> float | None:
@@ -353,6 +367,13 @@ def get_series_distribution(team_a: str, team_b: str, best_of: int, match_date: 
         pool, last_played, resolver = state, _cache.get("last_played_date", {}), _cache.get("lineup_resolver")
     else:
         exp = _cache.get("state_exp")
+        # Resolve each side onto the spelling that owns its history BEFORE this
+        # gate. Resolving only in get_team_rating leaves this reading the raw
+        # market spelling, so a team whose history lives under another spelling
+        # still fails MIN_GAMES and the whole match stays unpriced -- this gate,
+        # not the rating lookup, is what decides if a market can be priced.
+        team_a = resolve_team_name(team_a)
+        team_b = resolve_team_name(team_b)
         if exp is None or exp.games_played(team_a) < MIN_GAMES or exp.games_played(team_b) < MIN_GAMES:
             return None
         pool, last_played, resolver = exp, _cache.get("last_played_date_exp", {}), _cache.get("lineup_resolver_exp")
