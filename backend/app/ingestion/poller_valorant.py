@@ -26,7 +26,7 @@ import logging
 from app.clients import kalshi_valorant_client, polymarket_valorant_client
 from app.db.database import SessionLocal
 from app.ingestion import market_catalog_valorant, valorant_data
-from app.ingestion.start_times import should_update_start
+from app.ingestion.start_times import apply_start
 from app.ingestion.poller_lock import db_write_lock
 from app.models.baseline import elo_service_valorant
 
@@ -133,8 +133,8 @@ def refresh_kalshi_valorant_markets():
                     # and already implemented for MMA (see poller_mma.py::
                     # _infer_start_time_from_kalshi).
                     occurrence = occurrence_by_code.get(code)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                        match.estimated_start_time = occurrence
+                    if match is not None and match.winner is None:
+                        apply_start(match, occurrence)
                 else:
                     match_id_by_code[code] = None
 
@@ -169,8 +169,8 @@ def refresh_kalshi_valorant_markets():
                     )
                     match_id_by_series_event[event_ticker] = match.id if match else None
                     occurrence = occurrence_by_series_event.get(event_ticker)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                        match.estimated_start_time = occurrence
+                    if match is not None and match.winner is None:
+                        apply_start(match, occurrence)
                 else:
                     match_id_by_series_event[event_ticker] = None
 
@@ -229,8 +229,27 @@ def refresh_polymarket_valorant_markets():
             for slug, teams in teams_by_slug.items():
                 if len(teams) == 2:
                     team_a, team_b = tuple(teams)
+                    # Pass Polymarket's OWN gameStartTime date as match_date.
+                    # Without it find_or_create_upcoming_match falls back to
+                    # datetime.date.today(), so the row records the day it was
+                    # SCRAPED -- the Kalshi path above has always passed a real
+                    # date, this one never did.
+                    #
+                    # REAL BUG (user-reported 2026-08-05): Leviatan vs MIBR,
+                    # a match on the 8th, showed as an August 3rd match because
+                    # the 3rd is when Polymarket first listed it. 22 Valorant
+                    # rows carried the same defect, every one a "live:" row.
+                    #
+                    # It also caused a DUPLICATE. _within_rematch_window only
+                    # matches fixtures within +/-2 days, so a row stamped 5 days
+                    # early is unrecognisable as the same fixture, and the
+                    # vlr.gg scrape then created a second row (id 230) for the
+                    # match this poller had already created (id 275).
+                    start_time = start_time_by_slug.get(slug)
+                    start_date = str(start_time)[:10] if start_time else None
                     match = market_catalog_valorant.find_or_create_upcoming_match(
-                        session, team_a, team_b, event_name=event_by_slug.get(slug)
+                        session, team_a, team_b,
+                        match_date=start_date, event_name=event_by_slug.get(slug),
                     )
                     match_id_by_slug[slug] = match.id if match else None
                     # REAL BUG this fixes (user-reported 2026-07-20: esports
@@ -240,8 +259,8 @@ def refresh_polymarket_valorant_markets():
                     # docstring); wired through here the same way Kalshi's
                     # occurrence_datetime is above.
                     start_time = start_time_by_slug.get(slug)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, start_time, match.match_date):
-                        match.estimated_start_time = start_time
+                    if match is not None and match.winner is None:
+                        apply_start(match, start_time)
                 else:
                     match_id_by_slug[slug] = None
 

@@ -16,7 +16,7 @@ import datetime
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
-from app.ingestion.start_times import should_update_start
+from app.ingestion.start_times import apply_start
 from app.db.models import LolMap, LolMatch, LolRosterChangeCache, Market, MarketSnapshot
 from app.ingestion.market_matcher_lol import match_by_names_only, team_names_match
 
@@ -123,20 +123,13 @@ def upsert_leaguepedia_match(session: Session, row: dict) -> LolMatch:
     match.event_name = row["event_name"] or match.event_name
     if row.get("best_of") is not None:
         match.best_of = match.best_of or row["best_of"]
-    if match.winner is None and should_update_start(
-        match.estimated_start_time, row.get("estimated_start_time"), match.match_date
-    ):
-        match.estimated_start_time = row["estimated_start_time"]
-        # Keep match_date in step with the real start. It used to be written only
-        # at row creation, so when a match got rescheduled the start time moved
-        # but the DATE went stale -- e.g. Invictus Gaming vs LNG Esports showed
-        # 2026-07-24 in the UI while its real start was 2026-08-02 (9 days off,
-        # user-reported 2026-08-02). The date column is what the UI renders, so a
-        # stale match_date is a wrong date on screen even though we hold the
-        # correct instant.
-        start_date = str(row["estimated_start_time"])[:10]
-        if len(start_date) == 10 and start_date != match.match_date:
-            match.match_date = start_date
+    # apply_start keeps match_date in step with the real start -- the rule that
+    # used to live inline here (Invictus Gaming vs LNG showed 2026-07-24 while
+    # its real start was 2026-08-02, user-reported). It was only ever applied on
+    # THIS path, so the same staleness kept reappearing everywhere else; see
+    # start_times.apply_start for the Valorant case that forced generalising it.
+    if match.winner is None:
+        apply_start(match, row.get("estimated_start_time"))
     if row.get("maps_won_a") is not None:
         match.maps_won_a = row["maps_won_a"]
     if row.get("maps_won_b") is not None:

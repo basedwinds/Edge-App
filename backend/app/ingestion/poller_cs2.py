@@ -65,7 +65,7 @@ import logging
 from app.clients import kalshi_cs2_client, polymarket_cs2_client
 from app.db.database import SessionLocal
 from app.ingestion import cs2_data, market_catalog_cs2
-from app.ingestion.start_times import should_update_start
+from app.ingestion.start_times import apply_start
 from app.ingestion.poller_lock import db_write_lock
 from app.models.baseline import elo_service_cs2
 
@@ -158,8 +158,8 @@ def refresh_kalshi_cs2_markets():
                     # (for date_by_event) and then thrown away -- only the
                     # date survived onto the match record.
                     occurrence = occurrence_by_event.get(event_ticker)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                        match.estimated_start_time = occurrence
+                    if match is not None and match.winner is None:
+                        apply_start(match, occurrence)
                 else:
                     match_id_by_event[event_ticker] = None
 
@@ -171,10 +171,12 @@ def refresh_kalshi_cs2_markets():
 
             best_of_backfilled = 0
             for row in total_maps_rows:
-                match = market_catalog_cs2.find_or_create_upcoming_match(session, row["team_a"], row["team_b"])
                 occurrence = row.get("occurrence_datetime")
-                if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                    match.estimated_start_time = occurrence
+                # match_date from the real start time -- otherwise
+                # find_or_create_upcoming_match stamps today (the SCRAPE date).
+                match = market_catalog_cs2.find_or_create_upcoming_match(session, row["team_a"], row["team_b"], match_date=str(occurrence)[:10] if occurrence else None)
+                if match is not None and match.winner is None:
+                    apply_start(match, occurrence)
                 # REAL COVERAGE GAP this closes (found live 2026-07-20) --
                 # see market_catalog_cs2.py::backfill_best_of_from_total_maps_line's
                 # own docstring for the full story. Kept even after
@@ -201,11 +203,13 @@ def refresh_kalshi_cs2_markets():
             for code, teams in teams_by_code.items():
                 if len(teams) == 2:
                     team_a, team_b = tuple(teams)
-                    match = market_catalog_cs2.find_or_create_upcoming_match(session, team_a, team_b)
-                    match_id_by_code[code] = match.id if match else None
                     occurrence = occurrence_by_code.get(code)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                        match.estimated_start_time = occurrence
+                    # match_date from the real start time -- otherwise
+                    # find_or_create_upcoming_match stamps today (the SCRAPE date).
+                    match = market_catalog_cs2.find_or_create_upcoming_match(session, team_a, team_b, match_date=str(occurrence)[:10] if occurrence else None)
+                    match_id_by_code[code] = match.id if match else None
+                    if match is not None and match.winner is None:
+                        apply_start(match, occurrence)
                     # REAL COVERAGE GAP this closes (found live 2026-07-20,
                     # part of the same KXCS2MAP ticker fix -- see
                     # kalshi_cs2_client.py's own docstring): CS2 never had
@@ -285,8 +289,8 @@ def refresh_polymarket_cs2_markets():
                 # what actually keeps started/finished matches out of
                 # recommendations.
                 start_time = start_time_by_slug.get(slug)
-                if match.winner is None and should_update_start(match.estimated_start_time, start_time, match.match_date):
-                    match.estimated_start_time = start_time
+                if match.winner is None:
+                    apply_start(match, start_time)
                 # Third best_of path, and the only direct one -- Polymarket
                 # states it in the event title ("(BO3)"). Never overwrites a
                 # value Kalshi's two inferred backfills already set.

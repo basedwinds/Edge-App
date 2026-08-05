@@ -36,7 +36,7 @@ import datetime
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
-from app.ingestion.start_times import should_update_start
+from app.ingestion.start_times import apply_start
 from app.db.models import Cs2Map, Cs2Match, Cs2RosterChangeCache, Market, MarketSnapshot
 from app.ingestion.market_matcher_cs2 import match_by_names_only, team_names_match
 
@@ -129,10 +129,10 @@ def upsert_liquipedia_match(session: Session, row: dict) -> Cs2Match:
     match.event_name = row["event_name"] or match.event_name
     if row.get("best_of") is not None:
         match.best_of = match.best_of or row["best_of"]  # Liquipedia states best_of upfront -- never overwrite a real known value, but fill if somehow missing
-    if match.winner is None and should_update_start(
-            match.estimated_start_time, row.get("estimated_start_time"), match.match_date
-        ):
-        match.estimated_start_time = row["estimated_start_time"]
+    # apply_start also keeps match_date in step with the real start -- see its
+    # docstring for the user-reported wrong-date-in-the-UI case this closes.
+    if match.winner is None:
+        apply_start(match, row.get("estimated_start_time"))
     if row.get("maps_won_a") is not None:
         match.maps_won_a = row["maps_won_a"]
     if row.get("maps_won_b") is not None:

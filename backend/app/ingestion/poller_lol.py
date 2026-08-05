@@ -28,7 +28,7 @@ import logging
 from app.clients import kalshi_lol_client, polymarket_lol_client
 from app.db.database import SessionLocal
 from app.ingestion import lol_data, market_catalog_lol
-from app.ingestion.start_times import should_update_start
+from app.ingestion.start_times import apply_start
 from app.ingestion.poller_lock import db_write_lock
 from app.models.baseline import elo_service_lol
 
@@ -135,8 +135,8 @@ def refresh_kalshi_lol_markets():
                     # (for date_by_code) and then thrown away -- only the
                     # date survived onto the match record.
                     occurrence = occurrence_by_code.get(code)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                        match.estimated_start_time = occurrence
+                    if match is not None and match.winner is None:
+                        apply_start(match, occurrence)
                 else:
                     match_id_by_code[code] = None
 
@@ -166,11 +166,13 @@ def refresh_kalshi_lol_markets():
             for event_ticker, teams in teams_by_series_event.items():
                 if len(teams) == 2:
                     team_a, team_b = tuple(teams)
-                    match = market_catalog_lol.find_or_create_upcoming_match(session, team_a, team_b)
-                    match_id_by_series_event[event_ticker] = match.id if match else None
                     occurrence = occurrence_by_series_event.get(event_ticker)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                        match.estimated_start_time = occurrence
+                    # match_date from the real start time -- otherwise
+                    # find_or_create_upcoming_match stamps today (the SCRAPE date).
+                    match = market_catalog_lol.find_or_create_upcoming_match(session, team_a, team_b, match_date=str(occurrence)[:10] if occurrence else None)
+                    match_id_by_series_event[event_ticker] = match.id if match else None
+                    if match is not None and match.winner is None:
+                        apply_start(match, occurrence)
                 else:
                     match_id_by_series_event[event_ticker] = None
 
@@ -181,10 +183,12 @@ def refresh_kalshi_lol_markets():
                 )
 
             for row in total_maps_rows:
-                match = market_catalog_lol.find_or_create_upcoming_match(session, row["team_a"], row["team_b"])
                 occurrence = row.get("occurrence_datetime")
-                if match is not None and match.winner is None and should_update_start(match.estimated_start_time, occurrence, match.match_date):
-                    match.estimated_start_time = occurrence
+                # match_date from the real start time -- otherwise
+                # find_or_create_upcoming_match stamps today (the SCRAPE date).
+                match = market_catalog_lol.find_or_create_upcoming_match(session, row["team_a"], row["team_b"], match_date=str(occurrence)[:10] if occurrence else None)
+                if match is not None and match.winner is None:
+                    apply_start(match, occurrence)
                 market_catalog_lol.upsert_kalshi_lol_total_maps_market(
                     session, row, match.id if match else None
                 )
@@ -228,11 +232,13 @@ def refresh_polymarket_lol_markets():
             for slug, teams in teams_by_slug.items():
                 if len(teams) == 2:
                     team_a, team_b = tuple(teams)
-                    match = market_catalog_lol.find_or_create_upcoming_match(session, team_a, team_b, event_name=event_by_slug.get(slug))
-                    match_id_by_slug[slug] = match.id if match else None
                     start = start_by_slug.get(slug)
-                    if match is not None and match.winner is None and should_update_start(match.estimated_start_time, start, match.match_date):
-                        match.estimated_start_time = start
+                    # match_date from the real start time -- otherwise
+                    # find_or_create_upcoming_match stamps today (the SCRAPE date).
+                    match = market_catalog_lol.find_or_create_upcoming_match(session, team_a, team_b, event_name=event_by_slug.get(slug), match_date=str(start)[:10] if start else None)
+                    match_id_by_slug[slug] = match.id if match else None
+                    if match is not None and match.winner is None:
+                        apply_start(match, start)
                 else:
                     match_id_by_slug[slug] = None
 
