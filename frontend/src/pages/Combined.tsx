@@ -581,10 +581,57 @@ export function Combined() {
   // the headline: "45 across 9 sports" above a table showing 29 across 7. The
   // gap was small until NFL and CFB futures (114 and 139 candidates, both
   // pre-season) started arriving, which made it obvious.
-  const futuresRows = useMemo(
-    () => (futuresQuery.data ?? []).filter((r) => !isFuturesSportNotReady(r.sport, readinessQuery.data)),
-    [futuresQuery.data, readinessQuery.data],
-  );
+  const futuresRows = useMemo(() => {
+    const ready = (futuresQuery.data ?? []).filter((r) => !isFuturesSportNotReady(r.sport, readinessQuery.data));
+    const s = settingsQuery.data;
+    if (!s) return ready;   // fail OPEN: never hide a real bet because settings are still loading
+
+    // DOLLAR CAPS, two-pass -- the row caps in loadCombinedFutures bound the
+    // COUNT per sport but nothing bounded the total spend. With 11 sports x 8
+    // rows x 0.25u that reaches $220 against a $200 global futures ceiling
+    // (10% of bankroll), so the tab could out-commit the cap it is supposed to
+    // sit inside. Not binding at today's volume, but only because most sports
+    // are out of season at once.
+    //
+    // Two-pass is REQUIRED, and the comment in loadCombinedFutures says so:
+    // spending a single pool in edge order lets one sport deep in its season
+    // consume the room before another sport is ever reached. Pass 1 gives each
+    // sport its own ceiling; pass 2 ranks the survivors by edge for the shared
+    // remainder, so the best bets across every sport win what is left.
+    // PASS 1 is already done, in loadCombinedFutures: the per-sport row cap
+    // (MAX_FUTURES_PER_SPORT, applied with `continue` not `break`) is this
+    // list's per-sport ceiling, and it is what guarantees a sport with one
+    // qualifying future keeps it no matter how many higher-edge rows another
+    // sport brings. So this is PASS 2 -- the global cap only.
+    //
+    // A per-sport DOLLAR ceiling was tried here and removed: at
+    // PORTFOLIO_CEILING_PCT (0.6) of a $28.16 futures pool it is $16.90, which
+    // at 0.25u would cut soccer and MLB from 8 rows to 6 -- a tighter and
+    // different constraint than the row cap that was asked for, and one that
+    // would silently shrink the list. The row cap already keeps every sport
+    // under its pool: 8 rows x 0.25u = $20 against $28.16.
+    const sorted = [...ready].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+    let globalSpent = 0;
+    const out: CrossSportFuturesRow[] = [];
+    for (const r of sorted) {
+      // Every row is charged, including one already marked placed (those stay
+      // in this list by design, badged "Placed ✓"). globalCeilings.futures has
+      // ALREADY netted off committed capital, so such a row is counted twice.
+      //
+      // That is deliberate. Excluding them needs a placed-row test, and the
+      // set available here (placedMarketIds) holds cross_keys, not the
+      // proposition keys this table matches futures on -- a near-miss key
+      // format would silently under-count and let the cap be exceeded, which is
+      // the one failure this exists to prevent. Double-counting can only show
+      // one row too FEW, and only once the cap is near binding; today it sits
+      // at $52.50 against $200.
+      const stake = r.suggested_stake_dollars ?? 0;
+      if (globalSpent + stake > combined.globalCeilings.futures) continue;
+      globalSpent += stake;
+      out.push(r);
+    }
+    return out;
+  }, [futuresQuery.data, readinessQuery.data, settingsQuery.data, combined.globalCeilings.futures]);
   const futuresStats = useMemo(() => {
     const sports = new Set(futuresRows.map((r) => r.sport)).size;
     const avgEdge = futuresRows.length ? futuresRows.reduce((s, r) => s + Math.abs(r.edge ?? 0), 0) / futuresRows.length : null;

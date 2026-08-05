@@ -329,6 +329,60 @@ FUTURES_UNIT_SCALE = 0.25
 # is a red flag (probable model error), not a reason to bet more -- see above.
 
 
+# Minimum MARKET price for a futures bet. Below this the model does not size it,
+# so it never reaches the cross-sport "what should I place" list.
+#
+# CHOSEN FROM THE USER'S OWN REAL BOOK (paper=0, settled, n=135), by entry price:
+#
+#     entry price     n   won    win%      ROI
+#     0-5%            4     0     0.0%   -100.0%
+#     5-15%           8     0     0.0%   -100.0%
+#     15-30%         39    11    28.2%    +39.6%
+#     30-50%         64    33    51.6%    +38.7%
+#     50%+           20    11    55.0%     -8.5%
+#
+# Twelve bets under 15%, ZERO winners; the first winner anywhere in the book is
+# at 16.0%. Applying a floor moves ROI +19.2% -> +28.1% and, more to the point,
+# takes the 95% CI from [-6.4%, +46.7%] (spans zero) to [+1.0%, +56.8%].
+#
+# SET AT 10%, NOT 15%, AND THE SECOND NUMBER IS WHY. The real book has only
+# THREE settled bets in the 10-15% band. The paper harness has 211, and says
+# that band is the best in the whole table:
+#
+#     paper harness (n=6,731 settled with a usable price)
+#     0-5%      46   ROI +11.1%
+#     5-10%     80   ROI -12.0%
+#     10-15%   211   ROI +18.5%    <- best band
+#     15-20%   326   ROI  -1.8%
+#     20-30%   937   ROI +13.3%
+#
+# So the replicated negative is 5-10% (real book 0-for-5 there, paper -12.0%
+# on n=80), and 0-5% is already mostly handled by implausible_disagreement.
+# A 15% floor would have cut the 10-15% band on the strength of 3 observations
+# while the 211-observation sample called it the best -- and would have removed
+# EVERY LoL, tennis and Valorant row, since a large-field tournament winner is
+# structurally priced under 15%. Paper fills are free, so that sample cannot
+# settle whether those prices are actually reachable, but it is the only sample
+# with the weight to rule on this band, and it says do not cut it.
+#
+# THIS IS NOT THE 5% FLOOR THAT WAS TESTED AND REJECTED EARLIER. That one was
+# worth +1.4pp over 5 bets because implausible_disagreement already blocked 32 of
+# the 37 sub-5% losers. It cannot see the 5-10% band at all -- an 8c market
+# against a 25% model is a 3x disagreement, nowhere near the 10x trigger -- and
+# that band is the one both samples agree loses.
+#
+# WHY FUTURES ONLY, for now. The floor is applied where it is best supported and
+# where the harm is worst: a futures bet locks capital for months, and the
+# season-sim models are measurably least reliable in exactly this tail (soccer
+# relegation predicted 40-60% happened 35.8%, and no historically top-half club
+# has ever been rated above 30% relegation in 1,072 backtested team-seasons -- so
+# a longshot future is an overstated tail probability meeting a market longshot).
+# 9 of the 12 losing bets above were GAME bets, so the same floor would very
+# likely help there too -- flagged for the user, deliberately not applied
+# unilaterally, since that changes the main betting flow rather than this list.
+FUTURES_MIN_MARKET_PRICE = 0.10
+
+
 def flat_stake_units(model_prob: float | None, market_price: float | None,
                      marginal_edge: float = FLAT_MARGINAL_UNIT_EDGE,
                      full_edge: float = FLAT_FULL_UNIT_EDGE) -> float | None:
@@ -355,13 +409,25 @@ def size_stake_dollars(
     flat_marginal_edge: float = FLAT_MARGINAL_UNIT_EDGE,
     flat_full_edge: float = FLAT_FULL_UNIT_EDGE,
     unit_scale: float = 1.0,
+    min_market_price: float = 0.0,
 ) -> float | None:
     """The single sizing dispatch every router calls. `kelly_frac is None`
     means the bet didn't qualify (min-edge/has-traded/CLV gate) -> no bet in
     EITHER mode. In "flat" mode a qualified bet is sized by unit tier
     (independent of the per-sport pool, so bets are meaningful on a small
-    bankroll); in "kelly" mode it's the classic kelly_frac * pool."""
+    bankroll); in "kelly" mode it's the classic kelly_frac * pool.
+
+    `min_market_price` -- refuse to size a bet the market prices below this.
+    Futures pass FUTURES_MIN_MARKET_PRICE; see its comment for the record this
+    is fitted to. Enforced HERE rather than in the frontend on purpose: the
+    cross-sport futures list filters on `suggested_stake_dollars != null`, so
+    putting the rule in the one function every gate already feeds into means the
+    view cannot drift out of step with it, and the per-sport Futures pages still
+    show the row (unsized) for calibration tracking.
+    """
     if kelly_frac is None:
+        return None
+    if min_market_price > 0.0 and (market_price is None or market_price < min_market_price):
         return None
     if mode == "flat":
         if unit_dollars is None or unit_dollars <= 0:

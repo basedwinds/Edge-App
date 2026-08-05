@@ -51,7 +51,7 @@ from app.models.division_markets import (
 from app.ingestion.market_matcher import split_teams_blob, KALSHI_TEAM_ABBRS, to_nflverse_abbr
 from app.models.stat_leaders import get_stat_leader_totals, compute_leader_scores
 from app.models.season_projections import get_prior_season_stats, prob_exceeds_season_total, project_season_total
-from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars, is_weekly_market_type
+from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars, is_weekly_market_type
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 from app.api.routers.settings import get_pool_dollars, get_unit_dollars, get_staking_params, get_flat_params
 from app.data.divisions import DIVISIONS
@@ -778,7 +778,10 @@ def list_markets(session: Session = Depends(get_session)):
         # fix: /markets/futures returned 99 rows at 1.0u and 15 at 0.5u, against
         # 0.25/0.125 everywhere else.
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)
+        # Same conditional as _uscale: the price floor is a FUTURES rule, and
+        # this one function serves both pools. See FUTURES_MIN_MARKET_PRICE.
+        _minpx = FUTURES_MIN_MARKET_PRICE if pool is futures_pool else 0.0
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, min_market_price=_minpx)
         out.append(
             MarketOut(
                 id=m.id,
@@ -1102,7 +1105,10 @@ def list_futures(session: Session = Depends(get_session)):
         # fix: /markets/futures returned 99 rows at 1.0u and 15 at 0.5u, against
         # 0.25/0.125 everywhere else.
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)
+        # Same conditional as _uscale: the price floor is a FUTURES rule, and
+        # this one function serves both pools. See FUTURES_MIN_MARKET_PRICE.
+        _minpx = FUTURES_MIN_MARKET_PRICE if pool is futures_pool else 0.0
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, min_market_price=_minpx)
         # Player stat-projection futures: show the model_prob/edge but never
         # stake (see PLAYER_STAT_TRACKING_ONLY). Zero out the stake AFTER it's
         # computed so the edge/model number still surfaces for tracking.

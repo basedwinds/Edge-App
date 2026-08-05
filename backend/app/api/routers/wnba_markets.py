@@ -28,7 +28,7 @@ from app.models.baseline.elo import implied_elo_diff
 from app.models import season_sim_wnba
 from app.models.baseline.elo_wnba import HOME_COURT_ADV
 from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
-from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 
 router = APIRouter(prefix="/wnba", tags=["wnba"])
 
@@ -412,7 +412,7 @@ def list_wnba_futures(session: Session = Depends(get_session)):
         )
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full,
-                                           unit_scale=FUTURES_UNIT_SCALE)
+                                           unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE)
         out.append(FuturesMarketOut(
             id=m.id, market_type=m.market_type, source=m.source, team=m.team,
             group_label=m.group_label, line=m.line, side=m.side,

@@ -36,7 +36,7 @@ from app.models.esports_tournament_pricing import price_tournament_winners
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import futures_group_decided, CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
-from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
@@ -200,7 +200,7 @@ def list_cs2_futures(session: Session = Depends(get_session)):
             kelly_fraction(model_prob, implied, _fk, _msf, _mineg, _traded, snap.yes_ask if snap else None),
             _clv, "cs2", m.market_type,
         )
-        _stake = size_stake_dollars(_mode, _kelly, _futures_pool, model_prob, implied, _unit, _fm, _ff, unit_scale=FUTURES_UNIT_SCALE)
+        _stake = size_stake_dollars(_mode, _kelly, _futures_pool, model_prob, implied, _unit, _fm, _ff, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE)
         # A decided group is shown for the record, never sized. The prior
         # behaviour dropped these rows entirely, which is why a settled
         # future appeared to vanish rather than read as finished.
