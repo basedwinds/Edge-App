@@ -89,6 +89,44 @@ RELEGATION_ZONE_SIZE = {
     "F1": 2,
 }
 
+# NO TEAM_STRENGTH_SIGMA HERE, AND THAT IS DELIBERATE -- BUILT, MEASURED, AND
+# REJECTED (2026-08-05). Do not add it back without new evidence.
+#
+# CFB (225), NFL (100), NBA (75) and WNBA (100) all carry a per-season, per-team
+# strength offset, because holding each Elo rating as exactly known and drawing
+# every game as an independent coin made their seasons far too narrow. Soccer
+# looks like the same shape and is NOT.
+#
+# Implemented properly (per-scenario strength draws with the pairing grids
+# rebuilt per scenario, since they depend on the ratings) and swept against the
+# same backtest used for the others -- 5 leagues x 11 seasons, prior-seasons-only
+# ratings, zero games played, n=1,072 team-seasons scored on relegation:
+#
+#   sigma   0.00   gap 1.70pp   Brier 0.0988      <- shipped (no offset)
+#   sigma   0.05   gap 1.70pp   Brier 0.0979
+#   sigma   0.10   gap 2.08pp   Brier 0.0978
+#   sigma   0.15   gap 3.43pp   Brier 0.0983
+#   sigma   0.25   gap 5.10pp   Brier 0.1008
+#
+# Calibration gets monotonically WORSE, and leave-one-season-out made 9 of 11
+# held-out seasons worse while fitting 0.00-0.05 in every fold. It also cost 4x
+# (4.6s -> 19.0s across the 5 leagues).
+#
+# WHY soccer differs, which is the part worth remembering: the other four sports
+# reduce a game to one Bernoulli draw, so a season is near-binomial and genuinely
+# too tight. This model draws a Poisson SCORELINE and awards 3/1/0, which already
+# carries far more per-match variance -- the season distribution is wide enough
+# without help, so an extra offset only over-widens it. The overall gap was
+# already 1.70pp before any change, versus NBA's 8.70pp; there was no narrowness
+# to fix.
+#
+# STILL OPEN, and NOT solved by this: the model overstates its most confident
+# relegation calls -- predicted 40-60% happened 35.8% (n=53), predicted 60-80%
+# happened 25.0% (n=4). That is a thin tail, not a width problem. Separately, in
+# all 1,072 team-seasons this model has never put a historically top-half club
+# above 30% relegation, so a live number like that is extrapolation with no
+# validation behind it in either direction.
+
 # Real, data-grounded promotion discount -- derived 2026-07-19 from 476
 # genuine historical promotion events across all 5 leagues (see
 # scripts/derive_soccer_promotion_discount.py's own printed output): a
