@@ -20,13 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
 from app.api.routers.settings import get_staking_params, get_flat_params, get_unit_dollars, get_cfb_pool_dollars
-from app.api.schemas import ReasoningFactorOut, ReasoningOut
+from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import CfbGame, Market
 from app.models import calibration_temp
 from app.models import playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
-from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
+from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, size_stake_dollars
 
 router = APIRouter(prefix="/cfb", tags=["cfb"])
@@ -126,6 +126,63 @@ def _moneyline_model_prob(m: Market, game: CfbGame) -> float | None:
     return round(p_home, 4) if m.team == game.home_team else round(1 - p_home, 4)
 
 
+def _cfb_season_model_prob(m, win_dist, sim_trials, po_sim, conf_sim):
+    """Model probability for any season-long CFB market -- win totals, the
+    playoff family, and the conference ladders. Shared by /markets and
+    /futures so the two can never disagree about the same row."""
+    model_prob = None
+    no_baseline_reason = None
+    if m.market_type == "win_total":
+        if not win_dist:
+            no_baseline_reason = "Season simulation not warm yet."
+        elif m.line is None or m.team not in win_dist:
+            no_baseline_reason = "No season projection for this team."
+        else:
+            model_prob = season_sim_cfb.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
+            if model_prob is not None:
+                model_prob = round(model_prob, 4)
+    elif m.market_type in ("cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"):
+        if not po_sim:
+            no_baseline_reason = "Playoff simulation not warm yet."
+        elif m.market_type == "cfb_title_conference":
+            tbc = po_sim.get("title_by_conference") or {}
+            name = _KALSHI_CONF_CODE.get((m.team or "").upper())
+            if name is not None:
+                model_prob = round(tbc.get(name, 0.0), 4)
+            elif (m.team or "").upper() == "OTHER":
+                # Everything outside the four named conferences, including
+                # independents -- the remainder, so the five markets sum to 1.
+                named = sum(tbc.get(v, 0.0) for v in _KALSHI_CONF_CODE.values())
+                model_prob = round(max(0.0, 1.0 - named), 4)
+            else:
+                no_baseline_reason = "Unmapped conference code."
+        else:
+            key = "playoff" if m.market_type == "cfb_playoff" else "quarterfinal"
+            src = po_sim.get(key) or {}
+            if m.team in src:
+                model_prob = round(src[m.team], 4)
+            else:
+                no_baseline_reason = "No playoff projection for this team."
+    elif m.market_type in SEASON_MARKET_TYPES:
+        if not conf_sim:
+            no_baseline_reason = "Conference simulation not warm yet."
+        else:
+            if m.market_type == "conference_champion":
+                src = conf_sim.get("champion") or {}
+            elif m.market_type == "conference_qualifier":
+                # Reaching a conference title game IS finishing top two.
+                src = (conf_sim.get("top_n") or {}).get(2) or {}
+            else:
+                # Regular-season "top N", depth carried on m.line.
+                src = (conf_sim.get("top_n") or {}).get(int(m.line)) if m.line else {}
+                src = src or {}
+            if m.team in src:
+                model_prob = round(src[m.team], 4)
+            else:
+                no_baseline_reason = "No conference projection for this team."
+    return model_prob, no_baseline_reason
+
+
 @router.get("/markets", response_model=list[CfbMarketOut])
 def list_cfb_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(
@@ -184,54 +241,8 @@ def list_cfb_markets(session: Session = Depends(get_session)):
 
         model_prob = None
         no_baseline_reason = None
-        if m.market_type == "win_total":
-            if not win_dist:
-                no_baseline_reason = "Season simulation not warm yet."
-            elif m.line is None or m.team not in win_dist:
-                no_baseline_reason = "No season projection for this team."
-            else:
-                model_prob = season_sim_cfb.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
-                if model_prob is not None:
-                    model_prob = round(model_prob, 4)
-        elif m.market_type in ("cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"):
-            if not po_sim:
-                no_baseline_reason = "Playoff simulation not warm yet."
-            elif m.market_type == "cfb_title_conference":
-                tbc = po_sim.get("title_by_conference") or {}
-                name = _KALSHI_CONF_CODE.get((m.team or "").upper())
-                if name is not None:
-                    model_prob = round(tbc.get(name, 0.0), 4)
-                elif (m.team or "").upper() == "OTHER":
-                    # Everything outside the four named conferences, including
-                    # independents -- the remainder, so the five markets sum to 1.
-                    named = sum(tbc.get(v, 0.0) for v in _KALSHI_CONF_CODE.values())
-                    model_prob = round(max(0.0, 1.0 - named), 4)
-                else:
-                    no_baseline_reason = "Unmapped conference code."
-            else:
-                key = "playoff" if m.market_type == "cfb_playoff" else "quarterfinal"
-                src = po_sim.get(key) or {}
-                if m.team in src:
-                    model_prob = round(src[m.team], 4)
-                else:
-                    no_baseline_reason = "No playoff projection for this team."
-        elif m.market_type in SEASON_MARKET_TYPES:
-            if not conf_sim:
-                no_baseline_reason = "Conference simulation not warm yet."
-            else:
-                if m.market_type == "conference_champion":
-                    src = conf_sim.get("champion") or {}
-                elif m.market_type == "conference_qualifier":
-                    # Reaching a conference title game IS finishing top two.
-                    src = (conf_sim.get("top_n") or {}).get(2) or {}
-                else:
-                    # Regular-season "top N", depth carried on m.line.
-                    src = (conf_sim.get("top_n") or {}).get(int(m.line)) if m.line else {}
-                    src = src or {}
-                if m.team in src:
-                    model_prob = round(src[m.team], 4)
-                else:
-                    no_baseline_reason = "No conference projection for this team."
+        if m.market_type in SEASON_MARKET_TYPES or m.market_type in ("cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"):
+            model_prob, no_baseline_reason = _cfb_season_model_prob(m, win_dist, sim_trials, po_sim, conf_sim)
         elif game is None:
             no_baseline_reason = "Not linked to a scheduled game yet."
         else:
@@ -365,3 +376,66 @@ def get_cfb_market_reasoning(
             "Moneyline only; spread/total series exist on Kalshi but list no markets yet.",
         ],
     )
+
+@router.get("/futures", response_model=list[FuturesMarketOut])
+def list_cfb_futures(session: Session = Depends(get_session)):
+    """CFB's season-long markets, in the same shape every other sport serves.
+
+    CFB and the other one of this pair were the ONLY sports without a
+    /futures route, so their win-total and playoff/conference ladders had nowhere to go and
+    rode along in the GAME feed -- 78 such rows, showing up beside tonight's
+    fixtures. Prices come from the same helper /markets uses, so the two views
+    cannot disagree about a row.
+    """
+    markets = (
+        session.query(Market)
+        .filter(Market.sport == "cfb", Market.market_type.in_(SEASON_MARKET_TYPES | {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"}))
+        .all()
+    )
+    snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
+    # Exactly the sources /markets uses -- conf_sim comes from the module-level
+    # _CONF_SIM cache the warmer fills, NOT from a season_sim_cfb function (I
+    # reached for a get_conference_sim() that does not exist and it 500'd).
+    from app.ingestion.poller_cfb import _CONF_SIM   # local import, exactly as /markets does
+
+    win_dist, sim_trials = season_sim_cfb.get()
+    po_sim = playoff_sim_cfb.get() or {}
+    conf_sim = _CONF_SIM.get("data") or {}
+    _weekly_pool, futures_pool = get_cfb_pool_dollars(session)
+    unit_dollars = get_unit_dollars(session)
+    fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)
+    staking_mode, flat_marginal, flat_full = get_flat_params(session)
+    clv_stats = bucket_clv_stats(session)
+    out = []
+    for m in markets:
+        snap = snapshots_by_market.get(m.id)
+        implied = _implied_prob(snap)
+        model_prob, _reason = _cfb_season_model_prob(m, win_dist, sim_trials, po_sim, conf_sim)
+        has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
+        kelly = gate_kelly(
+            kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction,
+                           min_edge_to_bet, has_traded, snap.yes_ask if snap else None),
+            clv_stats, "cfb", m.market_type,
+        )
+        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
+                                           unit_dollars, flat_marginal, flat_full,
+                                           unit_scale=FUTURES_UNIT_SCALE)
+        out.append(FuturesMarketOut(
+            id=m.id, market_type=m.market_type, source=m.source, team=m.team,
+            group_label=m.group_label, line=m.line, side=m.side,
+            implied_prob=implied,
+            yes_bid=snap.yes_bid if snap else None,
+            yes_ask=snap.yes_ask if snap else None,
+            last_price=snap.last_price if snap else None,
+            volume=snap.volume if snap else None,
+            updated_at=m.updated_at.isoformat() if m.updated_at else None,
+            model_prob=model_prob, model_validated=False,
+            edge=round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None,
+            kelly_fraction=kelly,
+            suggested_stake_dollars=stake_dollars,
+            suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
+            stake_pool="futures" if kelly is not None else None,
+            line_move_pp=None,
+        ))
+    out.sort(key=lambda r: (r.market_type, -(r.implied_prob or 0)))
+    return out

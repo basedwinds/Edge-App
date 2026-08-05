@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob, _seeded_choice
 from app.api.routers.settings import get_staking_params, get_flat_params, get_unit_dollars, get_wnba_pool_dollars
-from app.api.schemas import ReasoningFactorOut, ReasoningOut
+from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import Market, WnbaGame
 from app.models import calibration_temp
@@ -27,7 +27,7 @@ from app.models.baseline import elo_service_wnba, scoring_ratings_wnba
 from app.models.baseline.elo import implied_elo_diff
 from app.models import season_sim_wnba
 from app.models.baseline.elo_wnba import HOME_COURT_ADV
-from app.models.clv_selection import bucket_clv_stats, is_bucket_enabled
+from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
 from app.models.staking import FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 
 router = APIRouter(prefix="/wnba", tags=["wnba"])
@@ -179,6 +179,17 @@ def _half_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
     return None
 
 
+def _wnba_season_model_prob(m, win_dist, sim_trials):
+    """Model probability for a season-long WNBA market. Shared by /markets and
+    /futures so the two can never disagree about the same row."""
+    if not win_dist:
+        return None, "Season simulation not warm yet."
+    if m.line is None or m.team not in win_dist:
+        return None, "No season projection for this team."
+    p = season_sim_wnba.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
+    return (round(p, 4) if p is not None else None), None
+
+
 @router.get("/markets", response_model=list[WnbaMarketOut])
 def list_wnba_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport == "wnba", Market.market_type.in_(ALL_MARKET_TYPES)).all()
@@ -234,14 +245,7 @@ def list_wnba_markets(session: Session = Depends(get_session)):
         model_prob = None
         no_baseline_reason = None
         if m.market_type == "win_total":
-            if not win_dist:
-                no_baseline_reason = "Season simulation not warm yet."
-            elif m.line is None or m.team not in win_dist:
-                no_baseline_reason = "No season projection for this team."
-            else:
-                model_prob = season_sim_wnba.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
-                if model_prob is not None:
-                    model_prob = round(model_prob, 4)
+            model_prob, no_baseline_reason = _wnba_season_model_prob(m, win_dist, sim_trials)
         elif game is not None:
             no_baseline_reason = NO_BASELINE_REASONS.get(game.game_type)
             if no_baseline_reason is None and m.market_type == "moneyline":
@@ -372,3 +376,59 @@ def get_wnba_market_reasoning(
             "Moneyline + spread (Elo-implied margin, WNBA-specific constants); totals/futures not modeled.",
         ],
     )
+
+@router.get("/futures", response_model=list[FuturesMarketOut])
+def list_wnba_futures(session: Session = Depends(get_session)):
+    """WNBA's season-long markets, in the same shape every other sport serves.
+
+    WNBA and the other one of this pair were the ONLY sports without a
+    /futures route, so their win-total and season ladders had nowhere to go and
+    rode along in the GAME feed -- 78 such rows, showing up beside tonight's
+    fixtures. Prices come from the same helper /markets uses, so the two views
+    cannot disagree about a row.
+    """
+    markets = (
+        session.query(Market)
+        .filter(Market.sport == "wnba", Market.market_type.in_(SEASON_MARKET_TYPES))
+        .all()
+    )
+    snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
+    win_dist, sim_trials = season_sim_wnba.get()
+    _weekly_pool, futures_pool = get_wnba_pool_dollars(session)
+    unit_dollars = get_unit_dollars(session)
+    fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)
+    staking_mode, flat_marginal, flat_full = get_flat_params(session)
+    clv_stats = bucket_clv_stats(session)
+    out = []
+    for m in markets:
+        snap = snapshots_by_market.get(m.id)
+        implied = _implied_prob(snap)
+        model_prob, _reason = _wnba_season_model_prob(m, win_dist, sim_trials)
+        has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
+        kelly = gate_kelly(
+            kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction,
+                           min_edge_to_bet, has_traded, snap.yes_ask if snap else None),
+            clv_stats, "wnba", m.market_type,
+        )
+        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
+                                           unit_dollars, flat_marginal, flat_full,
+                                           unit_scale=FUTURES_UNIT_SCALE)
+        out.append(FuturesMarketOut(
+            id=m.id, market_type=m.market_type, source=m.source, team=m.team,
+            group_label=m.group_label, line=m.line, side=m.side,
+            implied_prob=implied,
+            yes_bid=snap.yes_bid if snap else None,
+            yes_ask=snap.yes_ask if snap else None,
+            last_price=snap.last_price if snap else None,
+            volume=snap.volume if snap else None,
+            updated_at=m.updated_at.isoformat() if m.updated_at else None,
+            model_prob=model_prob, model_validated=False,
+            edge=round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None,
+            kelly_fraction=kelly,
+            suggested_stake_dollars=stake_dollars,
+            suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
+            stake_pool="futures" if kelly is not None else None,
+            line_move_pp=None,
+        ))
+    out.sort(key=lambda r: (r.market_type, -(r.implied_prob or 0)))
+    return out
