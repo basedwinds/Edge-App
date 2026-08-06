@@ -13,7 +13,6 @@ are touched. Explicitly NOT touched:
 
 Pass --apply to write. Default is a dry run.
 """
-import datetime
 import sys
 from collections import Counter
 
@@ -69,7 +68,6 @@ if not APPLY:
     print("\n(dry run -- pass --apply to write)")
     raise SystemExit
 
-now = datetime.datetime.utcnow()
 with db_write_lock():
     w = SessionLocal()
     try:
@@ -79,7 +77,15 @@ with db_write_lock():
             if b is None or b.status != old:
                 continue
             b.status = new
-            b.settled_at = now
+            # settled_at is deliberately NOT touched. The first version of this
+            # script set it to now, which is wrong: a re-grade corrects what the
+            # result WAS, not when the match settled. The Bet Tracker sorts by
+            # settle date, so stamping "now" made 59 bets from July jump to the
+            # top as if they had just resolved -- reported by the user as "a bet
+            # settled Aug 6th for a match that took place the 24th of July, and
+            # I don't recall marking this bet as placed". They were their bets;
+            # only the timestamp lied. Repaired by
+            # scripts/restore_regraded_settled_at.py.
             b.settlement_note = (
                 f"re-graded from Polymarket resolution ({reason}); was {old!r} from the "
                 f"games-differential grader, which the stale market_type routed it to"
