@@ -145,7 +145,17 @@ export function NewMarkets() {
           <div className="text-sm text-[var(--color-text-dim)]">Loading…</div>
         ) : flaggedQuery.data && flaggedQuery.data.length > 0 ? (
           <ul className="space-y-2">
-            {flaggedQuery.data.map((entry) => (
+            {/* READY first. The backlog is read by scanning, and the entries
+                that can be built TODAY were previously buried among ones gated
+                on volume or a missing data source -- with nothing but note
+                prose to tell them apart. Sorting on the note's leading status
+                word puts the actionable ones on top. */}
+            {[...flaggedQuery.data]
+              .sort((a, b) => {
+                const rank = (n?: string | null) => (n?.startsWith("READY") ? 0 : 1);
+                return rank(a.note) - rank(b.note) || a.identifier.localeCompare(b.identifier);
+              })
+              .map((entry) => (
               <li
                 key={entry.id}
                 className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] px-3 py-2"
