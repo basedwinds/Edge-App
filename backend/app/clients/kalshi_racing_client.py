@@ -33,11 +33,34 @@ SERIES_MAP = {
     # per-race model -- see racing_championship. Kalshi lists no IndyCar
     # constructors'/entrant title, so there is no constructors_champion here.
     "KXINDYCARSERIES": ("irl", "drivers_champion", None),
+    # F1 titles on KALSHI. These were previously ingested from Polymarket only,
+    # so the Kalshi side of the same two propositions was invisible -- no
+    # cross-platform divergence, and nothing to compare a Polymarket price
+    # against. racing_championship already prices both for f1 (PRICED_SERIES),
+    # so this is pure coverage, no new model.
+    "KXF1": ("f1", "drivers_champion", None),
+    "KXF1CONSTRUCTORS": ("f1", "constructors_champion", None),
     "KXNASCARRACE": ("nascar", "race_winner", None),  # NASCAR race winner (headline market)
     "KXNASCARTOP3": ("nascar", "top_n", 3),
     "KXNASCARTOP5": ("nascar", "top_n", 5),
     "KXNASCARTOP10": ("nascar", "top_n", 10),
+    "KXNASCARTOP20": ("nascar", "top_n", 20),
 }
+
+# DELIBERATELY NOT POLLED, and why -- so this list isn't "rediscovered" as a gap
+# every time someone audits Kalshi's racing catalogue (checked live 2026-08-06):
+#   KXNASCARCUPSERIES (35 open), KXNASCARCUPSEASON (38): NASCAR's title is an
+#     ELIMINATION PLAYOFF ending in a winner-take-all Championship 4, not the
+#     points accumulation racing_championship simulates -- which is exactly why
+#     PRICED_SERIES is ("f1", "irl"). Pricing it with a points model would be
+#     wrong, not merely unvalidated.
+#   KXNASCARAUTOPARTSSERIES (40), KXNASCARTRUCKSERIES (35): Xfinity and Truck
+#     titles. Blocked by the same gap as their races -- ratings and results come
+#     from ESPN nascar-premier, which is Cup only (see racing_markets
+#     MIN_FIELD_COVERAGE).
+#   KXNASCARFASTLAP (73), KXNASCARTOPTEAM (33): no model for either.
+#   KXMOTOGPTEAMS (11): MotoGP is a whole sport we don't cover.
+#   KXF1ACTION / KXF1CHINA / KXF1NEXTTEAM / KXF1RETIRE: novelty markets.
 
 
 def _to_float(v):
