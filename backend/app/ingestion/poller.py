@@ -998,25 +998,52 @@ def run_full_refresh():
     from app.models.baseline import elo_service
     from app.models import season_sim_service, scoring_ratings_service
 
-    refresh_nfl_games()
-    refresh_nfl_half_scores()
-    refresh_preseason_games()
-    elo_service.refresh_ratings()
-    season_sim_service.refresh()
-    scoring_ratings_service.refresh()
-    refresh_kalshi_moneyline()
-    refresh_polymarket_moneyline()
-    refresh_kalshi_spread_total()
-    refresh_polymarket_spread_total()
-    refresh_kalshi_futures()
-    refresh_kalshi_stage_of_elim()
-    refresh_kalshi_playoff_seed_and_host()
-    refresh_polymarket_futures()
-    refresh_kalshi_win_totals()
-    refresh_awards()
-    refresh_stat_leaders()
-    refresh_season_stat_ladders()
-    refresh_division_extras()
-    refresh_news_adjustments()
-    settle_placed_bets()
+    # PER-STEP ISOLATION, matching poller_cs2's "step failed; continuing".
+    #
+    # These used to run as 22 bare calls, so ONE failure aborted every step
+    # after it -- and silently, since the scheduler swallows the traceback into
+    # a job-level error nobody reads. That is not hypothetical: on 2026-08-06
+    # the NFL board sat with 576 sim futures unpriced (division winner,
+    # conference champion, stage of elimination, playoff seed, playoff host,
+    # 1-seed) because the chain stopped at season_sim_service.refresh(), and
+    # nothing downstream said so. Every later step -- market ingestion,
+    # settlement, the refresh timestamp -- was collateral.
+    #
+    # ORDER STILL MATTERS and is unchanged: ratings feed the sim, the sim feeds
+    # the futures pricing, and settlement runs last. Isolation only stops one
+    # broken step from taking the rest with it; it does not make them
+    # independent. (See poller_cs2's own note: a step that HANGS rather than
+    # raises still blocks everything, which try/except cannot fix.)
+    steps = (
+        refresh_nfl_games,
+        refresh_nfl_half_scores,
+        refresh_preseason_games,
+        elo_service.refresh_ratings,
+        season_sim_service.refresh,
+        scoring_ratings_service.refresh,
+        refresh_kalshi_moneyline,
+        refresh_polymarket_moneyline,
+        refresh_kalshi_spread_total,
+        refresh_polymarket_spread_total,
+        refresh_kalshi_futures,
+        refresh_kalshi_stage_of_elim,
+        refresh_kalshi_playoff_seed_and_host,
+        refresh_polymarket_futures,
+        refresh_kalshi_win_totals,
+        refresh_awards,
+        refresh_stat_leaders,
+        refresh_season_stat_ladders,
+        refresh_division_extras,
+        refresh_news_adjustments,
+        settle_placed_bets,
+    )
+    for step in steps:
+        try:
+            step()
+        except Exception:
+            log.exception("nfl refresh step %s failed; continuing", step.__name__)
+    # Outside the loop: this stamps "the refresh completed", and it should run
+    # even when a step failed -- the alternative is a refresh timestamp that
+    # never advances and a Health page that reports a stalled poller because one
+    # unrelated step is broken.
     mark_refresh_complete()
