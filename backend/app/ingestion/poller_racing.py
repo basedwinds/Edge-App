@@ -77,24 +77,47 @@ def refresh_racing_markets():
             session.close()
 
 
+# How far our RaceEvent date may sit from ESPN's event date and still be the
+# same race. A race WEEKEND is the unit here, not a day: ESPN dates a Grand Prix
+# at the START of the weekend while Kalshi's occurrence_datetime is the race
+# itself, so the two legitimately differ by 2-3 days.
+_ESPN_DATE_SLOP_DAYS = 4
+
+
 def _match_espn_event(scoreboard: list, edate: str) -> "str | None":
-    """Pick the ESPN event id whose date matches the RaceEvent's date (exact,
-    then +/-1 day for TZ slop). scoreboard = [(eid, name, date), ...]."""
+    """Pick the ESPN event id for the RaceEvent's date: NEAREST within
+    _ESPN_DATE_SLOP_DAYS. scoreboard = [(eid, name, date), ...].
+
+    REAL BUG this fixes (found 2026-08-05). The window was +/-1 day and the scan
+    returned the FIRST match rather than the closest. ESPN dates the 2026
+    Hungarian Grand Prix 2026-07-24 (weekend start) while our RaceEvent carries
+    2026-07-26 (race day) -- two days apart, so it never matched, and
+    refresh_racing_results silently skipped it forever. Measured at the time:
+    F1 and IndyCar had ZERO of their events carrying a result, NASCAR only 5,
+    and every racing paper bet (193) sat pending with nothing to grade against
+    -- which is why racing had no settled outcomes to validate anything with.
+    ESPN itself was fine: fetching Hungary by id returns a full 22-car order.
+
+    Nearest-wins also fixes a second, quieter case it inherited: NASCAR runs the
+    Duels two days before the Daytona 500, so a first-match scan at +/-4 could
+    grade the 500 against a Duel. Choosing the smallest delta picks the race
+    whose date actually matches. Races in all three series are >= 7 days apart,
+    so a 4-day window cannot reach the neighbouring round.
+    """
     import datetime
-    for eid, _name, d in scoreboard:
-        if d == edate:
-            return eid
     try:
         target = datetime.date.fromisoformat(edate)
     except ValueError:
         return None
+    best, best_delta = None, None
     for eid, _name, d in scoreboard:
         try:
-            if abs((datetime.date.fromisoformat(d) - target).days) <= 1:
-                return eid
+            delta = abs((datetime.date.fromisoformat(d) - target).days)
         except ValueError:
             continue
-    return None
+        if delta <= _ESPN_DATE_SLOP_DAYS and (best_delta is None or delta < best_delta):
+            best, best_delta = eid, delta
+    return best
 
 
 
