@@ -403,10 +403,51 @@ def _tennis_winner_name(match: TennisMatch) -> "str | None":
 
 
 def _grade_tennis_moneyline(bet: PlacedBet, match: TennisMatch) -> "str | None":
+    """Graded on the credited winner, INCLUDING a retirement -- that is what the
+    platforms do. Kalshi's own rule text (pulled live 2026-08-06 from
+    KXATPMATCH): "If <player> wins the match ... AFTER A BALL HAS BEEN PLAYED,
+    then the market resolves to Yes." So once play starts, a retirement still
+    produces a real winner and this settles normally.
+
+    The carve-out is a walkover BEFORE a ball is played, which Kalshi resolves
+    "to a fair price" rather than to a side. We do not currently distinguish
+    that case -- see _tennis_match_incomplete for why the retirement flag is
+    not trustworthy -- but it is the rarer one and it does not affect which
+    side wins when play DID happen.
+    """
     w = _tennis_winner_name(match)
     if w is None:
         return None
     return "won" if _names_eq(bet.team, w) else "lost"
+
+
+def _tennis_match_incomplete(match: TennisMatch) -> bool:
+    """True when the score is not a completed match -- a retirement/walkover.
+
+    DERIVED FROM THE SCORE, NOT match.is_retirement, because that flag is
+    measured to be broken: of 1,878 resolved tennis matches, 78 have a score
+    that cannot be a finished match ("4-1", "0-5", "6-0 1-0") and the flag is 0
+    on ALL 78. It has never once fired. It is scraped by regexing "ret." out of
+    a tennisexplorer row, and that text evidently is not there for these rows.
+
+    WHY THIS MATTERS BEYOND MONEYLINE. Moneyline is fine on a retirement (the
+    winner is real). Every DERIVATIVE market is not: a match abandoned at 4-1
+    has no meaningful total games, set count, or margin, and grading one off
+    the partial score invents a result. Measured 2026-08-06: 104 derivative
+    bets had been settled exactly that way.
+
+    A completed match needs at least 2 won sets (best-of-3; a best-of-5 winner
+    also clears 2). A set is won at 6+ by two, or at 7 (tiebreak/7-5).
+    """
+    sets = _parse_sets(match.score)
+    if not sets:
+        return True  # no parseable score at all -- cannot confirm completion
+    won = 0
+    for a, b in sets:
+        hi, lo = max(a, b), min(a, b)
+        if (hi >= 6 and hi - lo >= 2) or hi == 7:
+            won += 1
+    return won < 2
 
 
 def _parse_sets(score: "str | None") -> "list[tuple[int, int]]":
@@ -733,19 +774,39 @@ _ESPORTS_GRADERS = {
     "map_winner": _grade_esports_map_winner,
 }
 
+def _complete_only(grader):
+    """Wrap a derivative tennis grader so it REFUSES an unfinished match.
+
+    Returns None (bet stays pending for a human call) rather than grading a
+    partial score. Deliberately not "lost" and not "void": voiding
+    automatically would be this app deciding a platform's settlement policy for
+    it, and those differ -- Kalshi's own match rules turn on "after a ball has
+    been played", which is a different test again. Pending is the honest state,
+    and the void button exists for exactly this.
+
+    Moneyline is NOT wrapped: a retirement produces a real winner and both
+    platforms settle it, so refusing there would leave correct bets unsettled.
+    """
+    def wrapped(bet: PlacedBet, match: TennisMatch):
+        if _tennis_match_incomplete(match):
+            return None
+        return grader(bet, match)
+    return wrapped
+
+
 _TENNIS_GRADERS = {
     "moneyline": _grade_tennis_moneyline,
-    "game_total": _grade_tennis_game_total,
-    "total_sets": _grade_tennis_total_sets,
-    "set_winner": _grade_tennis_set_winner,
-    "exact_score": _grade_tennis_exact_score,
+    "game_total": _complete_only(_grade_tennis_game_total),
+    "total_sets": _complete_only(_grade_tennis_total_sets),
+    "set_winner": _complete_only(_grade_tennis_set_winner),
+    "exact_score": _complete_only(_grade_tennis_exact_score),
     # game_spread added 2026-08-02: the storage convention IS now pinned down
     # (see _grade_tennis_game_spread) -- team = the favored player, line = "wins
     # by more than this many games", identical for Kalshi and Polymarket. The
     # grader still refuses to guess (returns None) when the score can't be
     # parsed or disagrees with the recorded winner.
-    "game_spread": _grade_tennis_game_spread,
-    "set_spread": _grade_tennis_set_spread,
+    "game_spread": _complete_only(_grade_tennis_game_spread),
+    "set_spread": _complete_only(_grade_tennis_set_spread),
     # set_total still deliberately absent: its side semantics remain ambiguous,
     # and misgrading real P/L is worse than leaving it pending.
 }
