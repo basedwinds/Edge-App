@@ -56,7 +56,7 @@ def _is_pregame(session: Session, entity_id: str) -> bool:
     return datetime.datetime.utcnow() < kickoff
 
 
-def _entity_id(m: Market) -> str | None:
+def _entity_id(m: Market, race_canon: dict[int, int] | None = None) -> str | None:
     """This app's canonical per-game/match id for a market, or None for a
     futures/season-long market (no single game). Shared across BOTH platforms
     for the same game, which is what makes the cross-platform join reliable."""
@@ -95,27 +95,28 @@ def _entity_id(m: Market) -> str | None:
     # Third hand-maintained per-sport list this session that a later sport was
     # never added to (see health._LINK_FIELDS, kalshi_racing_client._TAGS).
     #
-    # NECESSARY BUT NOT YET SUFFICIENT, and worth being precise about: adding
-    # this alone still yields ZERO racing divergences, because the two platforms
-    # do not SHARE RaceEvent rows. Each poller creates its own from its own
-    # identifier -- Kalshi "KXINDYCARRACE-FREEDOM26", Polymarket
+    # THE SECOND HALF, now done: the branch above was necessary but not
+    # sufficient, because the two platforms do not SHARE RaceEvent rows. Each
+    # poller creates its own from its own identifier -- Kalshi
+    # "KXINDYCARRACE-FREEDOM26", Polymarket
     # "indycar-ontario-honda-dealers-indy-markham-winner-2026-08-16" -- so the
-    # same real race exists twice and the join can never fire. Measured
-    # 2026-08-06: 0 of the racing race_events carry markets from both sources.
+    # same real race existed twice and the join could never fire (measured
+    # 2026-08-06: 0 of the racing race_events carried markets from both
+    # sources). `race_canon` collapses those duplicates onto one canonical id,
+    # which is what finally lets a racing prop group hold both platforms.
     #
-    # Unifying them needs a race-identity step (series + date, the way
-    # _match_espn_event already pairs our races to ESPN's), which is a separate
-    # piece of work. This branch is still correct and is a prerequisite for it,
-    # so it goes in now rather than being reverted and rewritten later.
+    # Callers that pass no map still get the raw id, so the function keeps
+    # working (just without cross-platform racing) rather than failing.
     if m.race_event_id:
-        return f"racing:{m.race_event_id}"
+        rid = (race_canon or {}).get(m.race_event_id, m.race_event_id)
+        return f"racing:{rid}"
     return None
 
 
-def _prop_key(m: Market) -> tuple | None:
+def _prop_key(m: Market, race_canon: dict[int, int] | None = None) -> tuple | None:
     """The real-world proposition a market represents, independent of platform.
     Two markets with the same key on different sources ARE the same bet."""
-    eid = _entity_id(m)
+    eid = _entity_id(m, race_canon)
     if eid is None:
         return None
     return (m.sport, eid, m.market_type, m.team, m.line, m.side)
@@ -125,13 +126,16 @@ def find_divergences(session: Session, min_gap: float = 0.03, limit: int = 100) 
     """Returns cross-platform divergence rows, largest gap first. `min_gap` is
     the minimum |kalshi_prob - poly_prob| (in probability, so 0.03 = 3pp)."""
     from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
+    from app.models.duplicate_fixtures import canonical_race_event_ids
 
     markets = session.query(Market).filter(Market.status != "settled").all()
     snaps = _batch_latest_snapshots(session, [m.id for m in markets])
+    # Built once per scan, not per market -- it queries every RaceEvent.
+    race_canon = canonical_race_event_ids(session)
 
     groups: dict[tuple, dict[str, dict]] = defaultdict(dict)
     for m in markets:
-        key = _prop_key(m)
+        key = _prop_key(m, race_canon)
         if key is None:
             continue
         snap = snaps.get(m.id)

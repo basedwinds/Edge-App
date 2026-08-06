@@ -337,17 +337,40 @@ def canonical_race_event_ids(session: Session) -> dict[int, int]:
         groups.extend(by_suffix.values())
 
         # --- pass 2: attach each non-Kalshi row to a group by name overlap ---
+        # Two shared tokens, OR one shared token plus an EXACT start_time match.
+        #
+        # Why the second route exists (measured 2026-08-06): a Kalshi RaceEvent
+        # is named from one of its MARKET titles, so its token set carries the
+        # driver -- "Will Max Verstappen finish top 5 in the main race at the
+        # 2026 Hungarian Grand Prix?" gives {2026, hungarian, main, max,
+        # verstappen} -- while Polymarket names the event cleanly, "Hungarian
+        # Grand Prix: Driver Winner" giving {hungarian}. The only token they
+        # can share is the venue, and an F1 venue is usually ONE word, so the
+        # >=2 rule could never merge F1 at all: six Hungarian GP events sat
+        # unmerged as 1 Kalshi + 5 Polymarket.
+        #
+        # start_time alone is NOT trusted as a join (the docstring above says
+        # why -- one Kalshi suffix has appeared with dates two weeks apart), so
+        # it is used only to CONFIRM a venue-token match, never on its own.
+        # Equality must be exact and both sides non-null.
+        #
+        # NASCAR/IndyCar are unaffected: their names carry several distinctive
+        # tokens and already merged on the >=2 rule.
         for e in leftovers:
             key = _race_name_key(e.name or "")
             if not key:
                 groups.append([e])
                 continue
-            best, best_n = None, 0
+            best, best_n, best_time = None, 0, False
             for g in groups:
                 shared = max((len(key & _race_name_key(x.name or "")) for x in g), default=0)
-                if shared > best_n:
-                    best, best_n = g, shared
-            if best is not None and best_n >= 2:
+                same_time = e.start_time is not None and any(
+                    x.start_time is not None and x.start_time == e.start_time for x in g
+                )
+                # A time-confirmed single-token match outranks a bare one.
+                if (shared, same_time) > (best_n, best_time):
+                    best, best_n, best_time = g, shared, same_time
+            if best is not None and (best_n >= 2 or (best_n >= 1 and best_time)):
                 best.append(e)
             else:
                 groups.append([e])
