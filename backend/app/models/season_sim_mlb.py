@@ -121,6 +121,14 @@ def run_simulation(
         for t in all_teams
     }
     any_wins_ge_hist = [0] * (MAX_REG_WINS + 1)
+    # JOINT (AL pennant, NL pennant) counts, for the World Series MATCHUP
+    # markets (KXTEAMSINWS, 225 open). Multiplying the two pennant_pct values
+    # would be wrong twice over: the pairing is not independent (both champions
+    # come out of one simulated postseason) and pennant_pct alone cannot say
+    # WHICH opponent. Tallied here from the same trial that already decides
+    # both champions, so a matchup probability can never contradict either
+    # team's own pennant number.
+    matchup_tallies: dict[tuple[str, str], int] = {}
 
     for _ in range(n_trials):
         wins = {t: starting_wins.get(t, 0) for t in all_teams}
@@ -180,6 +188,9 @@ def run_simulation(
             league_champs[league] = league_champ
             tallies[league_champ]["pennant"] += 1
 
+        pair = (league_champs["AL"], league_champs["NL"])
+        matchup_tallies[pair] = matchup_tallies.get(pair, 0) + 1
+
         champion = _simulate_series(ratings, league_champs["AL"], league_champs["NL"], wins, LCS_WS_PATTERN, rng)
         tallies[champion]["championship"] += 1
 
@@ -196,4 +207,14 @@ def run_simulation(
         for t in all_teams
     }
     results["_LEAGUE"] = {"any_wins_ge_pct": [c / n_trials for c in any_wins_ge_hist]}
+    # Keyed by an UNORDERED frozenset, not the (AL, NL) tuple: Kalshi names a
+    # matchup "Toronto vs Washington" with no indication which side is which
+    # league, so a caller must be able to look it up either way round. This is
+    # the same ordered-vs-unordered trap that swapped two LoL rosters -- there
+    # the ORDERED value was stored under an UNORDERED key, which is the unsafe
+    # direction. Here the value (a count) is symmetric, so folding the key is
+    # lossless.
+    results["_MATCHUPS"] = {
+        frozenset(pair): c / n_trials for pair, c in matchup_tallies.items()
+    }
     return results
