@@ -104,16 +104,18 @@ def fetch_polymarket_racing_futures() -> list[dict]:
     market_catalog_racing persists it uniformly; priced by the championship sim,
     not racing_sim.
 
-    SCOPED TO THE SERIES THE CHAMPIONSHIP MODEL CAN ACTUALLY PRICE -- F1 and
-    IndyCar, both cumulative-points titles, which is exactly
-    racing_championship.PRICED_SERIES. NASCAR is excluded on purpose and not by
-    omission: its title is an elimination playoff ending in a winner-take-all
-    Championship 4, so a points sim would be wrong rather than merely
-    unvalidated. IndyCar was previously missing here for the same stale reason
-    as the race markets -- see the note on _TAGS.
+    SCOPED TO THE SERIES THE CHAMPIONSHIP MODEL CAN ACTUALLY PRICE, which is
+    exactly racing_championship.PRICED_SERIES.
+
+    NASCAR was excluded here on purpose for a long time, and the reason was
+    sound: its title is an elimination playoff ending in a winner-take-all
+    Championship 4, so the cumulative-points sim would have been WRONG rather
+    than merely unvalidated. It is included from 2026-08-06 because it finally
+    has the right model behind it (racing_playoff_sim), not because the
+    objection was dropped.
     """
     out: list[dict] = []
-    for series, tag in (("f1", "f1"), ("irl", "indycar")):
+    for series, tag in (("f1", "f1"), ("irl", "indycar"), ("nascar", "nascar")):
         try:
             events = _events(tag)
         except Exception:

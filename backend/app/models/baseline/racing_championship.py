@@ -31,8 +31,17 @@ log = logging.getLogger("racing_championship")
 
 # Series with a cumulative-points title (NASCAR excluded on purpose -- playoff
 # elimination format). Constructors' title simulated for F1 only; see module doc.
-PRICED_SERIES = ("f1", "irl")
+PRICED_SERIES = ("f1", "irl", "nascar")
 _CONSTRUCTOR_SERIES = ("f1",)
+# NASCAR does NOT use the cumulative-points sim the other two do -- its title is
+# a knockout playoff ending in a winner-take-all race, so points decide who
+# ENTERS the playoff and nothing more. It routes to racing_playoff_sim instead.
+# It was excluded from PRICED_SERIES entirely until 2026-08-06 for exactly this
+# reason; the exclusion was right, and is now replaced by the right model rather
+# than by the wrong one.
+_PLAYOFF_SERIES = ("nascar",)
+# Cup regular season length -- races beyond this are the playoffs.
+_NASCAR_REGULAR_RACES = 26
 
 _TTL = 3600  # recompute at most hourly
 _lock = threading.Lock()
@@ -54,7 +63,51 @@ def _norm_constructor(name: str) -> str:
     return (name or "").lower().replace("racing", "").replace("revolut", "").strip()
 
 
+def _compute_playoff(series: str) -> dict:
+    """NASCAR title odds via the elimination playoff (racing_playoff_sim).
+
+    Returns the same shape as _compute so every caller downstream --
+    driver_championship_prob, championship_meta, the router -- is unchanged.
+    Constructors are absent by design: NASCAR has no constructors' title.
+    """
+    from app.clients.espn_racing_standings import fetch_driver_wins
+    from app.models import racing_playoff_sim
+
+    standings = fetch_driver_standings(series)
+    wins, week, total_weeks = fetch_driver_wins(series)
+    if not standings:
+        return {"driver_probs": {}, "constructor_probs": {}, "constructor_norm": {},
+                "remaining_races": 0, "points": {}}
+
+    st = racing_ratings._series_state(series)
+    cc = st.get("current_constructor", {})
+    ratings: dict[str, float] = {}
+    for name in standings:
+        did = racing_ratings.resolve_driver_id(series, name)
+        s = racing_ratings.strength(series, did, cc.get(did), None) if did else None
+        if s is not None:
+            ratings[name] = s
+
+    regular_left = max(0, _NASCAR_REGULAR_RACES - int(week or 0))
+    probs = racing_playoff_sim.simulate_nascar_title(
+        ratings,
+        {n: wins.get(n, 0) for n in ratings},
+        {n: standings[n] for n in ratings},
+        regular_races_left=regular_left,
+    )
+    return {
+        "driver_probs": probs,
+        "constructor_probs": {},
+        "constructor_norm": {},
+        # Races left in the SEASON, matching what the other series report.
+        "remaining_races": max(0, int((total_weeks or 0) - (week or 0))),
+        "points": {n: standings[n] for n in ratings},
+    }
+
+
 def _compute(series: str) -> dict:
+    if series in _PLAYOFF_SERIES:
+        return _compute_playoff(series)
     standings = fetch_driver_standings(series)  # {name: points}
     remaining = _remaining_races(series)
     st = racing_ratings._series_state(series)
