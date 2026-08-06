@@ -909,7 +909,7 @@ def list_futures(session: Session = Depends(get_session)):
         set(FUTURES_SIM_KEY.keys())
         | LEAGUE_FUTURES_TYPES
         | WIN_LADDER_FUTURES_TYPES
-        | {WEEK1_QB_FUTURES_TYPE, "stage_of_elimination"}
+        | {WEEK1_QB_FUTURES_TYPE, "stage_of_elimination", "playoff_seed", "playoff_host"}
         | AWARD_FUTURES_TYPES
         | DIVISION_EXTRA_TYPES
         | LEADER_FUTURES_TYPES
@@ -1165,6 +1165,23 @@ def list_futures(session: Session = Depends(get_session)):
             team_sim = sim_results.get(m.team) if m.team else None
             stage_pct = (team_sim or {}).get("stage_exit_pct") if team_sim else None
             model_prob = round(stage_pct[m.side], 4) if (stage_pct and m.side in stage_pct) else None
+        elif m.market_type == "playoff_seed":
+            # line = the conference seed (2-7 as Kalshi lists them; the 1-seed
+            # is its own series). season_sim seeds WITHIN a conference, so
+            # seed_pct[line] answers "is team X the #N seed in its conference"
+            # directly -- no conference lookup needed, a team is only in one.
+            team_sim = sim_results.get(m.team) if m.team else None
+            seed_pct = (team_sim or {}).get("seed_pct") if team_sim else None
+            idx = int(m.line) if m.line is not None else None
+            model_prob = (
+                round(seed_pct[idx], 4)
+                if (seed_pct and idx is not None and 0 <= idx < len(seed_pct))
+                else None
+            )
+        elif m.market_type == "playoff_host":
+            team_sim = sim_results.get(m.team) if m.team else None
+            host = (team_sim or {}).get("playoff_host_pct") if team_sim else None
+            model_prob = round(host, 4) if host is not None else None
         else:
             sim_key = FUTURES_SIM_KEY.get(m.market_type)
             team_sim = sim_results.get(m.team) if m.team else None
@@ -1731,6 +1748,32 @@ def get_market_reasoning(
             if sim_key in team_sim and sim_key != FUTURES_SIM_KEY.get(m.market_type):
                 factors.append(ReasoningFactorOut(label=sim_label, detail=f"{team_sim[sim_key] * 100:.1f}%"))
         caveats.append("Playoff seeding uses simplified tiebreakers (win total, then head-to-head, then random), not the NFL's real tiebreaker rules.")
+        insight = _futures_sim_insight(m.team, rating, team_sim, model_prob, market_prob)
+
+    elif m.market_type in ("playoff_seed", "playoff_host") and m.team:
+        team_sim = sim_results.get(m.team) or {}
+        rating = elo_service.get_team_rating(m.team)
+        if m.market_type == "playoff_seed":
+            methodology = (
+                "Season Monte Carlo (the same bracket the other futures use) read at the seed level: "
+                "each trial records which of the seven conference seeds this team ends up holding, so "
+                "the seven seeds plus 'missed the playoffs' are mutually exclusive and sum to 100%."
+            )
+        else:
+            methodology = (
+                "Season Monte Carlo read at the venue level: each trial records the actual home team of "
+                "every playoff game it simulates, so this is the share of seasons where this team hosts "
+                "at least one. It is deliberately NOT 'wins its division' -- the 1 seed hosts a divisional "
+                "game having played no wild-card game, and a wild-card seed can host once every better "
+                "seed above it is out. The Super Bowl is excluded as a neutral site."
+            )
+        for label, key in (("Makes the playoffs", "playoff_pct"), ("Wins the division", "division_pct")):
+            if key in team_sim:
+                factors.append(ReasoningFactorOut(label=label, detail=f"{team_sim[key] * 100:.1f}%"))
+        caveats.append(
+            "Playoff seeding uses simplified tiebreakers (win total, then head-to-head, then random), "
+            "not the NFL's real tiebreaker rules."
+        )
         insight = _futures_sim_insight(m.team, rating, team_sim, model_prob, market_prob)
 
     elif m.market_type == "stage_of_elimination" and m.team:

@@ -13,6 +13,8 @@ Series tickers confirmed live against the public API on 2026-07-14:
                 real open-market data exists to verify structure against)
   KXNFLTOTAL  - totals (same caveat as spread)
 """
+import re
+
 from app.clients.base import get_json, paginate
 from app.ingestion.market_matcher import KALSHI_TEAM_ABBRS, parse_kalshi_event_ticker, split_teams_blob, to_nflverse_abbr
 
@@ -248,6 +250,89 @@ def get_stage_of_elimination_markets() -> list[dict]:
                 "team_abbr_kalshi": team_abbr,
                 "stage": stage,
                 "stage_label": m.get("yes_sub_title", ""),
+                "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                "last_price": _to_float(m.get("last_price_dollars")),
+                "volume": _to_float(m.get("volume_fp")),
+                "status": m.get("status"),
+            })
+    return rows
+
+
+def get_playoff_seed_markets() -> list[dict]:
+    """KXNFLSEED: "Will {team} be the #N seed in the {conference}?".
+
+    Ticker is KXNFLSEED-{YY}{CONF}{N}-{TEAM}, e.g. KXNFLSEED-27NFC6-WAS, so the
+    EVENT ticker carries both the conference and the seed number while the team
+    is the market ticker's own suffix. That split is why conference and seed are
+    parsed from the event segment rather than the market ticker.
+
+    The conference is parsed but not returned: season_sim seeds WITHIN a
+    conference already (seeds 1-7 per conference), so seed_pct[N] is the answer
+    to this exact question without needing to know which conference the team is
+    in -- a team is only ever in one. It is still matched on to reject any
+    unexpected event shape rather than mis-read a digit.
+    """
+    rows = []
+    try:
+        events = get_open_events("KXNFLSEED")
+    except Exception:
+        return rows
+    for ev in events:
+        et = ev["event_ticker"]
+        seg = et.rsplit("-", 1)[-1]              # "27NFC6"
+        m_conf = re.match(r"^\d*(AFC|NFC)(\d+)$", seg)
+        if not m_conf:
+            continue  # unrecognised event shape -- skip rather than guess a seed
+        seed = int(m_conf.group(2))
+        if not 1 <= seed <= 7:
+            continue  # a conference has 7 seeds; anything else is not a seed market
+        try:
+            markets = get_markets_for_event(et)
+        except Exception:
+            continue
+        for m in markets:
+            rows.append({
+                "event_ticker": et,
+                "group_label": ev.get("title", ""),
+                "ticker": m["ticker"],
+                "team_abbr_kalshi": m["ticker"].rsplit("-", 1)[-1],
+                "seed": seed,
+                "conference": m_conf.group(1),
+                "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                "last_price": _to_float(m.get("last_price_dollars")),
+                "volume": _to_float(m.get("volume_fp")),
+                "status": m.get("status"),
+            })
+    return rows
+
+
+def get_playoff_host_markets() -> list[dict]:
+    """KXNFLPLAYOFFHOST: "Will {team} host a playoff game?".
+
+    Ticker is KXNFLPLAYOFFHOST-{YY}-{TEAM} (e.g. -26-WAS): one market per team,
+    no per-team event split, so the team is simply the ticker suffix. Priced
+    from season_sim's playoff_host_pct, which counts the bracket's actual hosts
+    -- see that field's own comment on why it is not division_pct.
+    """
+    rows = []
+    try:
+        events = get_open_events("KXNFLPLAYOFFHOST")
+    except Exception:
+        return rows
+    for ev in events:
+        et = ev["event_ticker"]
+        try:
+            markets = get_markets_for_event(et)
+        except Exception:
+            continue
+        for m in markets:
+            rows.append({
+                "event_ticker": et,
+                "group_label": ev.get("title", ""),
+                "ticker": m["ticker"],
+                "team_abbr_kalshi": m["ticker"].rsplit("-", 1)[-1],
                 "yes_bid": _to_float(m.get("yes_bid_dollars")),
                 "yes_ask": _to_float(m.get("yes_ask_dollars")),
                 "last_price": _to_float(m.get("last_price_dollars")),

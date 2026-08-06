@@ -144,6 +144,42 @@ def refresh_kalshi_futures():
             session.close()
 
 
+def refresh_kalshi_playoff_seed_and_host():
+    """KXNFLSEED + KXNFLPLAYOFFHOST -- both priced from season_sim outputs added
+    2026-08-06 (seed_pct / playoff_host_pct). Fetched together because they are
+    the same shape of season-long team market and share a refresh cadence.
+
+    Each series is fetched in its own try: one Kalshi hiccup should not cost the
+    other's ingestion, the same reason the racing championship warm loop is
+    per-series."""
+    rows: list[dict] = []
+    pairs = (
+        ("playoff seed", kalshi_client.get_playoff_seed_markets,
+         market_catalog.upsert_kalshi_playoff_seed_market),
+        ("playoff host", kalshi_client.get_playoff_host_markets,
+         market_catalog.upsert_kalshi_playoff_host_market),
+    )
+    for label, fetch, upsert in pairs:
+        try:
+            fetched = fetch()
+        except Exception:
+            log.exception("kalshi %s fetch failed", label)
+            continue
+        with db_write_lock():
+            session = SessionLocal()
+            try:
+                for row in fetched:
+                    upsert(session, row)
+                session.commit()
+                log.info("kalshi %s: %d markets ingested", label, len(fetched))
+            except Exception:
+                log.exception("kalshi %s upsert failed", label)
+            finally:
+                session.close()
+        rows.extend(fetched)
+    return len(rows)
+
+
 def refresh_kalshi_stage_of_elim():
     """KXNFLSTAGEOFELIM (stage of elimination) -- per (team, round) markets,
     priced from season_sim's stage_exit_pct. See
@@ -974,6 +1010,7 @@ def run_full_refresh():
     refresh_polymarket_spread_total()
     refresh_kalshi_futures()
     refresh_kalshi_stage_of_elim()
+    refresh_kalshi_playoff_seed_and_host()
     refresh_polymarket_futures()
     refresh_kalshi_win_totals()
     refresh_awards()

@@ -479,6 +479,66 @@ def upsert_kalshi_futures_market(session: Session, row: dict) -> Market:
     return market
 
 
+def upsert_kalshi_playoff_seed_market(session: Session, row: dict) -> Market:
+    """KXNFLSEED -- one market per (team, conference seed). The seed number goes
+    in `line` (it is a number, and the row is keyed by it) so pricing can read
+    season_sim's seed_pct[line] directly.
+
+    Kalshi lists seeds 2-7 here; the 1-seed lives in its own series, which is
+    why nothing assumes a full 1-7 ladder is present.
+    """
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi",
+            source_ticker=row["ticker"],
+            source_event_id=row["event_ticker"],
+            market_type="playoff_seed",
+        )
+        session.add(market)
+    market.team = to_nflverse_abbr(row["team_abbr_kalshi"])
+    market.line = float(row["seed"])
+    market.group_label = row["group_label"]
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id,
+        ts=datetime.datetime.utcnow(),
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
+        last_price=row.get("last_price"),
+        volume=row.get("volume"),
+    ))
+    return market
+
+
+def upsert_kalshi_playoff_host_market(session: Session, row: dict) -> Market:
+    """KXNFLPLAYOFFHOST -- one market per team, no line. Priced from
+    season_sim's playoff_host_pct."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi",
+            source_ticker=row["ticker"],
+            source_event_id=row["event_ticker"],
+            market_type="playoff_host",
+        )
+        session.add(market)
+    market.team = to_nflverse_abbr(row["team_abbr_kalshi"])
+    market.group_label = row["group_label"]
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id,
+        ts=datetime.datetime.utcnow(),
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
+        last_price=row.get("last_price"),
+        volume=row.get("volume"),
+    ))
+    return market
+
+
 def upsert_kalshi_stage_of_elim_market(session: Session, row: dict) -> Market:
     """KXNFLSTAGEOFELIM (stage of elimination) -- like the futures upsert, but
     keyed per (team, stage) so it needs `side` (the stage) set. Priced from
