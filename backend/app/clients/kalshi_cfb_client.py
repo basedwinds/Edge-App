@@ -29,10 +29,18 @@ WIN_TOTAL_SERIES = "KXNCAAFWINS"      # season win ladders (583 open, 69 teams)
 # regular-season standings, with N encoded in the event ticker (…-27T5-WAKE).
 # KXNCAAFSEC added 2026-08-03: it had no open markets when this list was first
 # built and now lists 16 (ticker KXNCAAFSEC-26-VAN, the same "-<season>-<team>"
-# shape the other four use, so the existing parser handles it unchanged). Big
-# Ten is STILL unlisted -- checked KXNCAAFBIGTEN, KXNCAAFB1G and KXNCAAFBIG10,
-# all zero open -- so it stays out rather than being added speculatively.
-CONF_CHAMPION_SERIES = ["KXNCAAFACC", "KXNCAAFB12", "KXNCAAFMAC", "KXNCAAFPAC12", "KXNCAAFSEC"]
+# shape the other four use, so the existing parser handles it unchanged).
+#
+# BIG TEN: the ticker is KXNCAAFB10, and it is live (5 open, "Will Wisconsin win
+# the College Football Big Ten Championship", found 2026-08-06 via the catalog
+# scanner's flagged list). The earlier note here said Big Ten was "STILL
+# unlisted" after checking KXNCAAFBIGTEN, KXNCAAFB1G and KXNCAAFBIG10 -- three
+# guesses, none of them the real one, and the conclusion drawn was that Kalshi
+# does not list it. It does. Guessing ticker spellings proves nothing when they
+# all miss; the catalog scanner enumerates what actually exists, which is what
+# eventually caught this. The Big Ten is a power conference, so this was one of
+# the more valuable conference markets to be missing.
+CONF_CHAMPION_SERIES = ["KXNCAAFACC", "KXNCAAFB10", "KXNCAAFB12", "KXNCAAFMAC", "KXNCAAFPAC12", "KXNCAAFSEC"]
 CONF_QUALIFIER_SERIES = ["KXNCAAFSECQ", "KXNCAAFB12QUAL", "KXNCAAFMACQUAL", "KXNCAAFMWCQUAL"]
 CONF_REGTOP_SERIES = ["KXNCAAFACCREGTOP", "KXNCAAFSECREGTOP", "KXNCAAFB12REGTOP"]
 # Playoff futures. Priced by playoff_sim_cfb, which models a COMMITTEE decision
