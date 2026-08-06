@@ -80,8 +80,15 @@ def _fetch_season_games() -> list[dict]:
     return wnba_data.fetch_games(start, end, respect_horizon=False)
 
 
-def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, dict[int, int]]:
+def simulate(trials: int = 4000, games: list[dict] | None = None, _with_wins: bool = False):
     """{team: {win count: how many simulated seasons ended there}}.
+
+    With `_with_wins`, also returns the raw (trials x teams) win matrix and the
+    team order, so seed/playoff probabilities can be read off the SAME
+    simulation rather than a second one. Two sims would silently disagree --
+    a team could be shown 30% for the #1 seed while its own win distribution
+    said something else -- which is the reasoning-vs-pricing split this repo
+    has now hit three separate times.
 
     Vectorised over trials -- each remaining game is one Bernoulli draw per
     simulated season, so a whole season is a (trials x games) boolean matrix."""
@@ -99,7 +106,7 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
         if g["home_team"] in REAL_TEAMS and g["away_team"] in REAL_TEAMS
     ]
     if not games:
-        return {}
+        return ({}, None, []) if _with_wins else {}
 
     teams = sorted({g["home_team"] for g in games} | {g["away_team"] for g in games})
     idx = {t: i for i, t in enumerate(teams)}
@@ -135,7 +142,7 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
             "wnba season sim: only %d of %d remaining games could be rated -- "
             "refusing to return a distribution", len(probs), unplayed,
         )
-        return {}
+        return ({}, None, []) if _with_wins else {}
 
     counts: dict[str, dict[int, int]] = {t: {} for t in teams}
     if not probs:
@@ -143,6 +150,9 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
         # at the final win count is correct rather than a fabricated certainty.
         for t in teams:
             counts[t][int(banked[idx[t]])] = trials
+        if _with_wins:
+            # Season over: every trial is the same real final table.
+            return counts, np.tile(banked, (trials, 1)).astype(np.int32), teams
         return counts
 
     p_arr = np.array(probs)
@@ -179,7 +189,71 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict[str, d
     for t in teams:
         vals, cnt = np.unique(wins[:, idx[t]], return_counts=True)
         counts[t] = {int(v): int(c) for v, c in zip(vals, cnt)}
-    return counts
+    return (counts, wins, teams) if _with_wins else counts
+
+
+# The WNBA takes the top 8 records into the playoffs, league-wide -- there are
+# no conferences to qualify out of, so "made the playoffs" is purely a
+# regular-season finishing position and needs no bracket.
+PLAYOFF_FIELD_SIZE = 8
+
+
+def _standings_from_wins(wins, teams) -> dict[str, dict[str, float]]:
+    """Seed/playoff probabilities from an already-computed win matrix."""
+    if wins is None or not teams:
+        return {}
+    return _standings_impl(wins, teams)
+
+
+def standings_probs(trials: int = 4000, games: list[dict] | None = None) -> dict[str, dict[str, float]]:
+    """{team: {"one_seed": p, "playoff": p}} for KXWNBA1SEED / KXWNBAPLAYOFF.
+
+    Read off the SAME simulation as the win-total ladders (simulate's own win
+    matrix), so a team's seed probability and its win distribution can never
+    disagree.
+
+    NO BRACKET IS INVOLVED, and that is the point. Both markets resolve on
+    regular-season finishing position: the #1 seed is the best record, and the
+    playoff field is simply the top 8. The championship market WOULD need a
+    bracket -- KXWNBACHAMP has 0 open markets (checked 2026-08-06), so nothing
+    is built for it rather than guessing at a series model nobody can bet.
+
+    TIES ARE SPLIT, NOT BROKEN. The real league breaks a tie on head-to-head
+    and division record, which this sim does not track. A trial where k teams
+    share the best record contributes 1/k to each of them, which keeps the
+    column summing to 1.0 -- rather than awarding it to whichever team happens
+    to sort first, which would bias systematically toward one franchise.
+    """
+    _counts, wins, teams = simulate(trials=trials, games=games, _with_wins=True)
+    if wins is None or not teams:
+        return {}
+    return _standings_impl(wins, teams)
+
+
+def _standings_impl(wins, teams) -> dict[str, dict[str, float]]:
+    n_trials = wins.shape[0]
+
+    best = wins.max(axis=1, keepdims=True)
+    is_best = wins == best                       # (trials x teams) bool
+    n_tied = is_best.sum(axis=1, keepdims=True)  # how many share the top record
+    one_seed = (is_best / n_tied).sum(axis=0) / n_trials
+
+    # Top 8 by wins. A cut-line tie is split the same way: everyone strictly
+    # above the 8th-best record is in, and the teams level with it share the
+    # remaining slots.
+    order = np.sort(wins, axis=1)[:, ::-1]
+    cutoff = order[:, PLAYOFF_FIELD_SIZE - 1][:, None]
+    strictly_in = wins > cutoff
+    on_line = wins == cutoff
+    slots_left = PLAYOFF_FIELD_SIZE - strictly_in.sum(axis=1, keepdims=True)
+    share = np.where(on_line.sum(axis=1, keepdims=True) > 0,
+                     slots_left / np.maximum(on_line.sum(axis=1, keepdims=True), 1), 0.0)
+    playoff = (strictly_in + on_line * share).sum(axis=0) / n_trials
+
+    return {
+        t: {"one_seed": round(float(one_seed[i]), 4), "playoff": round(float(playoff[i]), 4)}
+        for i, t in enumerate(teams)
+    }
 
 
 def prob_wins_at_least(dist: dict[int, int] | None, threshold: float, trials: int) -> float | None:
@@ -220,13 +294,25 @@ def warm(trials: int = 4000) -> None:
         # refresh_wnba_ratings beforehand, but relying on caller order is what
         # made a cold sim return certainties (see the guard in simulate).
         elo_service_wnba.refresh_ratings()
-        dist = simulate(trials=trials)
+        # ONE simulation feeds both outputs. Calling simulate() again for the
+        # standings would be a second, independent season -- a team's #1-seed
+        # probability could then contradict its own win distribution, and it
+        # would also re-run the sim on every request.
+        dist, wins, teams = simulate(trials=trials, _with_wins=True)
+        standings = _standings_from_wins(wins, teams)
     except Exception:
         log.exception("wnba season sim failed")
-        dist = {}
+        dist, standings = {}, {}
     with _lock:
         _cache["dist"] = (now, dist, trials)
+        _cache["standings"] = standings
     log.info("wnba season sim: %d teams over %d trials", len(dist), trials)
+
+
+def get_standings() -> dict[str, dict[str, float]]:
+    """Cached {team: {"one_seed": p, "playoff": p}} from the last warm()."""
+    with _lock:
+        return _cache.get("standings") or {}
 
 
 def get() -> tuple[dict[str, dict[int, int]], int]:

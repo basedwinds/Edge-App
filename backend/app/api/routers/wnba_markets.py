@@ -46,7 +46,7 @@ GAME_MARKET_TYPES = {
 # would silently drop every season row (the trap that would have dropped all of
 # CFB's season markets). They also draw on the futures sub-pool, not the weekly
 # one, at the reduced futures unit size.
-SEASON_MARKET_TYPES = {"win_total"}
+SEASON_MARKET_TYPES = {"win_total", "one_seed", "playoff_qualifier"}
 ALL_MARKET_TYPES = GAME_MARKET_TYPES | SEASON_MARKET_TYPES
 _HALF_OF = {"first": 1, "second": 2}
 # Kalshi outcome labels that are NOT a team. A half can end level, so the winner
@@ -182,6 +182,24 @@ def _half_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
 def _wnba_season_model_prob(m, win_dist, sim_trials):
     """Model probability for a season-long WNBA market. Shared by /markets and
     /futures so the two can never disagree about the same row."""
+    # #1 seed / playoff qualifier resolve on the regular-season table, not a
+    # bracket, so they come off the SAME simulation as the win ladders (see
+    # season_sim_wnba.standings_probs). KXWNBACHAMP -- the market that would
+    # genuinely need a playoff bracket -- has no open markets, so none is built.
+    #
+    # Checked BEFORE the win_dist guard and read from the cache, not recomputed:
+    # standings_probs() would re-run the whole season sim on every request, and
+    # gating on win_dist would leave these unpriced whenever the ladder cache is
+    # cold even though the standings are right there.
+    if m.market_type in ("one_seed", "playoff_qualifier"):
+        standings = season_sim_wnba.get_standings()
+        if not standings:
+            return None, "Season simulation not warm yet."
+        row = standings.get(m.team)
+        if row is None:
+            return None, "No season projection for this team."
+        key = "one_seed" if m.market_type == "one_seed" else "playoff"
+        return round(row[key], 4), None
     if not win_dist:
         return None, "Season simulation not warm yet."
     if m.line is None or m.team not in win_dist:

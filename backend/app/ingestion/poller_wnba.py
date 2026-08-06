@@ -172,6 +172,22 @@ def refresh_wnba_season_sim():
     season_sim_wnba.warm()
 
 
+def refresh_kalshi_wnba_standings():
+    """#1 seed + playoff qualifier (KXWNBA1SEED / KXWNBAPLAYOFF). Both resolve
+    on the regular-season table, so they are priced from the season sim's own
+    win matrix -- no bracket. See season_sim_wnba.standings_probs."""
+    rows = kalshi_wnba_client.get_standings_markets()
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for row in rows:
+                market_catalog_wnba.upsert_kalshi_wnba_standings_market(session, row)
+            session.commit()
+            log.info("kalshi wnba standings: %d markets ingested", len(rows))
+        finally:
+            session.close()
+
+
 def refresh_kalshi_wnba_win_totals():
     """KXWNBAWINS ladders. Season-long, so no game match is attempted."""
     rows = kalshi_wnba_client.get_win_total_markets()
@@ -223,6 +239,7 @@ def run_full_refresh_wnba():
                  refresh_kalshi_wnba_spread_total,
                  refresh_kalshi_wnba_halves,
                  refresh_kalshi_wnba_win_totals,
+                 refresh_kalshi_wnba_standings,
                  settle_placed_bets_wnba):
         try:
             step()

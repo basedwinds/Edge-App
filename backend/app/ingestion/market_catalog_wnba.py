@@ -218,3 +218,28 @@ def upsert_kalshi_wnba_win_total_market(session: Session, row: dict) -> Market:
         )
     )
     return market
+
+
+def upsert_kalshi_wnba_standings_market(session: Session, row: dict) -> Market:
+    """#1 seed / playoff qualifier -- season-long like win_total, so NO
+    wnba_game_id. market_type comes from the row's own market_kind so the two
+    series cannot collide on one type."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type=row["market_kind"], sport="wnba",
+        )
+        session.add(market)
+    market.team = to_espn_abbr(row["team_abbr_kalshi"])
+    market.line = None
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(
+        MarketSnapshot(
+            market_id=market.id, ts=datetime.datetime.utcnow(),
+            yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
+            last_price=row.get("last_price"), volume=row.get("volume"),
+        )
+    )
+    return market

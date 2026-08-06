@@ -23,6 +23,11 @@ TOTAL_SERIES = "KXWNBATOTAL"
 # the half", not a threshold), so they use the moneyline fetch shape rather than
 # the ladder one.
 WIN_TOTAL_SERIES = "KXWNBAWINS"   # season win ladders (45 open, 15 teams)
+# Season FINISHING-POSITION markets, one per team. Both resolve on the
+# regular-season table, so neither needs a playoff bracket -- see
+# season_sim_wnba.standings_probs. KXWNBACHAMP/KXWNBAFINALS, which WOULD
+# need one, have 0 open markets (checked 2026-08-06) and are not fetched.
+STANDINGS_SERIES = {"one_seed": "KXWNBA1SEED", "playoff_qualifier": "KXWNBAPLAYOFF"}
 HALF_WINNER_SERIES = {1: "KXWNBA1HWINNER", 2: "KXWNBA2HWINNER"}
 HALF_SPREAD_SERIES = {1: "KXWNBA1HSPREAD", 2: "KXWNBA2HSPREAD"}
 HALF_TOTAL_SERIES = {1: "KXWNBA1HTOTAL", 2: "KXWNBA2HTOTAL"}
@@ -179,4 +184,36 @@ def get_win_total_markets() -> list[dict]:
             "volume": _to_float(m.get("volume_fp")),
             "status": m.get("status"),
         })
+    return out
+
+
+def get_standings_markets() -> list[dict]:
+    """#1 seed and playoff-qualifier markets, one row per team.
+
+    Unlike the win ladders, the team lives in the MARKET ticker suffix
+    ("KXWNBA1SEED-26-WSH" -> "WSH"), not the event ticker, and there is no
+    floor_strike -- these are plain yes/no propositions on where a team
+    finishes. The suffix is a KALSHI abbreviation, so callers map it through
+    to_espn_abbr before matching a team.
+    """
+    out = []
+    for market_kind, series in STANDINGS_SERIES.items():
+        for m in get_open_markets_for_series(series):
+            ticker = m.get("ticker")
+            if not ticker:
+                continue
+            abbr = ticker.rsplit("-", 1)[-1]
+            if not abbr or abbr.isdigit():
+                continue
+            out.append({
+                "event_ticker": m.get("event_ticker") or series,
+                "ticker": ticker,
+                "team_abbr_kalshi": abbr,
+                "market_kind": market_kind,
+                "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                "last_price": _to_float(m.get("last_price_dollars")),
+                "volume": _to_float(m.get("volume_fp")),
+                "status": m.get("status"),
+            })
     return out
