@@ -126,9 +126,9 @@ def resolved_looking_active_markets(session: Session, hours: int = 6, cache: dic
     already STARTED over `hours` ago.
 
     A local proxy for "the exchange resolved this and we never noticed" -- no
-    network call, so it can run every cycle. The authoritative fix is
-    reconcile_kalshi_market_status; this is the alarm that says it has not run,
-    or does not cover a source (Polymarket has no equivalent).
+    network call, so it can run every cycle. The authoritative fixes are
+    reconcile_kalshi_market_status and reconcile_polymarket_market_status (both
+    sources are covered now); this is the alarm that says one has not run.
 
     BOTH CONDITIONS ARE REQUIRED, and the first draft of this check got that
     wrong: price alone flagged 11,901 tennis rows, because a pre-game heavy

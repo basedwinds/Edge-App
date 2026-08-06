@@ -508,6 +508,19 @@ def settle_placed_bets():
     except Exception:
         log.exception("kalshi-resolution settlement failed")
 
+    # The SAME freeze on the Polymarket side, and worse: the per-sport
+    # Polymarket refreshes fetch closed=false, so a resolved market drops out of
+    # the feed and stays "active" forever. Measured 2026-08-06 before this ran:
+    # 32,963 of 41,560 markets we called active (79%) were already closed on
+    # Polymarket -- against 21% on Kalshi. Separate try block so a Gamma outage
+    # cannot take the Kalshi path down with it, or vice versa.
+    try:
+        from app.ingestion.polymarket_resolution import reconcile_polymarket_market_status
+
+        reconcile_polymarket_market_status()
+    except Exception:
+        log.exception("polymarket status reconciliation failed")
+
 
 def refresh_kalshi_win_totals():
     """Season win-total markets (per-team over/under ladder, per-team exact
