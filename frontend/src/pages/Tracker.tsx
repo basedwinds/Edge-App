@@ -188,37 +188,67 @@ function startAbsolute(iso: string | null): string {
   return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-/** Void a bet whose event was cancelled. Confirms first: it settles a real
- * position, and unlike "mark placed" there is no undo in the UI. */
+/** Void a bet whose event was cancelled (a withdrawal, or a postponement that
+ * will not be replayed), so it can never settle on its own. Returns the stake,
+ * removes it from open positions, and -- because void is excluded from win/loss
+ * -- keeps it out of ROI and CLV rather than recording a loss never taken.
+ *
+ * CONFIRMS INLINE, NOT WITH window.confirm(). The first version used a native
+ * dialog and the user reported "I'm hitting void and nothing is happening":
+ * once a page has shown one dialog Chrome offers "prevent this page from
+ * creating additional dialogs", and if that gets ticked confirm() returns false
+ * forever after. The handler then returned early and did nothing, with no way
+ * to tell that from a broken button. A two-click inline confirm has no such
+ * dependency and its state is visible in the UI.
+ *
+ * Failures are shown too. The first version had try/finally with no catch, so a
+ * rejected request also produced silence -- the same symptom from a different
+ * cause. */
 function VoidButton({ bet }: { bet: OpenBetPayload }) {
   const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
-  async function onVoid() {
-    const label = bet.label || bet.market_type || "this bet";
-    if (!window.confirm(
-      `Void ${label}?\n\nUse this when the event was CANCELLED (a withdrawal, a postponement that will not be replayed) so it can never settle on its own.\n\nThe $${bet.stake_dollars.toLocaleString()} stake is returned and the bet leaves your open positions. Voids are excluded from win/loss, so this will not affect ROI or CLV.`
-    )) return;
-    setBusy(true);
+  const [phase, setPhase] = useState<"idle" | "confirm" | "busy" | "error">("idle");
+
+  async function onClick() {
+    if (phase === "busy") return;
+    if (phase === "idle" || phase === "error") {
+      setPhase("confirm");
+      // Auto-revert so a stray click doesn't leave a row armed indefinitely.
+      window.setTimeout(() => setPhase((p) => (p === "confirm" ? "idle" : p)), 5000);
+      return;
+    }
+    setPhase("busy");
     try {
       await settleBet(bet.id, "void", "voided by hand -- event cancelled");
       // Everything that reads the open book: the tables, the portfolio totals,
-      // and the per-sport ceilings that were being held down by this stake.
+      // and the per-sport ceilings this stake was holding down.
       for (const k of ["open-bets", "settled-bets", "portfolio", "placed-market-ids",
                        "placed-futures-keys", "combined", "combined-futures"]) {
         qc.invalidateQueries({ queryKey: [k] });
       }
-    } finally {
-      setBusy(false);
+      // The row disappears when open-bets refetches; no need to reset phase.
+    } catch (e) {
+      console.error("void failed", e);
+      setPhase("error");
     }
   }
+
+  const text = phase === "busy" ? "Voiding…"
+    : phase === "confirm" ? `Void $${bet.stake_dollars.toLocaleString()}?`
+    : phase === "error" ? "Failed — retry"
+    : "Void";
+  const tone = phase === "confirm" ? "border-[var(--color-warning)] text-[var(--color-warning)]"
+    : phase === "error" ? "border-[var(--color-critical)] text-[var(--color-critical)]"
+    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-warning)] hover:border-[var(--color-warning)]";
   return (
     <button
-      onClick={onVoid}
-      disabled={busy}
-      title="Event cancelled — void this bet and release its stake"
-      className="text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-warning)] hover:border-[var(--color-warning)] whitespace-nowrap disabled:opacity-50"
+      onClick={onClick}
+      disabled={phase === "busy"}
+      title={phase === "confirm"
+        ? "Click again to confirm — returns the stake and removes this from open positions"
+        : "Event cancelled — void this bet and release its stake"}
+      className={`text-xs font-medium px-2 py-1 rounded-md border whitespace-nowrap disabled:opacity-50 ${tone}`}
     >
-      {busy ? "Voiding…" : "Void"}
+      {text}
     </button>
   );
 }
