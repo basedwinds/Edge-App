@@ -111,6 +111,20 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict:
             continue
         probs.append(float(p)); pair.append((idx[h], idx[a])); is_conf.append(same_conf)
 
+    # REFUSE to seed a bracket off a schedule whose remaining games mostly
+    # failed to rate. Skipping unrated games does not widen the distribution --
+    # it removes the ONLY source of simulated wins, so every team keeps its
+    # banked record and the field falls out of the Elo tiebreak alone. That
+    # produces a confident-looking bracket built on nothing. Same guard, and
+    # same reason, as season_sim_wnba.simulate.
+    unplayed = sum(1 for g in games if g.get("home_score") is None or g.get("away_score") is None)
+    if unplayed and len(probs) < 0.5 * unplayed:
+        log.error(
+            "cfb playoff sim: only %d of %d remaining games could be rated -- "
+            "refusing to return a bracket", len(probs), unplayed,
+        )
+        return {"playoff": {}, "quarterfinal": {}, "title": {}, "title_by_conference": {}}
+
     p_arr = np.array(probs) if probs else np.zeros(0)
     hi = np.array([x[0] for x in pair]) if pair else np.zeros(0, dtype=int)
     ai = np.array([x[1] for x in pair]) if pair else np.zeros(0, dtype=int)
@@ -211,6 +225,21 @@ def warm(trials: int = 2000) -> None:
         if hit and now - hit[0] < (_TTL if hit[1] else _FAILURE_TTL):
             return
     try:
+        # Load the Elo cache FIRST. It starts empty, and every game needs both
+        # sides rated (see the is_rated check in simulate) -- with a cold cache
+        # not one game rates, so nothing is simulated, every team's record stays
+        # at its banked total, and the bracket falls out of the Elo tiebreak
+        # alone. Measured in a cold process: 22 of 138 teams held all the
+        # probability and UMass priced at 11.8% to win the national title, while
+        # Ohio State, Georgia, Texas and Oregon sat at 0.0. Warm, the same code
+        # gives IU 41% / Oregon 15.6% / Georgia 12.4% -- entirely sane.
+        #
+        # run_full_refresh_cfb DOES call refresh_cfb_ratings before this, but its
+        # steps are individually guarded, so a raising ratings step lets this one
+        # run anyway -- and a non-empty garbage result latches for the full _TTL,
+        # not _FAILURE_TTL. Relying on caller order is the same mistake
+        # season_sim_wnba.warm already had to fix.
+        elo_service_cfb.refresh_ratings()
         data = simulate(trials=trials)
     except Exception:
         log.exception("cfb playoff sim failed")
