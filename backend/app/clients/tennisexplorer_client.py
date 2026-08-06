@@ -11,16 +11,35 @@ level. tennis-data.co.uk (see tennisdata_client.py) remains the source for
 ATP/WTA tour-level (cleaner structured xlsx, no scrape fragility, already
 has point-in-time rank); this client is used ONLY for Challenger/ITF.
 
-Real structural finding from live testing: the site's `?type=` query param
-(challenger-men, itf-women, etc.) does NOT actually filter server-side --
-`type=all`, `type=challenger-men`, and `type=itf-men` for the same date all
-returned byte-for-byte the same page (confirmed via diff). The real tier
-signal is the TOURNAMENT SLUG itself: "-challenger" in the slug means
+The tier signal is the TOURNAMENT SLUG itself: "-challenger" in the slug means
 Challenger level, "-itf" means ITF level, anything else under a plain
 `/atp-men/` or `/wta-women/` URL suffix is tour-level (already covered by
 tennis-data.co.uk, skipped here to avoid double-counting/a second name-key
-system for the same real matches). This means ONE request per day (not one
-per tier) returns every tier's results for that day.
+system for the same real matches).
+
+CORRECTION 2026-08-06 -- this docstring used to claim, as a "real structural
+finding", that `?type=` does NOT filter server-side, because `type=all`,
+`type=challenger-men` and `type=itf-men` returned the same page. That
+conclusion was wrong. The param DOES filter: `type=atp-single` returns a
+genuinely different, men-only page (6 tour + 5 challenger tournaments, zero
+WTA). What actually happened is that `challenger-men` and `itf-men` are not
+valid values, and an invalid value silently falls back to the default page --
+which looks identical to "the param is ignored". The values the site itself
+links to are exactly: all, atp-single, atp-double, wta-single, wta-double,
+double. There is no ITF filter among them.
+
+`type=all` is still the right single request, but NOT because it returns every
+tier -- because it returns the most. What it actually carries, measured on
+2026-08-04: 6 ATP tour + 6 Challenger + 7 WTA tour + 28 ITF tournaments, and
+every ITF one sits under a `/wta-women/` suffix.
+
+KNOWN COVERAGE HOLE, measured not assumed: MEN'S ITF IS ABSENT. Of our own
+itf/atp fixtures only 24 of 743 ever resolve (3%), against 636 of 802 (79%) for
+itf/wta; restricted to dates inside the results lookback window it is 0 of 347.
+It is not a labelling problem -- fetch_results_index keys purely on the player
+pair, with no tier/tour in the key, so a men's row filed under `wta-women`
+would still match. Those players simply are not on this page. Closing that gap
+needs a different source, not a different parse of this one.
 
 Known simplification, not yet fixed: this results-day page does NOT expose
 per-tournament SURFACE (unlike the live "today's matches" listing page,
