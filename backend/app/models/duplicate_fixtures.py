@@ -47,7 +47,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from app.db.models import TennisMatch
+from app.db.models import TennisMatch, RaceEvent
 from app.ingestion.lol_team_aliases import base_key, tier_of
 from app.ingestion.market_matcher_lol import normalize_team_name
 
@@ -237,4 +237,126 @@ def canonical_tennis_fixture_ids(session: Session) -> dict[int, int]:
         canonical = min(ids)          # stable across refreshes
         for i in ids:
             out[i] = canonical
+    return out
+
+
+# ---------------------------------------------------------------------------
+# RACING
+# ---------------------------------------------------------------------------
+# Words that appear in race names without identifying the race. Stripped before
+# building a name key so "NASCAR Cup Series Iowa Corn 350" and
+# "NASCAR: Iowa Corn 350 Powered by Ethanol Winner" reduce to the same tokens.
+_RACE_STOPWORDS = frozenset({
+    "nascar", "indycar", "ntt", "f1", "formula", "cup", "series", "race", "winner",
+    "pole", "position", "grand", "prix", "gp", "the", "at", "presented", "by",
+    "powered", "with", "of", "and", "a", "an", "to", "finish", "in", "top", "will",
+    "be", "finishes", "sponsored", "presents",
+    # Generic OUTCOME words. Without these, "Will X win the F1 Drivers
+    # Championship" and "Will Y win the F1 Constructors Championship" shared
+    # {win, championship} -- exactly the 2-token threshold -- and the two F1
+    # titles merged into one "race". Dropping them leaves the distinguishing
+    # words (drivers vs constructors) to decide, which is the point.
+    "win", "wins", "champion", "championship", "driver",
+})
+
+
+def _race_name_key(name: str) -> frozenset:
+    """Identifying tokens of a race name: alphanumerics, stopwords removed.
+
+    A SET, not a sequence, because the two platforms order and decorate the name
+    differently ("Brickyard 400 presented by PPG" vs "NASCAR Brickyard 400:
+    Winner"). Overlap on the distinctive tokens is what identifies the race.
+    """
+    words = re.findall(r"[a-z0-9]+", (name or "").lower())
+    return frozenset(w for w in words if w not in _RACE_STOPWORDS and len(w) > 1)
+
+
+def _kalshi_race_suffix(event_ticker: str) -> "str | None":
+    """"KXNASCARTOP10-IOWC3PB26" -> "IOWC3PB26".
+
+    Kalshi files EVERY market type for a race under its own series ticker, so one
+    race becomes several RaceEvent rows -- the Iowa Corn 350 has five (RACE,
+    TOP3, TOP5, TOP10, TOP20). The suffix after the first "-" is the same for all
+    of them and is the reliable race identity; the dates are NOT (the same
+    suffix has been seen carrying both 2026-08-08 and 2026-08-22).
+    """
+    t = (event_ticker or "")
+    if not t.startswith("KX") or "-" not in t:
+        return None
+    suf = t.split("-", 1)[1] or ""
+    # A SEASON-LONG ticker's suffix is just the year: "KXF1-26" and
+    # "KXF1CONSTRUCTORS-26" both yield "26". Grouping on that merged the F1
+    # drivers' and constructors' championships into one race -- two different
+    # propositions, caught while verifying this helper on real rows. A real race
+    # suffix is long and not purely numeric ("IOWC3PB26", "NTTICS26"), so
+    # require both. Season-long events then fall through to name matching, where
+    # "drivers" vs "constructors" keeps them apart.
+    if len(suf) < 4 or suf.isdigit():
+        return None
+    return suf
+
+
+def canonical_race_event_ids(session: Session) -> dict[int, int]:
+    """{race_event_id: canonical_id} collapsing rows that are the SAME race.
+
+    WHY THIS EXISTS. Racing markets were invisible to the cross-platform
+    divergence scanner even after race_event_id was added to its entity key,
+    because the two platforms never SHARE a RaceEvent: each poller creates its
+    own from its own identifier. Measured 2026-08-06: 0 of the racing
+    race_events carried markets from both sources, while F1 (33 Kalshi + 134
+    Polymarket) and NASCAR (255 + 112) both had plenty of each.
+
+    Two joins, in order of how much they can be trusted:
+
+    1. Kalshi-to-Kalshi on the ticker suffix. Exact, no inference.
+    2. Kalshi-to-Polymarket on race-NAME token overlap within a series. Names are
+       the only thing both platforms carry reliably -- start_time is not, since
+       the same Kalshi suffix has been seen with dates two weeks apart.
+
+    Requires at least two distinctive shared tokens so a stray word ("400",
+    "250") cannot marry two different races. Canonical id is min(), stable
+    across refreshes, matching the tennis/esports helpers above.
+    """
+    rows = session.query(RaceEvent).all()
+    by_series: dict[str, list] = {}
+    for r in rows:
+        by_series.setdefault(r.series or "", []).append(r)
+
+    out: dict[int, int] = {}
+    for _series, evs in by_series.items():
+        groups: list[list] = []          # each group = one real race
+        # --- pass 1: Kalshi suffix ---
+        by_suffix: dict[str, list] = {}
+        leftovers = []
+        for e in evs:
+            suf = _kalshi_race_suffix(e.event_ticker or "")
+            if suf:
+                by_suffix.setdefault(suf, []).append(e)
+            else:
+                leftovers.append(e)
+        groups.extend(by_suffix.values())
+
+        # --- pass 2: attach each non-Kalshi row to a group by name overlap ---
+        for e in leftovers:
+            key = _race_name_key(e.name or "")
+            if not key:
+                groups.append([e])
+                continue
+            best, best_n = None, 0
+            for g in groups:
+                shared = max((len(key & _race_name_key(x.name or "")) for x in g), default=0)
+                if shared > best_n:
+                    best, best_n = g, shared
+            if best is not None and best_n >= 2:
+                best.append(e)
+            else:
+                groups.append([e])
+
+        for g in groups:
+            ids = sorted(x.id for x in g)
+            if len(ids) < 2:
+                continue
+            canonical = min(ids)
+            for i in ids:
+                out[i] = canonical
     return out
