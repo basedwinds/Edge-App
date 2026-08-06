@@ -518,6 +518,15 @@ def settle_placed_bets():
         from app.ingestion.polymarket_resolution import reconcile_polymarket_market_status
 
         reconcile_polymarket_market_status()
+        # Status first, then settle -- same ordering and same reason as the
+        # Kalshi block above. This is the authoritative settlement path for
+        # Polymarket bets, which until now had none: the per-sport graders need
+        # a scraped result and a working name join, and where they disagree with
+        # Polymarket about a POLYMARKET bet, Polymarket is the venue that would
+        # actually pay, so it wins by definition.
+        from app.ingestion.polymarket_settlement import settle_from_polymarket_resolution
+
+        settle_from_polymarket_resolution()
     except Exception:
         log.exception("polymarket status reconciliation failed")
 
