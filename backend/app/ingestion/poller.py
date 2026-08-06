@@ -50,6 +50,64 @@ def refresh_nfl_games():
             session.close()
 
 
+def refresh_nfl_half_scores():
+    """Backfills HALF-time scores onto played NFL games, so the 1H/2H winner
+    markets can settle.
+
+    nflverse -- refresh_nfl_games's source -- publishes only the FINAL score,
+    so without this every winner_1h/winner_2h bet would sit pending forever.
+    That is precisely the defect soccer shipped with (573 bets, 2 settled), so
+    it is wired at the same time as the markets rather than after.
+
+    Fetched a WEEK at a time, never a whole season: ESPN caps a scoreboard
+    response and truncates silently from the start of the range, which is how
+    the soccer pipeline lost every result after April.
+    """
+    read_session = SessionLocal()
+    try:
+        pending = (
+            read_session.query(NflGame)
+            .filter(NflGame.home_score.isnot(None), NflGame.home_score_1h.is_(None))
+            .all()
+        )
+        days = sorted({g.gameday for g in pending if g.gameday})
+        index = {(g.gameday, g.home_team, g.away_team): g.id for g in pending if g.gameday}
+    finally:
+        read_session.close()
+    if not days:
+        return
+
+    found: dict[tuple, dict] = {}
+    start = datetime.date.fromisoformat(days[0])
+    end = datetime.date.fromisoformat(days[-1])
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + datetime.timedelta(days=6), end)
+        for row in espn_client.fetch_half_scores(cursor.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d")):
+            if row.get("gameday"):
+                found[(row["gameday"], row["home_abbr"], row["away_abbr"])] = row
+        cursor = chunk_end + datetime.timedelta(days=1)
+
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            updated = 0
+            for key, game_id in index.items():
+                row = found.get(key)
+                if row is None:
+                    continue
+                game = session.get(NflGame, game_id)
+                if game is None:
+                    continue
+                game.home_score_1h = row["home_score_1h"]
+                game.away_score_1h = row["away_score_1h"]
+                updated += 1
+            session.commit()
+            log.info("nfl half scores: %d/%d played games backfilled", updated, len(index))
+        finally:
+            session.close()
+
+
 def refresh_preseason_games():
     """nflverse (refresh_nfl_games's source) never publishes preseason --
     pulled from ESPN's scoreboard instead (see ingestion/preseason_data.py).
@@ -577,6 +635,7 @@ def refresh_kalshi_spread_total():
     total_rows = kalshi_client.get_total_markets()
     team_total_rows = kalshi_client.get_team_total_markets()
     half_rows = {half: (kalshi_client.get_half_spread_markets(half), kalshi_client.get_half_total_markets(half)) for half in (1, 2)}
+    half_winner_rows = {half: kalshi_client.get_half_winner_markets(half) for half in (1, 2)}
 
     with db_write_lock():
         session = SessionLocal()
@@ -628,6 +687,16 @@ def refresh_kalshi_spread_total():
                     market_catalog.upsert_kalshi_half_total_market(session, row, game_id, f"total_{half}h")
                 session.commit()
                 log.info("kalshi total %dH: %d markets ingested (%d matched)", half, len(half_total_rows), matched)
+
+            for half, winner_rows in half_winner_rows.items():
+                matched = 0
+                for row in winner_rows:
+                    game_id = match_kalshi_event_ticker(row["event_ticker"], game_index)
+                    if game_id:
+                        matched += 1
+                    market_catalog.upsert_kalshi_half_winner_market(session, row, game_id, f"winner_{half}h")
+                session.commit()
+                log.info("kalshi winner %dH: %d markets ingested (%d matched)", half, len(winner_rows), matched)
         finally:
             session.close()
 
@@ -857,6 +926,7 @@ def run_full_refresh():
     from app.models import season_sim_service, scoring_ratings_service
 
     refresh_nfl_games()
+    refresh_nfl_half_scores()
     refresh_preseason_games()
     elo_service.refresh_ratings()
     season_sim_service.refresh()

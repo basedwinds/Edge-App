@@ -45,6 +45,9 @@ log = logging.getLogger("bet_settlement")
 AUTO_SETTLE_MARKET_TYPES = {
     # score-based game sports (nfl/nba/wnba/mlb) + soccer
     "moneyline", "spread", "total", "team_total", "moneyline_3way", "game_spread", "game_total", "btts",
+    # NFL half winner -- needs NflGame.home_score_1h, filled by
+    # espn_client.fetch_half_scores (nflverse publishes only the final).
+    "winner_1h", "winner_2h",
     # soccer halves -- graded off ESPN half-time linescores (see
     # espn_soccer_client.fetch_half_time_goals); second half is FT minus HT.
     "first_half_winner", "second_half_winner", "first_half_total", "second_half_total",
@@ -143,6 +146,40 @@ def _grade_total(bet: PlacedBet, game) -> str:
     if bet.side == "under":
         return "won" if actual_total < bet.line else "lost"
     return "won" if actual_total > bet.line else "lost"  # side == "over" (Kalshi total ladders are always "over")
+
+
+def _grade_half_winner(bet: PlacedBet, game, half: int) -> "str | None":
+    """NFL 1H/2H winner (KXNFL1H / KXNFL2H). Returns None -- bet stays pending
+    -- when the half score is missing, since nflverse gives only the final and
+    espn_client.fetch_half_scores may not have run for this game yet.
+
+    A HALF CAN END LEVEL (measured 6.3% of 1st halves, 9.8% of 2nd), and Kalshi
+    lists TIE as its own leg. A tied half is a real LOSS for a team leg, not a
+    push -- "will Carolina win the 1st half" is simply false when nobody wins
+    it. The TIE leg itself grades as won on exactly that outcome.
+    """
+    # getattr, not attribute access: only NflGame has these columns, and this
+    # grader is reached from the shared _GRADERS table. A plain game.home_score_1h
+    # would raise AttributeError on an NBA/MLB row and abort settle_finished_games
+    # for EVERY sport -- exactly the soccer team_total crash, one market type over.
+    home_1h = getattr(game, "home_score_1h", None)
+    away_1h = getattr(game, "away_score_1h", None)
+    if home_1h is None or away_1h is None:
+        return None
+    if half == 1:
+        h, a = home_1h, away_1h
+    else:
+        if game.home_score is None or game.away_score is None:
+            return None
+        h = game.home_score - home_1h
+        a = game.away_score - away_1h
+    if (bet.team or "").upper() in ("TIE", "DRAW"):
+        return "won" if h == a else "lost"
+    if bet.team == game.home_team:
+        return "won" if h > a else "lost"
+    if bet.team == game.away_team:
+        return "won" if a > h else "lost"
+    return None  # unrecognised leg -- never guess a side
 
 
 def _grade_team_total(bet: PlacedBet, game) -> str:
@@ -610,6 +647,12 @@ _GRADERS = {  # score-based game sports (nfl/nba/wnba/mlb/cfb)
     "spread": _grade_spread,
     "total": _grade_total,
     "team_total": _grade_team_total,
+    # NFL half winner. Only NFL lists these today, and only NflGame carries
+    # home_score_1h -- any other sport reaching here returns None (stays
+    # pending) rather than raising, the same posture that kept soccer's
+    # team_total collision from crashing every sport's settlement.
+    "winner_1h": lambda b, g: _grade_half_winner(b, g, 1),
+    "winner_2h": lambda b, g: _grade_half_winner(b, g, 2),
 }
 
 # Soccer gets its OWN table rather than sharing _GRADERS. Sharing was unsafe:

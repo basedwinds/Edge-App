@@ -24,6 +24,8 @@ TOTAL_SERIES = "KXNFLTOTAL"
 TEAM_TOTAL_SERIES = "KXNFLTEAMTOTAL"
 HALF_SPREAD_SERIES = {1: "KXNFL1HSPREAD", 2: "KXNFL2HSPREAD"}
 HALF_TOTAL_SERIES = {1: "KXNFL1HTOTAL", 2: "KXNFL2HTOTAL"}
+# Half WINNER -- 3-way (home / away / TIE), unlike the 2-way ladders above.
+HALF_WINNER_SERIES = {1: "KXNFL1H", 2: "KXNFL2H"}
 
 # Kalshi lists 240+ NFL series total (confirmed live 2026-07-15 via
 # /series?category=Sports) -- the overwhelming majority are player props,
@@ -820,6 +822,48 @@ def get_half_spread_markets(half: int) -> list[dict]:
 def get_half_total_markets(half: int) -> list[dict]:
     """1st/2nd-half total -- see get_half_spread_markets."""
     return _get_game_ladder_markets(HALF_TOTAL_SERIES[half])
+
+
+def get_half_winner_markets(half: int) -> list[dict]:
+    """1st/2nd-half WINNER (KXNFL1H / KXNFL2H). `half` is 1 or 2.
+
+    Same per-side shape as get_moneyline_markets -- one market per outcome,
+    the outcome in the ticker suffix -- but with THREE legs, not two, because
+    a half can end level. Confirmed live 2026-08-06:
+
+        KXNFL1H-26AUG06CARARI-TIE   "Will neither team win the 1st Half?"
+        KXNFL1H-26AUG06CARARI-CAR   "Will Carolina win the 1st Half?"
+        KXNFL1H-26AUG06CARARI-ARI   "Will Arizona win the 1st Half?"
+
+    The TIE leg is returned like any other row; it is the PRICING layer that
+    declines to price it (see markets._half_winner_model_prob). Dropping it
+    here instead would hide a real, listed market from the board.
+    """
+    events = get_open_events(HALF_WINNER_SERIES[half])
+    rows = []
+    for ev in events:
+        try:
+            markets = get_markets_for_event(ev["event_ticker"])
+        except Exception:
+            continue
+        for m in markets:
+            rows.append(
+                {
+                    "event_ticker": ev["event_ticker"],
+                    "event_title": ev.get("title", ""),
+                    "event_sub_title": ev.get("sub_title", ""),
+                    "ticker": m["ticker"],
+                    "team_abbr_kalshi": m["ticker"].rsplit("-", 1)[-1],
+                    "team_full_name": m.get("yes_sub_title", ""),
+                    "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                    "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                    "last_price": _to_float(m.get("last_price_dollars")),
+                    "volume": _to_float(m.get("volume_fp")),
+                    "status": m.get("status"),
+                    "half": half,
+                }
+            )
+    return rows
 
 
 def _to_float(v):

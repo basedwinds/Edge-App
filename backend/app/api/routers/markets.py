@@ -617,6 +617,43 @@ def _half_spread_model_prob(m: Market, game: NflGame, news: NewsAdjustment | Non
     return round(game_lines.prob_team_covers_half(m.team == game.home_team, m.line, elo_diff_effective, half), 4)
 
 
+# Kalshi outcome labels on the 3-way half-winner markets that are NOT a team.
+_NON_TEAM_OUTCOMES = {"TIE", "DRAW"}
+
+
+def _half_winner_model_prob(m: Market, game: NflGame, news: NewsAdjustment | None, half: int) -> float | None:
+    """1H/2H winner (KXNFL1H / KXNFL2H) -- a 3-way market, so the TIE leg is
+    refused rather than approximated.
+
+    THE BUG THIS AVOIDS is not hypothetical; WNBA shipped it and it staked real
+    money: "TIE" is not the home team, so without an explicit check it falls
+    through to the AWAY side's win probability -- there it showed 20.1% against
+    a market at 3.5%, a fake +16.5pp edge on a full unit.
+
+    The tie mass is still MODELLED, just not sold: prob_team_wins_half scales
+    both team legs down by the measured 6.3% / 9.8% half-tie rate, so the two
+    sides no longer each quietly absorb half of it. See game_lines.HALF_TIE_RATE.
+    """
+    if m.team is None:
+        return None
+    if m.team.upper() in _NON_TEAM_OUTCOMES:
+        return None  # no model for how the tie rate moves with the spread
+    is_home = m.team == game.home_team
+    # Any other label that matches NEITHER side must not be priced as the away
+    # team -- same failure mode as TIE, one layer out.
+    if not is_home and m.team != game.away_team:
+        return None
+    home_r = elo_service.get_team_rating(game.home_team)
+    away_r = elo_service.get_team_rating(game.away_team)
+    if home_r is None or away_r is None:
+        return None
+    hfa = effective_home_field_adv(game.home_team, game.location)
+    p_home_baseline = win_prob(home_r, away_r, hfa)
+    p_home_final = combine_probability(p_home_baseline, news, is_divisional=bool(game.div_game))
+    elo_diff_effective = implied_elo_diff(p_home_final)
+    return round(game_lines.prob_team_wins_half(is_home, elo_diff_effective, half), 4)
+
+
 def _half_total_model_prob(
     m: Market, game: NflGame, half: int, home_penalty_pp: float = 0.0, away_penalty_pp: float = 0.0
 ) -> float | None:
@@ -795,6 +832,8 @@ def list_markets(session: Session = Depends(get_session)):
                         home_penalty_pp=(news_cache.home_scoring_penalty_pp or 0.0) if news_cache else 0.0,
                         away_penalty_pp=(news_cache.away_scoring_penalty_pp or 0.0) if news_cache else 0.0,
                     )
+                elif m.market_type in ("winner_1h", "winner_2h"):
+                    model_prob = _half_winner_model_prob(m, game, news, 1 if m.market_type == "winner_1h" else 2)
                 elif m.market_type in ("spread_1h", "spread_2h"):
                     model_prob = _half_spread_model_prob(m, game, news, 1 if m.market_type == "spread_1h" else 2)
                 elif m.market_type in ("total_1h", "total_2h"):

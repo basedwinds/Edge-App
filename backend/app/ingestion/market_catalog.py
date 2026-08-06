@@ -235,6 +235,45 @@ def upsert_kalshi_half_spread_market(
     return market
 
 
+def upsert_kalshi_half_winner_market(
+    session: Session, row: dict, nfl_game_id: str | None, market_type: str
+) -> Market:
+    """market_type is "winner_1h" or "winner_2h" -- see poller.py.
+
+    Three legs per game, not two: KXNFL1H carries a TIE outcome alongside the
+    two teams. The TIE row is STORED with team="TIE" rather than dropped or
+    coerced -- it is a real listed market and belongs on the board. Storing it
+    as a team name would be worse than dropping it: WNBA hit exactly that bug,
+    where "TIE" failed the home-team test and fell through to the AWAY side's
+    win probability, showing 20.1% against a market at 3.5% and staking a full
+    unit on a fake +16.5pp edge. The pricing layer refuses it explicitly
+    instead (markets._half_winner_model_prob).
+    """
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"], market_type=market_type
+        )
+        session.add(market)
+    market.nfl_game_id = nfl_game_id
+    abbr = row["team_abbr_kalshi"]
+    market.team = "TIE" if abbr.upper() == "TIE" else to_nflverse_abbr(abbr)
+    market.line = None
+    market.status = row.get("status") or "active"
+    session.flush()
+
+    snapshot = MarketSnapshot(
+        market_id=market.id,
+        ts=datetime.datetime.utcnow(),
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
+        last_price=row.get("last_price"),
+        volume=row.get("volume"),
+    )
+    session.add(snapshot)
+    return market
+
+
 def upsert_kalshi_half_total_market(
     session: Session, row: dict, nfl_game_id: str | None, market_type: str
 ) -> Market:

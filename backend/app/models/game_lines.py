@@ -105,6 +105,28 @@ EPA_MISMATCH_TOTAL_MAX_PTS = 3.0
 
 HALF_MARGIN_SLOPE = {1: 0.02132, 2: 0.01905}
 HALF_MARGIN_STD = {1: 10.54, 2: 9.39}
+# P(a half ends LEVEL). Measured 2026-08-06 over 856 completed NFL games
+# (2023-2025 regular season + playoffs, ESPN per-quarter linescores):
+#
+#            home    away     TIE
+#   1st half 51.4%   42.3%    6.3%
+#   2nd half 48.1%   42.1%    9.8%
+#
+# This is not a rounding detail, it is the whole reason prob_team_wins_half
+# exists as its own function. The margin model is CONTINUOUS, so P(margin > 0)
+# and P(margin < 0) sum to 1 and the tie mass gets silently split between the
+# two teams -- overstating EACH side by ~3.2pp in the 1st half and ~4.9pp in
+# the 2nd. Against a 10pp recommend gate that is a systematic manufactured
+# edge on every half-winner row, on both sides of the same game at once.
+#
+# NFL ties much more than basketball does (scores move in 3s and 7s, and a 2nd
+# half is often 0-0 or 7-7), which is why WNBA's equivalent could get away with
+# treating a half winner as a spread at line 0 and this cannot.
+#
+# The same run reproduced the existing constants from independent data --
+# measured 1H margin sd 10.56 vs the 10.54 coded above, 2H 9.55 vs 9.39 -- so
+# these halves are being modelled on the right distribution.
+HALF_TIE_RATE = {1: 0.063, 2: 0.098}
 HALF_TOTAL_SHARE = {1: 0.502, 2: 0.498}
 HALF_TOTAL_STD = {1: 9.01, 2: 9.97}
 
@@ -214,6 +236,26 @@ def prob_team_covers_half(team_is_home: bool, line: float, elo_diff: float, half
     home_margin_mu = HALF_MARGIN_SLOPE[half] * elo_diff
     team_margin_mu = home_margin_mu if team_is_home else -home_margin_mu
     return 1.0 - _norm_cdf(line, team_margin_mu, HALF_MARGIN_STD[half])
+
+
+def prob_team_wins_half(team_is_home: bool, elo_diff: float, half: int) -> float:
+    """P(team OUTSCORES the opponent in `half`) -- the 3-way half-winner
+    markets (KXNFL1H / KXNFL2H), which carry a TIE leg of their own.
+
+    NOT the spread model at a line of 0. That is how WNBA can do it, but its
+    halves almost never end level; NFL's do, at a measured 6.3% / 9.8% (see
+    HALF_TIE_RATE). The continuous margin model has no point mass at exactly
+    zero, so P(margin > 0) quietly absorbs half the tie mass into each team and
+    would overstate BOTH sides of the same game.
+
+    The two team legs keep their relative odds and are scaled to leave room for
+    the tie, so home + away + tie sums to 1. That is a deliberate first cut: the
+    real tie rate surely varies with the spread (level matchups draw more
+    often), but nothing here measures that, so it is applied flat and the TIE
+    leg itself is left unpriced rather than sold at a league-average number.
+    """
+    p_no_tie = 1.0 - HALF_TIE_RATE[half]
+    return prob_team_covers_half(team_is_home, 0.0, elo_diff, half) * p_no_tie
 
 
 def prob_over_half(

@@ -52,6 +52,9 @@ MIN_EDGE_TO_BET = 0.03
 WEEKLY_MARKET_TYPES = {
     "moneyline", "spread", "total", "team_total",
     "spread_1h", "spread_2h", "total_1h", "total_2h",
+    # NFL half WINNER (KXNFL1H/KXNFL2H) -- per-game like every other half
+    # market here, so capital frees up the same night, not at season end.
+    "winner_1h", "winner_2h",
     "f5", "rfi",
     # MMA per-fight market types (added 2026-07-17) -- "weekly" in the sense
     # that capital frees up once each fight settles, same as every other

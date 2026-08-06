@@ -18,6 +18,13 @@ class NflGame(Base):
     home_team = Column(String, nullable=False)
     away_score = Column(Integer, nullable=True)
     home_score = Column(Integer, nullable=True)
+    # HALF-time scores, needed to grade the 1H/2H winner markets (KXNFL1H /
+    # KXNFL2H). nflverse -- this app's NFL schedule/score source -- publishes
+    # only the final, so these come from ESPN's per-quarter linescores
+    # (espn_client.fetch_half_scores). Null until that runs for a played game.
+    # Second-half goals are DERIVED as final minus half, never stored twice.
+    away_score_1h = Column(Integer, nullable=True)
+    home_score_1h = Column(Integer, nullable=True)
     # Historical/closing sportsbook lines from nflverse, present once a game has aggregated odds data
     spread_line = Column(Float, nullable=True)
     total_line = Column(Float, nullable=True)
