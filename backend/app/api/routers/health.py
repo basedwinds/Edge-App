@@ -201,6 +201,41 @@ def health_check(session: Session = Depends(get_session)):
     except Exception:
         log.exception("racing date sanity check failed")
 
+    # 6) CORRECTNESS invariants (integrity_checks.py) -- the complement to the
+    #    liveness checks above. Every one of the nine data defects found on
+    #    2026-08-06 would have gone unnoticed by checks 1-5, because those ask
+    #    "is the plumbing running", not "is what we stored true".
+    try:
+        from app.models.integrity_checks import run_all as _integrity
+
+        results = _integrity(session)
+        for row in results.get("phantom_priced_markets", []):
+            if row.get("count"):
+                _issue(issues, "warning", "phantom_price", row.get("sport"),
+                       f"{row['count']} active markets priced at exactly 0.500 with no book — unpriceable; _implied_prob must keep returning None for these.")
+        for row in results.get("flat_ladders", []):
+            if row.get("count"):
+                _issue(issues, "warning", "flat_ladder", row.get("sport"),
+                       f"{row['count']} totals ladders quote every rung within 10pp — a ladder is monotonic by construction, so these quotes are placeholders.")
+        for row in results.get("resolved_looking_active_markets", []):
+            if row.get("count"):
+                _issue(issues, "warning", "stale_active_status", row.get("sport"),
+                       f"{row['count']} {row.get('source')} markets still 'active' at a 0/1 price on an event that started 6h+ ago — status never reconciled.")
+        for row in results.get("impossible_tennis_scores", []):
+            if row.get("incomplete_score"):
+                _issue(issues, "info", "tennis_retirements", "tennis",
+                       f"{row['incomplete_score']} of {row['resolved']} resolved matches have an unfinishable score; is_retirement caught {row['flagged_as_retirement']}, missed {row['flag_missed']} — derivative graders refuse these by score, not by the flag.")
+        for row in results.get("finished_without_result", []):
+            if row.get("count"):
+                _issue(issues, "warning", "no_result_ingested", row.get("sport"),
+                       f"{row['count']} events finished 12h+ ago with no result recorded — nothing tied to them can settle or train the model.")
+        for row in results.get("resolver_dependent_teams", []):
+            if row.get("count"):
+                _issue(issues, "info", "resolver_dependent_teams", row.get("sport"),
+                       f"{row['count']} market team names are unrated as spelled but rated once resolved (e.g. {', '.join(row.get('examples', [])[:3])}) — the resolver is load-bearing here.")
+    except Exception:
+        log.exception("integrity checks failed")
+
     order = {"error": 0, "warning": 1, "info": 2}
     issues.sort(key=lambda i: order.get(i["severity"], 3))
     counts = {sev: sum(1 for i in issues if i["severity"] == sev) for sev in ("error", "warning", "info")}
