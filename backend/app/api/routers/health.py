@@ -249,6 +249,10 @@ def health_check(session: Session = Depends(get_session)):
             if row.get("count"):
                 _issue(issues, "info", "resolver_dependent_teams", row.get("sport"),
                        f"{row['count']} market team names are unrated as spelled but rated once resolved (e.g. {', '.join(row.get('examples', [])[:3])}) — the resolver is load-bearing here.")
+        for row in results.get("stale_bet_market_types", []):
+            if row.get("count"):
+                _issue(issues, "info", "stale_bet_market_type", row.get("sport"),
+                       f"{row['count']} bets stored as '{row['bet_says']}' sit on markets now typed '{row['market_says']}' — the market was re-typed under them. Settlement uses the market's live type, so these grade correctly; flagged so a NEW re-typing is visible.")
     except Exception:
         log.exception("integrity checks failed")
 

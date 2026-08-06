@@ -29,7 +29,7 @@ import logging
 from sqlalchemy.orm import Session, object_session
 
 from app.db.models import (
-    CfbGame, Cs2Match, LolMap, LolMatch, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
+    CfbGame, Cs2Match, LolMap, LolMatch, Market, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
     RaceEvent, SoccerMatch, TennisMatch, ValorantMap, ValorantMatch, WnbaGame,
 )
 
@@ -821,20 +821,50 @@ _TENNIS_GRADERS = {
 }
 
 
-def _pick_grader(bet: PlacedBet):
+def effective_market_type(session: Session, bet: PlacedBet) -> "str | None":
+    """The market's CURRENT type, not the copy frozen on the bet.
+
+    PlacedBet.market_type is a snapshot taken at placement. That is the right
+    thing for the tracker -- it records what you thought you were betting -- but
+    it is the WRONG thing to dispatch a grader on, because when a market is
+    later re-typed the bet keeps pointing at the old grader forever.
+
+    REAL DAMAGE this caused (measured 2026-08-06): 499 Polymarket tennis bets,
+    8 of them REAL money, carried market_type "game_spread" while every one of
+    the 5,892 Polymarket tennis spread markets had since been re-typed
+    "set_spread". They kept routing to _grade_tennis_game_spread, whose own
+    docstring says KALSHI ONLY -- Polymarket's Set Handicap resolves on SETS,
+    not games. Back-tested against Polymarket's own resolution, that grader
+    flipped 21.7% of them, against <=2.1% for every other market type.
+
+    Every PlacedBet has a Market row (verified: 18,097 of 18,097), so the live
+    type is always available; the snapshot is kept only as the fallback that
+    cannot normally fire.
+    """
+    market = session.get(Market, bet.market_id) if bet.market_id else None
+    return (market.market_type if market and market.market_type else bet.market_type)
+
+
+def _pick_grader(bet: PlacedBet, market_type: "str | None" = None):
     """Grader is chosen by (sport, market_type) -- market_type alone collides now
-    (mma/tennis/game sports all have "moneyline")."""
+    (mma/tennis/game sports all have "moneyline").
+
+    `market_type` is passed in by callers that resolved it via
+    effective_market_type; it falls back to the bet's snapshot only so this stays
+    callable in isolation.
+    """
+    mt = market_type or bet.market_type
     if bet.sport == "mma":
-        return _MMA_GRADERS.get(bet.market_type)
+        return _MMA_GRADERS.get(mt)
     if bet.sport in ("cs2", "valorant", "lol"):
-        return _ESPORTS_GRADERS.get(bet.market_type)
+        return _ESPORTS_GRADERS.get(mt)
     if bet.sport == "tennis":
-        return _TENNIS_GRADERS.get(bet.market_type)
+        return _TENNIS_GRADERS.get(mt)
     if bet.sport in ("f1", "irl", "nascar"):
-        return _RACING_GRADERS.get(bet.market_type)
+        return _RACING_GRADERS.get(mt)
     if bet.sport == "soccer":
-        return _SOCCER_GRADERS.get(bet.market_type)
-    return _GRADERS.get(bet.market_type)  # nfl/nba/wnba/cfb/mlb
+        return _SOCCER_GRADERS.get(mt)
+    return _GRADERS.get(mt)  # nfl/nba/wnba/cfb/mlb
 
 
 def _settlement_note(bet: PlacedBet, game) -> str:
@@ -855,9 +885,14 @@ def _settlement_note(bet: PlacedBet, game) -> str:
 def settle_finished_games(session: Session) -> int:
     """Grades every pending, auto-gradeable placed bet whose game now has a
     final score. Returns the number settled."""
+    # Gate on the market's LIVE type, not the bet's frozen snapshot -- see
+    # effective_market_type. Filtering on the snapshot both let re-typed bets
+    # reach the wrong grader and hid bets whose market had since BECOME
+    # auto-settleable.
     pending = (
         session.query(PlacedBet)
-        .filter(PlacedBet.status == "pending", PlacedBet.market_type.in_(AUTO_SETTLE_MARKET_TYPES))
+        .join(Market, PlacedBet.market_id == Market.id)
+        .filter(PlacedBet.status == "pending", Market.market_type.in_(AUTO_SETTLE_MARKET_TYPES))
         .all()
     )
     settled = 0
@@ -867,7 +902,7 @@ def settle_finished_games(session: Session) -> int:
         game = _get_game(session, bet)
         if game is None or not _game_is_final(bet, game):
             continue  # not final yet
-        grader = _pick_grader(bet)
+        grader = _pick_grader(bet, effective_market_type(session, bet))
         if grader is None:
             continue
         result = grader(bet, game)

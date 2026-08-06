@@ -68,10 +68,14 @@ def settle_pending_from_kalshi(session: Session, bets: list[PlacedBet]) -> int:
 
     settled = 0
     for bet in bets:
-        if bet.market_type not in _YES_MEANS_TEAM_WON:
-            continue
         market = session.get(Market, bet.market_id) if bet.market_id else None
         if market is None or market.source != "kalshi" or not market.source_ticker:
+            continue
+        # The market's LIVE type, not the snapshot frozen on the bet at
+        # placement -- a re-typed market otherwise keeps being judged against
+        # the old type forever. See bet_settlement.effective_market_type for the
+        # 499 bets that cost.
+        if (market.market_type or bet.market_type) not in _YES_MEANS_TEAM_WON:
             continue
         status, result = _market_result(market.source_ticker)
         if status is None:

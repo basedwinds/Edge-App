@@ -31,9 +31,10 @@ import datetime
 import logging
 from collections import defaultdict
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.db.models import Market, MarketSnapshot, TennisMatch
+from app.db.models import Market, MarketSnapshot, PlacedBet, TennisMatch
 
 log = logging.getLogger("integrity_checks")
 
@@ -258,6 +259,32 @@ def resolver_dependent_teams(session: Session) -> list[dict]:
     return out
 
 
+def stale_bet_market_types(session: Session) -> list[dict]:
+    """Bets whose stored market_type disagrees with their market's CURRENT one.
+
+    PlacedBet.market_type is a snapshot taken at placement, kept deliberately as
+    a record of what was bet. Settlement no longer DISPATCHES on it (see
+    bet_settlement.effective_market_type), so a disagreement is no longer a
+    grading bug -- but it is still the fingerprint of a market being re-typed
+    under existing bets, and it is worth seeing when that happens.
+
+    Measured 2026-08-06: 499 rows, every one tennis game_spread -> set_spread.
+    Before the dispatch fix those 499 routed to a Kalshi-only grader that flipped
+    21.7% of them, including 3 real-money bets. A jump here means a re-typing
+    just happened and its cohort deserves the same check.
+    """
+    rows = (
+        session.query(Market.sport, PlacedBet.market_type, Market.market_type,
+                      func.count(PlacedBet.id))
+        .join(Market, PlacedBet.market_id == Market.id)
+        .filter(PlacedBet.market_type != Market.market_type)
+        .group_by(Market.sport, PlacedBet.market_type, Market.market_type)
+        .all()
+    )
+    return [{"sport": s, "bet_says": bt, "market_says": mt, "count": n}
+            for s, bt, mt, n in sorted(rows, key=lambda r: -r[3])]
+
+
 _CACHE_AWARE = {"phantom_priced_markets", "flat_ladders", "resolved_looking_active_markets"}
 
 
@@ -277,6 +304,7 @@ def run_all(session: Session, cache: dict | None = None) -> dict:
         "impossible_tennis_scores": impossible_tennis_scores,
         "finished_without_result": finished_without_result,
         "resolver_dependent_teams": resolver_dependent_teams,
+        "stale_bet_market_types": stale_bet_market_types,
     }
     cache = {} if cache is None else cache
     out: dict = {}
