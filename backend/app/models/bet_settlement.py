@@ -58,8 +58,17 @@ AUTO_SETTLE_MARKET_TYPES = {
     # _grade_esports_map_winner; CS2 has no reachable per-map source, and its
     # bets return None (stay pending) rather than being guessed.
     "series_winner", "series_total", "map_winner",
-    # tennis (moneyline shared above); set/game markets
-    "set_winner", "set_total", "exact_score", "set_spread",
+    # tennis (moneyline shared above); set/game markets.
+    #
+    # "total_sets" was MISSING here while having a working grader, so those bets
+    # could never reach it -- the filter runs before _pick_grader, so a type
+    # absent from this set is skipped no matter what grader exists. Found
+    # 2026-08-06: 4 bets on completed matches sat pending for exactly that
+    # reason. Note the near-namesake "set_total" is the opposite case -- it is
+    # listed here but deliberately has NO grader (ambiguous side semantics), so
+    # it stays pending on purpose. The two are easy to confuse; they are not the
+    # same market.
+    "set_winner", "set_total", "total_sets", "exact_score", "set_spread",
     # racing
     "race_winner", "top_n", "pole", "h2h",
 }

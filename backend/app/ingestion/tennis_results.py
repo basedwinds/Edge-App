@@ -29,6 +29,48 @@ def _rkey(name: str | None) -> str:
     return (name or "").lower().strip()
 
 
+def _surname_key(key: str) -> "str | None":
+    """Trim a MIDDLE NAME out of a player key, or None if there is nothing to
+    trim. "lennard struff j." -> "struff j."
+
+    REAL GAP this closes (measured 2026-08-06): TennisMatch.player_a_key is
+    built by treating everything after the first word as the surname, which is
+    right for a genuine compound surname ("Carreno Busta P.", "Van Assche L.")
+    but wrong whenever the player has a middle name -- Jan-Lennard Struff
+    became "lennard struff j." while tennisexplorer says "Struff J.". 373 of
+    820 pending matches carried such a key, and the results join could never
+    fire for them: it resolved 2 matches out of 820.
+
+    Used ONLY as a fallback after the exact key misses, and only when the
+    trimmed form is UNAMBIGUOUS in that day's results (see _build_alt_index) --
+    trimming can in principle collide two different players, and a wrong
+    winner is far worse than an unresolved match.
+    """
+    parts = key.split()
+    if len(parts) >= 3 and parts[-1].endswith("."):
+        return " ".join(parts[-2:])
+    return None
+
+
+def _build_alt_index(index: dict) -> dict:
+    """{trimmed pair -> result}, dropping any trimmed key that is not unique.
+
+    A collision means two different real matches would map to the same trimmed
+    pair; those are excluded entirely rather than guessed between.
+    """
+    counts: dict = {}
+    for pair in index:
+        alt = frozenset({_surname_key(k) or k for k in pair})
+        if len(alt) != 2:
+            continue  # trimming merged the two sides -- unusable
+        counts[alt] = counts.get(alt, 0) + 1
+    return {
+        frozenset({_surname_key(k) or k for k in pair}): r
+        for pair, r in index.items()
+        if counts.get(frozenset({_surname_key(k) or k for k in pair})) == 1
+    }
+
+
 def _flip_score(score: str | None) -> str | None:
     """Flip each "a-b" set to "b-a" so a result stored in the opposite player
     order still reads in the live match's player_a/player_b order."""
@@ -81,16 +123,26 @@ def apply_results_index(session: Session, index: dict) -> int:
     rows from an already-fetched index. Returns the number newly resolved."""
     if not index:
         return 0
+    alt_index = _build_alt_index(index)
     resolved = 0
     for m in _finished_ungraded(session):
         r = index.get(frozenset({m.player_a_key, m.player_b_key}))
         if not r:
+            # Fallback: same match with a middle name trimmed off either side.
+            a_alt = _surname_key(m.player_a_key) or m.player_a_key
+            b_alt = _surname_key(m.player_b_key) or m.player_b_key
+            if a_alt != b_alt:
+                r = alt_index.get(frozenset({a_alt, b_alt}))
+        if not r:
             continue
         win_name = r["player_a_name"] if r["winner"] == "a" else r["player_b_name"]
         wk = _rkey(win_name)
-        if wk == m.player_a_key:
+        # Compare on the trimmed form too, so a middle-name key still maps the
+        # winner onto the right side. winner_key is always stored as this app's
+        # OWN key, never the source's, so downstream lookups stay consistent.
+        if wk == m.player_a_key or wk == (_surname_key(m.player_a_key) or m.player_a_key):
             m.winner_key = m.player_a_key
-        elif wk == m.player_b_key:
+        elif wk == m.player_b_key or wk == (_surname_key(m.player_b_key) or m.player_b_key):
             m.winner_key = m.player_b_key
         else:
             continue  # winner name didn't key-match either side -> leave pending

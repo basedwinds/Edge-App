@@ -198,6 +198,27 @@ def refresh_polymarket_tennis_markets():
             session.close()
 
 
+def settle_tennis_placed_bets():
+    """Grade tennis bets as soon as their result lands, in the SAME cycle.
+
+    settle_finished_games scans every sport, and it was already being called
+    from the NFL/MLB/NBA/soccer/WNBA pollers -- so tennis bets did settle, but
+    only as a SIDE EFFECT of another sport running. That is a hidden
+    dependency: it makes tennis settlement latency depend on soccer's schedule,
+    and it would break silently if those pollers were ever reordered or gated
+    by season. Calling it here right after refresh_tennis_results (the same
+    pattern poller_soccer uses) makes tennis self-sufficient.
+    """
+    from app.models.bet_settlement import settle_finished_games
+
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            settle_finished_games(session)
+        finally:
+            session.close()
+
+
 def refresh_tennis_results():
     """Backfill final winner+score onto finished TennisMatch rows so tennis bets
     can auto-settle. Network fetch (multiple flaky tennisexplorer requests) runs
@@ -338,3 +359,4 @@ def run_full_refresh_tennis():
     refresh_polymarket_tennis_markets()
     refresh_kalshi_tennis_futures()
     refresh_tennis_results()
+    settle_tennis_placed_bets()
