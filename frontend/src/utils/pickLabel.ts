@@ -203,14 +203,32 @@ export function describePick(row: PickLike): string {
   if (marketType === "top_n" && line !== null) return `${team ?? "—"} finishes top ${Math.round(line)}`;
   if (marketType === "race_winner" || marketType === "pole" || marketType === "constructor_pole") return team ?? "—";
   if (marketType === "map_winner" && line !== null) return `${team ?? "—"} wins Map ${Math.round(line)}`;
-  // series_handicap only exists on Valorant today, but written sport-
-  // agnostic like every other market_type check here. Same signed-margin
-  // convention as describeSpreadPick above (see elo_valorant.py's
-  // prob_handicap_cover_a/b) -- spelled out in words for the same reason
-  // describeSpreadPick is, rather than echoing raw_line's sign.
+  // series_handicap (CS2 + Valorant, from Polymarket).
+  //
+  // THE SIGN IS THE OPPOSITE OF describeSpreadPick's, and this used to claim
+  // otherwise -- the old comment here said "same signed-margin convention as
+  // describeSpreadPick", which is exactly the mistake. They differ in the
+  // model:
+  //
+  //   spread          prob_team_covers  -> P(margin >  line)   positive = wins by
+  //   series_handicap prob_handicap_cover_a(line)
+  //                                     -> P(a - b > -line)    sign FLIPPED
+  //
+  // So a NEGATIVE handicap line is the team giving maps (must win by that
+  // margin) and a POSITIVE line is the team receiving them.
+  //
+  // REAL BUG this fixes (user-reported 2026-08-06, "Galorys vs BORRACHEIROS ...
+  // it has me placing BORRACHEIROS wins by 2+ maps, but the explanation has
+  // Galorys with a higher elo"). The row is BORRACHEIROS at line +1.5, which
+  // the model prices at 0.6622 -- that is "BORRACHEIROS avoids a 0-2 sweep",
+  // i.e. wins at least one map. It was rendered as "wins by 2+ maps", which is
+  // the -1.5 side and worth 0.1754. The label described the OPPOSITE bet, and
+  // made a sensible 66% pick read as an implausible longshot against a
+  // stronger opponent. The recommendation and the staking were correct
+  // throughout; only this string was wrong.
   if (marketType === "series_handicap" && line !== null && team) {
-    if (line > 0) return `${team} wins by ${Math.ceil(line)}+ maps`;
-    if (line < 0) return `${team} doesn't lose by ${Math.ceil(Math.abs(line))}+ maps`;
+    if (line < 0) return `${team} wins by ${Math.ceil(Math.abs(line))}+ maps`;
+    if (line > 0) return `${team} doesn't lose by ${Math.ceil(line)}+ maps`;
     return `${team} wins outright`;
   }
   if (marketType === "series_total" && line !== null) return `${side === "under" ? "Under" : "Over"} ${line} maps`;
