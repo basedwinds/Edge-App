@@ -29,10 +29,22 @@ _GAME_TYPES = {
     "method_of_victory", "method_of_finish", "rounds", "distance", "round_of_victory",
     "race_winner", "top_n", "pole",
 }
+# DERIVED from the Market model, not retyped. The hand-written list was missing
+# `cfb_game_id` -- CFB was integrated after this check was written and nobody
+# updated it -- so a CFB market linked ONLY through that column had every field
+# in the list NULL and was reported as unlinked. That is how this check spent
+# weeks reporting "30 CFB game markets can't be priced or settled" about 30
+# markets that were correctly linked the whole time (verified: every one carried
+# a real cfb_game_id).
+#
+# A false alarm in a health check is worse than no check -- it trains you to
+# ignore it, and it hides the real ones next to it. Deriving means the next sport
+# added is covered automatically. This is the same drift that already bit
+# paper_logger's _ENDPOINTS and scheduler's _WARM_PATHS, both since derived too.
+_LINK_SUFFIXES = ("_game_id", "_match_id", "_fight_id", "_event_id")
 _LINK_FIELDS = [
-    "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
-    "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
-    "lol_match_id", "race_event_id",
+    c.name for c in Market.__table__.columns
+    if c.name.endswith(_LINK_SUFFIXES) and not c.name.startswith("source_")
 ]
 _RACING = {"f1", "nascar", "irl"}
 # A sport must have at least this share of its active markets carrying a real
