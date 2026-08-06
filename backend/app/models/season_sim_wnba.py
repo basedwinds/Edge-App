@@ -256,6 +256,132 @@ def _standings_impl(wins, teams) -> dict[str, dict[str, float]]:
     }
 
 
+# --- Playoff bracket -------------------------------------------------------
+#
+# THE FORMAT IS RECOVERED FROM PLAY, NOT FROM MEMORY. Kalshi's rules state the
+# question ("does X qualify for the Finals") but never the bracket, so the
+# pairing rule was reconstructed from the 2024 and 2025 postseasons in
+# data/wnba_game_cache.json -- a playoff series is the same pair meeting
+# repeatedly at the end of a season, which the regular schedule never does.
+# Both seasons agree, and they agree on the thing that actually matters:
+#
+#   2025  after round 1: MIN(1), LV(2), IND(4), PHX(6)
+#         semifinals played: MIN-PHX and LV-IND
+#   2024  after round 1: NY(1), MIN(2), CON(3), LV(5)
+#         semifinals played: NY-LV and MIN-CON
+#
+# In both, the highest remaining seed drew the LOWEST remaining seed. The
+# league RESEEDS after round 1; it is not a fixed bracket. A fixed bracket
+# would have paired 2025's MIN(1) with IND(4) and 2024's NY(1) with CON(3),
+# and neither happened.
+_ROUND1_PAIRS = ((0, 7), (1, 6), (2, 5), (3, 4))  # seed indices: 1v8, 2v7, 3v6, 4v5
+
+# Bracket trials, deliberately below the ladders' 4,000: each trial plays up to
+# 19 extra series games in a Python loop, and a title price is not read to the
+# fourth decimal the way a win-total threshold is. At 1,500 the sampling error
+# on a 40% estimate is about 1.3pp.
+_BRACKET_TRIALS = 1500
+
+# Venue pattern per series, from the higher seed's perspective. The higher seed
+# hosts the majority in every WNBA round. ASSUMED, unlike the pairing rule
+# above: the exact game-by-game venue order is not recoverable from a cache
+# with no venue-vs-seed labelling, and it only weights home advantage -- it
+# cannot change who plays whom. Finals length is likewise assumed best-of-5;
+# 2025's Finals ended 4-0, which a best-of-5 and a best-of-7 both allow, so the
+# data cannot separate them.
+_SERIES_VENUES = {
+    "round1": (True, False, True),                       # best-of-3
+    "semifinal": (True, True, False, False, True),       # best-of-5, 2-2-1
+    "finals": (True, True, False, False, True),          # best-of-5, 2-2-1
+}
+
+
+def _series_winner(hi: str, lo: str, venues, rng) -> str:
+    """Play one series. `hi` is the higher seed; venues[i] True = hi at home.
+
+    Game-by-game rather than a closed-form best-of-N so home advantage can
+    differ per game, which a single series-level probability cannot express.
+    """
+    need = len(venues) // 2 + 1
+    w_hi = w_lo = 0
+    for at_home in venues:
+        p = (elo_service_wnba.get_home_win_prob(hi, lo, None) if at_home
+             else 1.0 - (elo_service_wnba.get_home_win_prob(lo, hi, None) or 0.5))
+        if p is None:
+            p = 0.5
+        if rng.random() < p:
+            w_hi += 1
+        else:
+            w_lo += 1
+        if w_hi == need or w_lo == need:
+            break
+    return hi if w_hi > w_lo else lo
+
+
+def bracket_probs(trials: int = 2000, games: list[dict] | None = None) -> dict[str, dict[str, float]]:
+    """{team: {"semifinal": p, "finals": p, "champion": p}}.
+
+    For KXWNBASEMIFINAL / KXWNBAFINAL / KXWNBA (and their Polymarket twins).
+    Read off the SAME win matrix as the win-total ladders and standings, so a
+    team's title odds can never contradict its own seed or win distribution --
+    the reasoning-vs-pricing split this repo has hit repeatedly.
+
+    Seeding ties are broken at random per trial rather than shared, unlike
+    standings_probs. A bracket needs ONE concrete ordering to play out, so a
+    fractional seed is not representable; randomising is unbiased across trials
+    where sharing is impossible.
+    """
+    _counts, wins, teams = simulate(trials=trials, games=games, _with_wins=True)
+    return _bracket_from_wins(wins, teams, trials=trials)
+
+
+def _bracket_from_wins(wins, teams, trials: int) -> dict[str, dict[str, float]]:
+    """Bracket probabilities from an already-computed win matrix -- the shared
+    implementation so warm() and bracket_probs() can never diverge."""
+    import random
+
+    if wins is None or not teams or len(teams) < PLAYOFF_FIELD_SIZE:
+        return {}
+
+    rng = random.Random(20260806)
+    tally = {t: {"semifinal": 0, "finals": 0, "champion": 0} for t in teams}
+    # Play at most `trials` of the available seasons -- warm() runs the ladders
+    # at 4,000 but the bracket at fewer, and the first N rows of a Monte Carlo
+    # are as unbiased as any other N.
+    n_trials = min(int(trials), wins.shape[0])
+
+    for i in range(n_trials):
+        row = wins[i]
+        # Random jitter breaks ties without favouring whichever team sorts first.
+        order = sorted(range(len(teams)), key=lambda j: (-int(row[j]), rng.random()))
+        seeds = [teams[j] for j in order[:PLAYOFF_FIELD_SIZE]]
+
+        survivors = []
+        for hi_i, lo_i in _ROUND1_PAIRS:
+            w = _series_winner(seeds[hi_i], seeds[lo_i], _SERIES_VENUES["round1"], rng)
+            survivors.append(w)
+        for t in survivors:
+            tally[t]["semifinal"] += 1
+
+        # RESEED: best remaining plays worst remaining (see the block comment).
+        survivors.sort(key=lambda t: seeds.index(t))
+        finalists = [
+            _series_winner(survivors[0], survivors[3], _SERIES_VENUES["semifinal"], rng),
+            _series_winner(survivors[1], survivors[2], _SERIES_VENUES["semifinal"], rng),
+        ]
+        for t in finalists:
+            tally[t]["finals"] += 1
+
+        finalists.sort(key=lambda t: seeds.index(t))
+        champ = _series_winner(finalists[0], finalists[1], _SERIES_VENUES["finals"], rng)
+        tally[champ]["champion"] += 1
+
+    return {
+        t: {k: round(v / n_trials, 4) for k, v in d.items()}
+        for t, d in tally.items()
+    }
+
+
 def prob_wins_at_least(dist: dict[int, int] | None, threshold: float, trials: int) -> float | None:
     """P(team finishes with at least `threshold` wins). Kalshi states these with
     an INTEGER floor_strike (20 means 20+), the same convention as CFB's win
@@ -300,12 +426,20 @@ def warm(trials: int = 4000) -> None:
         # would also re-run the sim on every request.
         dist, wins, teams = simulate(trials=trials, _with_wins=True)
         standings = _standings_from_wins(wins, teams)
+        # Bracket off the SAME win matrix, for the same reason the standings
+        # are: a separate simulate() call would be a different season, and a
+        # team's title odds could then contradict its own seed probability.
+        # Fewer trials than the ladders because each one plays up to 19 extra
+        # series games in Python -- and a title price is not read to four
+        # decimals the way a win-total threshold is.
+        bracket = _bracket_from_wins(wins, teams, trials=_BRACKET_TRIALS)
     except Exception:
         log.exception("wnba season sim failed")
-        dist, standings = {}, {}
+        dist, standings, bracket = {}, {}, {}
     with _lock:
         _cache["dist"] = (now, dist, trials)
         _cache["standings"] = standings
+        _cache["bracket"] = bracket
     log.info("wnba season sim: %d teams over %d trials", len(dist), trials)
 
 
@@ -313,6 +447,12 @@ def get_standings() -> dict[str, dict[str, float]]:
     """Cached {team: {"one_seed": p, "playoff": p}} from the last warm()."""
     with _lock:
         return _cache.get("standings") or {}
+
+
+def get_bracket() -> dict[str, dict[str, float]]:
+    """Cached {team: {"semifinal": p, "finals": p, "champion": p}} from warm()."""
+    with _lock:
+        return _cache.get("bracket") or {}
 
 
 def get() -> tuple[dict[str, dict[int, int]], int]:

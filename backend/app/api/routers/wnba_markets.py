@@ -51,7 +51,13 @@ GAME_MARKET_TYPES = {
 # would silently drop every season row (the trap that would have dropped all of
 # CFB's season markets). They also draw on the futures sub-pool, not the weekly
 # one, at the reduced futures unit size.
-SEASON_MARKET_TYPES = {"win_total", "one_seed", "playoff_qualifier"}
+# market_type -> the bracket field that answers it.
+_BRACKET_MARKET_TYPES = {
+    "championship": "champion",
+    "finals_qualifier": "finals",
+    "semifinal_qualifier": "semifinal",
+}
+SEASON_MARKET_TYPES = {"win_total", "one_seed", "playoff_qualifier"} | set(_BRACKET_MARKET_TYPES)
 ALL_MARKET_TYPES = GAME_MARKET_TYPES | SEASON_MARKET_TYPES
 _HALF_OF = {"first": 1, "second": 2}
 # Kalshi outcome labels that are NOT a team. A half can end level, so the winner
@@ -225,6 +231,19 @@ def _wnba_season_model_prob(m, win_dist, sim_trials):
             return None, "No season projection for this team."
         key = "one_seed" if m.market_type == "one_seed" else "playoff"
         return round(row[key], 4), None
+    # Bracket outcomes (championship / finals / semifinals). Unlike the two
+    # above these DO need a playoff bracket, added 2026-08-06 -- the pairing
+    # rule was recovered from the 2024 and 2025 postseasons rather than assumed
+    # (see season_sim_wnba's bracket block). Same cache, so a title price can
+    # never contradict the team's own seed probability.
+    if m.market_type in _BRACKET_MARKET_TYPES:
+        bracket = season_sim_wnba.get_bracket()
+        if not bracket:
+            return None, "Playoff bracket simulation not warm yet."
+        row = bracket.get(m.team)
+        if row is None:
+            return None, "No season projection for this team."
+        return round(row[_BRACKET_MARKET_TYPES[m.market_type]], 4), None
     if not win_dist:
         return None, "Season simulation not warm yet."
     if m.line is None or m.team not in win_dist:
