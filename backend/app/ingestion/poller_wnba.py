@@ -9,10 +9,11 @@ import datetime
 import logging
 
 from app.clients import kalshi_wnba_client
+from app.clients import polymarket_wnba_client
 from app.db.database import SessionLocal
 from app.db.models import WnbaGame
 from app.ingestion import market_catalog_wnba, wnba_data
-from app.ingestion.market_matcher_wnba import build_game_index, match_kalshi_event_ticker
+from app.ingestion.market_matcher_wnba import build_game_index, match_kalshi_event_ticker, match_polymarket_slug
 from app.ingestion.poller_lock import db_write_lock
 from app.models import season_sim_wnba
 from app.models.baseline import elo_service_wnba
@@ -69,6 +70,43 @@ def refresh_kalshi_wnba_moneyline():
                 market_catalog_wnba.upsert_kalshi_wnba_moneyline_market(session, row, game_id)
             session.commit()
             log.info("kalshi wnba moneyline: %d matched, %d unmatched", matched, unmatched)
+        finally:
+            session.close()
+
+
+def refresh_polymarket_wnba_moneyline():
+    """Polymarket per-game moneyline (tag_slug="wnba").
+
+    WNBA was the last sport the health check flagged as "Polymarket lists this
+    sport but we ingest none of it" -- a whole platform's prices, cross-platform
+    divergences and CLV missing. Polymarket carries only the moneyline per game
+    (no bundled spread/total), so that is all this ingests.
+
+    Matching goes slug-date + resolved full team names, never the slug's own
+    team codes: "la" is the LA Sparks and "las" is the Las Vegas Aces.
+    """
+    game_index = _load_game_index_readonly()
+    rows = polymarket_wnba_client.get_moneyline_markets()
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            matched = unmatched = 0
+            # Both rows of a game share a slug; resolve the pairing once per slug
+            # so each row is matched against the real (away, home), not itself.
+            teams_by_slug: dict[str, list[str]] = {}
+            for r in rows:
+                teams_by_slug.setdefault(r["event_slug"], []).append(r["team_espn_abbr"])
+            for row in rows:
+                pair = teams_by_slug.get(row["event_slug"]) or []
+                game_id = (
+                    match_polymarket_slug(row["event_slug"], pair[0], pair[1], game_index)
+                    if len(pair) == 2 else None
+                )
+                matched += game_id is not None
+                unmatched += game_id is None
+                market_catalog_wnba.upsert_polymarket_wnba_moneyline_row(session, row, game_id)
+            session.commit()
+            log.info("polymarket wnba moneyline: %d matched, %d unmatched", matched, unmatched)
         finally:
             session.close()
 
@@ -181,6 +219,7 @@ def run_full_refresh_wnba():
     # naming which step died.
     for step in (refresh_wnba_ratings,
                  refresh_kalshi_wnba_moneyline,
+                 refresh_polymarket_wnba_moneyline,
                  refresh_kalshi_wnba_spread_total,
                  refresh_kalshi_wnba_halves,
                  refresh_kalshi_wnba_win_totals,

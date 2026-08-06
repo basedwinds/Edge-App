@@ -7,6 +7,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.clients.polymarket_client import quote_fields
 from app.db.models import Market, MarketSnapshot, WnbaGame
 from app.ingestion.market_matcher_wnba import to_espn_abbr
 
@@ -57,6 +58,46 @@ def upsert_kalshi_wnba_moneyline_market(session: Session, row: dict, wnba_game_i
             ts=datetime.datetime.utcnow(),
             yes_bid=row.get("yes_bid"),
             yes_ask=row.get("yes_ask"),
+            last_price=row.get("last_price"),
+            volume=row.get("volume"),
+        )
+    )
+    return market
+
+
+def upsert_polymarket_wnba_moneyline_row(session: Session, row: dict, wnba_game_id: str | None) -> Market:
+    """One already-flattened per-team row from polymarket_wnba_client.
+
+    The quote is stored via quote_fields, which orients the book's raw
+    bid/ask against THIS row's own price -- both teams share one Polymarket
+    market, so an unoriented bid/ask would be the other side's for one of them.
+    Volume is carried through for real: it was hardcoded None across every
+    Polymarket client until 2026-08-04, which silently disabled the
+    has_real_trading gate for that whole platform.
+    """
+    source_ticker = f"{row['condition_id']}-{row['team_espn_abbr']}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket",
+            source_ticker=source_ticker,
+            source_event_id=row["event_slug"],
+            market_type="moneyline",
+            sport="wnba",
+        )
+        session.add(market)
+    market.wnba_game_id = wnba_game_id
+    market.team = row["team_espn_abbr"]
+    market.status = "active"
+    session.flush()
+
+    q = quote_fields(row, row.get("last_price"))
+    session.add(
+        MarketSnapshot(
+            market_id=market.id,
+            ts=datetime.datetime.utcnow(),
+            yes_bid=q["yes_bid"],
+            yes_ask=q["yes_ask"],
             last_price=row.get("last_price"),
             volume=row.get("volume"),
         )

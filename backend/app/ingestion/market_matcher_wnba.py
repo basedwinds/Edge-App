@@ -20,6 +20,60 @@ KALSHI_TEAM_ABBRS = {
     "MIN", "NY", "PDX", "PHX", "SEA", "TOR", "WSH",
 }
 
+# Polymarket names WNBA teams in FULL ("Los Angeles Sparks"), not by
+# abbreviation, so this is the resolution path for its per-game markets.
+#
+# RESOLVE ON FULL NAMES, NEVER ON THE SLUG CODE. Polymarket's own slug uses "la"
+# for the LA Sparks and "las" for the Las Vegas Aces -- one letter apart, two
+# different teams, and ESPN calls the second one LV. Matching a 2-3 letter slug
+# code would put every Las Vegas market on the Sparks the first time a prefix
+# check went in. The full names are unambiguous, so they are what we key on.
+POLYMARKET_FULLNAME_TO_ESPN_ABBR = {
+    "Atlanta Dream": "ATL",
+    "Chicago Sky": "CHI",
+    "Connecticut Sun": "CON",
+    "Dallas Wings": "DAL",
+    "Golden State Valkyries": "GS",
+    "Indiana Fever": "IND",
+    "Las Vegas Aces": "LV",
+    "Los Angeles Sparks": "LA",
+    "Minnesota Lynx": "MIN",
+    "New York Liberty": "NY",
+    "Phoenix Mercury": "PHX",
+    "Portland Fire": "POR",
+    "Seattle Storm": "SEA",
+    "Toronto Tempo": "TOR",
+    "Washington Mystics": "WSH",
+}
+
+
+def _name_key(name: str) -> str:
+    """Fold a team name to a comparison key: lowercase, alphanumerics only.
+
+    The alphanumeric fold is not cosmetic. Polymarket ships Portland BOTH ways
+    in the same live listing -- "Portland Fire" in 2 events and "PortlandFire",
+    with no space, in 3 (measured 2026-08-06). An exact-string map would have
+    resolved two of the five and silently dropped the other three, which is the
+    same name-variant class that once split LoL's "Nongshim Red Force" and
+    Valorant's FNATIC/Fnatic ratings.
+    """
+    return "".join(ch for ch in (name or "").lower() if ch.isalnum())
+
+
+_POLYMARKET_NAME_BY_KEY = {
+    _name_key(k): v for k, v in POLYMARKET_FULLNAME_TO_ESPN_ABBR.items()
+}
+
+
+def resolve_polymarket_team_name(name: str) -> "str | None":
+    """Polymarket's full team name -> ESPN abbreviation, or None if unknown.
+
+    None, not a guess: an unresolved name leaves the row unlinked (visible in the
+    health check) rather than silently attaching a price to the wrong team.
+    """
+    return _POLYMARKET_NAME_BY_KEY.get(_name_key(name))
+
+
 _MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
@@ -86,6 +140,32 @@ def _match_by_teams_and_date(away: str, home: str, game_date: date, game_index: 
     if abs((date.fromisoformat(best["gameday"]) - game_date).days) > 5:
         return None
     return best["id"]
+
+
+_POLYMARKET_SLUG_RE = re.compile(r"^wnba-[a-z]+-[a-z]+-(\d{4})-(\d{2})-(\d{2})$")
+
+
+def match_polymarket_slug(slug: str, away_abbr: str, home_abbr: str, game_index: dict) -> "str | None":
+    """Polymarket per-game slug -> WnbaGame id, or None.
+
+    Only the DATE is taken from the slug; the two teams are passed in already
+    resolved from the market's full outcome names. The slug's own team codes are
+    deliberately not parsed -- "la" is the LA Sparks and "las" is the Las Vegas
+    Aces, so a prefix match on those is a bug waiting to happen (see
+    resolve_polymarket_team_name).
+
+    Slug order is away-home, but _match_by_teams_and_date merges both orders
+    anyway, so a Polymarket listing that flips them still matches.
+    """
+    m = _POLYMARKET_SLUG_RE.match(slug or "")
+    if not m:
+        return None
+    y, mo, d = (int(x) for x in m.groups())
+    try:
+        game_date = date(y, mo, d)
+    except ValueError:
+        return None
+    return _match_by_teams_and_date(away_abbr, home_abbr, game_date, game_index)
 
 
 def match_kalshi_event_ticker(event_ticker: str, game_index: dict) -> str | None:
