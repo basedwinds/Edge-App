@@ -122,6 +122,104 @@ def reconcile_kalshi_market_status() -> int:
     return changed
 
 
+def backfill_esports_winners_from_kalshi() -> int:
+    """Set Cs2Match/ValorantMatch/LolMatch.winner from the Kalshi series_winner
+    market's own resolution.
+
+    WHY THIS EXISTS. CS2 match results come from refresh_cs2_matches, whose
+    HLTV/Liquipedia source is Cloudflare-gated and hangs or fails -- so
+    Cs2Match.winner stays None (442 of 514 rows), the per-sport esports graders
+    can never fire, and worse, the Elo model never learns from a live match at
+    all. Kalshi resolution already settles the BETS, but nothing was writing the
+    result back onto the match row where the model reads it.
+
+    No new source and no scraping: this reuses resolutions already being
+    fetched. Coverage is bounded by what Kalshi listed -- 160 of 442 winnerless
+    CS2 matches have a finalized market -- so it does not replace a working
+    scraper, it just stops a blocked one from costing us results we already
+    have in hand.
+
+    SAFETY. A row is only written when EXACTLY ONE side resolved "yes" and that
+    side's name matches EXACTLY ONE of the match's two teams. Ambiguity (both
+    yes, neither yes, a name matching both or neither) is skipped rather than
+    guessed -- a wrong winner would corrupt Elo, which is far worse than a
+    missing one. Name comparison folds accents/case/spacing via each title's own
+    normalize_team_name, which was measured to resolve every real mismatch here
+    ("Gremio" vs "Gremio", "Mai tai" vs "Mai Tai", a leading space).
+    """
+    from app.db.models import Cs2Match, LolMatch, ValorantMatch
+    from app.ingestion.market_matcher_cs2 import normalize_team_name as norm_cs2
+    from app.ingestion.market_matcher_lol import normalize_team_name as norm_lol
+    from app.ingestion.market_matcher_valorant import normalize_team_name as norm_val
+
+    titles = (
+        ("cs2", Cs2Match, "cs2_match_id", norm_cs2),
+        ("valorant", ValorantMatch, "valorant_match_id", norm_val),
+        ("lol", LolMatch, "lol_match_id", norm_lol),
+    )
+
+    session = SessionLocal()
+    try:
+        plan = []  # (title, match_id, {ticker: team_name})
+        for sport, model, fk, _norm in titles:
+            winnerless = {
+                m.id: m for m in session.query(model).filter(model.winner.is_(None)).all()
+            }
+            if not winnerless:
+                continue
+            rows = (
+                session.query(Market)
+                .filter(Market.sport == sport, Market.source == "kalshi",
+                        Market.market_type == "series_winner",
+                        getattr(Market, fk).in_(list(winnerless)))
+                .all()
+            )
+            by_match: dict = {}
+            for r in rows:
+                if r.source_ticker and r.team:
+                    by_match.setdefault(getattr(r, fk), {})[r.source_ticker] = r.team
+            for mid, tickers in by_match.items():
+                if len(tickers) >= 2:  # need both sides to tell a yes from a no
+                    plan.append((sport, model, mid, tickers))
+    finally:
+        session.close()
+    if not plan:
+        return 0
+
+    all_tickers = sorted({t for _s, _m, _mid, tk in plan for t in tk})
+    resolution = _fetch_resolutions(all_tickers)
+    if not resolution:
+        return 0
+
+    written = 0
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for sport, model, mid, tickers in plan:
+                yes = [team for tk, team in tickers.items() if resolution.get(tk) == "yes"]
+                if len(yes) != 1:
+                    continue  # 0 or 2 winners reported -- not a usable result
+                norm = dict((s, n) for s, _m, _f, n in titles)[sport]
+                match = session.get(model, mid)
+                if match is None or match.winner is not None:
+                    continue
+                win = norm(yes[0])
+                a, b = norm(match.team_a or ""), norm(match.team_b or "")
+                if win == a and win != b:
+                    match.winner = "team_a"
+                elif win == b and win != a:
+                    match.winner = "team_b"
+                else:
+                    continue  # matched both sides or neither -- do not guess
+                written += 1
+            if written:
+                session.commit()
+                log.info("backfilled %d esports match winners from Kalshi resolution", written)
+        finally:
+            session.close()
+    return written
+
+
 def settle_from_kalshi_resolution() -> int:
     """Grade every pending bet whose Kalshi market has finalized. Returns count."""
     # 1) read pending Kalshi bets + their tickers (no lock)

@@ -489,7 +489,8 @@ def settle_placed_bets():
 
     try:
         from app.ingestion.market_resolution_settlement import (
-            reconcile_kalshi_market_status, settle_from_kalshi_resolution,
+            backfill_esports_winners_from_kalshi, reconcile_kalshi_market_status,
+            settle_from_kalshi_resolution,
         )
         # Status FIRST, then settle. A market that resolved is otherwise frozen
         # at "active" forever -- the per-sport refreshes only fetch OPEN markets,
@@ -498,6 +499,11 @@ def settle_placed_bets():
         # price. Reconciling first also means the settle pass below sees an
         # accurate board.
         reconcile_kalshi_market_status()
+        # Write the result back onto the esports MATCH row too, not just the
+        # bet. CS2's own results scraper is Cloudflare-gated, so without this
+        # the Elo model never learns from a live match even though the answer
+        # is already in the Kalshi resolution we just fetched.
+        backfill_esports_winners_from_kalshi()
         settle_from_kalshi_resolution()
     except Exception:
         log.exception("kalshi-resolution settlement failed")
