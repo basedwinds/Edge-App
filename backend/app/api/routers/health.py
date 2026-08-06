@@ -235,8 +235,14 @@ def health_check(session: Session = Depends(get_session)):
                        f"{row['count']} totals ladders quote every rung within 10pp — a ladder is monotonic by construction, so these quotes are placeholders.")
         for row in results.get("resolved_looking_active_markets", []):
             if row.get("count"):
+                # Describes the SYMPTOM, not a cause. This used to end "status
+                # never reconciled", which is an assertion the check cannot
+                # make: chasing 86 flagged soccer rows found Kalshi still
+                # listing every one of them as genuinely active, and the real
+                # problem was a stale fixture date on our side. A health check
+                # that names the wrong cause sends you to the wrong file.
                 _issue(issues, "warning", "stale_active_status", row.get("sport"),
-                       f"{row['count']} {row.get('source')} markets still 'active' at a 0/1 price on an event that started 6h+ ago — status never reconciled.")
+                       f"{row['count']} {row.get('source')} markets still 'active' at a 0/1 price on an event whose recorded start is 6h+ ago. Either the exchange hasn't resolved them, or the stored start time is wrong — check both before assuming reconciliation is broken.")
         for row in results.get("impossible_tennis_scores", []):
             if row.get("incomplete_score"):
                 _issue(issues, "info", "tennis_retirements", "tennis",

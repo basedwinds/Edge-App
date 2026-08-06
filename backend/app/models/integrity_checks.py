@@ -145,7 +145,18 @@ def resolved_looking_active_markets(session: Session, hours: int = 6, cache: dic
                       (LolMatch, "lol_match_id"), (SoccerMatch, "soccer_match_id"),
                       (TennisMatch, "tennis_match_id")):
         for r in session.query(model).all():
-            if (getattr(r, "match_date", None) or "") and str(r.match_date)[:10] < cutoff:
+            # PREFER estimated_start_time over match_date. match_date is the less
+            # reliable of the two: 75 of 99 soccer fixtures disagree with their
+            # own estimated_start_time, and where a Kalshi ticker pins the real
+            # date it is estimated_start_time that matches it exactly (Espanyol v
+            # Levante: match_date 2026-08-03, est 2026-08-16, ticker 26AUG16).
+            #
+            # Reading match_date made this check report 86 soccer markets as
+            # "status never reconciled" for events that had NOT started -- Kalshi
+            # itself still listed all 100 sampled as active. The markets were
+            # fine; the date was stale.
+            when = getattr(r, "estimated_start_time", None) or getattr(r, "match_date", None)
+            if when and str(when)[:10] < cutoff:
                 started.add((fk, r.id))
 
     markets, snaps = _active_with_snapshots(session, cache)
