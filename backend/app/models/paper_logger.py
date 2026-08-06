@@ -346,7 +346,34 @@ def run_paper_log():
                 .filter(PlacedBet.paper == True, PlacedBet.status == "pending")  # noqa: E712
                 .all()
             )
-            open_ids = {b.market_id for b in open_paper}
+            # A market gets ONE paper bet, ever -- not one per open slot.
+            #
+            # REAL BUG (2026-08-06): this used to gate on the PENDING set alone,
+            # so the moment a paper bet settled its market became loggable
+            # again. If the market still qualified, the next run logged a fresh
+            # bet, the settler graded it seconds later off the already-known
+            # result, and the cycle repeated every poll. One F1 podium market
+            # accumulated 120 bets, 118 of them placed AFTER the race had run
+            # and settled within 0-3 minutes each; F1 as a whole reached a 79x
+            # duplication factor (3,327 rows, 42 distinct picks).
+            #
+            # It stayed latent until this session's settlement work made racing
+            # bets gradeable at all -- before that they sat pending, so the old
+            # guard happened to hold. Fixing settlement turned a dormant bug
+            # into an active loop, which is exactly the kind of interaction that
+            # only shows up in the data.
+            #
+            # A post-result "bet" is not an observation: it is logged knowing
+            # the outcome, and it inflates any win-rate or ROI computed by
+            # counting rows. Gating on EVERY paper bet for the market -- settled
+            # or not -- is correct, because a Market row is one real market for
+            # one real event and never legitimately needs a second entry.
+            logged_ids = {
+                mid for (mid,) in session.query(PlacedBet.market_id)
+                .filter(PlacedBet.paper == True)  # noqa: E712
+                .distinct().all()
+            }
+            open_ids = logged_ids
             # Cross-platform keys already being tracked -> don't re-announce the
             # OTHER platform's copy of a bet we've already alerted on (dedup holds
             # across separate runs, not just within one batch).
@@ -409,7 +436,8 @@ def run_paper_log():
                         "market": row.get("implied_prob"), "stake": row.get("suggested_stake_dollars"),
                     })
             session.commit()
-            log.info("paper logger: added %d new paper bets (%d already open)", added, len(open_ids) - added)
+            log.info("paper logger: added %d new paper bets (%d markets already logged, skipped)",
+                     added, len(open_ids) - added)
         except Exception:
             log.exception("paper log write failed")
         finally:
