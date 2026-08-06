@@ -2547,6 +2547,9 @@ export async function fetchOpenBets(): Promise<OpenBetPayload[]> {
   return apiGet<OpenBetPayload[]>(`/placed-bets/open`);
 }
 
+// settleBet already exists further down this file -- see its definition near
+// SettledBetPayload. It covers won/lost/push/void.
+
 /** A real bet still pending long after its event should have ended. */
 export interface StuckBetRow {
   bet_id: number;

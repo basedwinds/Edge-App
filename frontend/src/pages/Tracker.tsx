@@ -188,6 +188,41 @@ function startAbsolute(iso: string | null): string {
   return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/** Void a bet whose event was cancelled. Confirms first: it settles a real
+ * position, and unlike "mark placed" there is no undo in the UI. */
+function VoidButton({ bet }: { bet: OpenBetPayload }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  async function onVoid() {
+    const label = bet.label || bet.market_type || "this bet";
+    if (!window.confirm(
+      `Void ${label}?\n\nUse this when the event was CANCELLED (a withdrawal, a postponement that will not be replayed) so it can never settle on its own.\n\nThe $${bet.stake_dollars.toLocaleString()} stake is returned and the bet leaves your open positions. Voids are excluded from win/loss, so this will not affect ROI or CLV.`
+    )) return;
+    setBusy(true);
+    try {
+      await settleBet(bet.id, "void", "voided by hand -- event cancelled");
+      // Everything that reads the open book: the tables, the portfolio totals,
+      // and the per-sport ceilings that were being held down by this stake.
+      for (const k of ["open-bets", "settled-bets", "portfolio", "placed-market-ids",
+                       "placed-futures-keys", "combined", "combined-futures"]) {
+        qc.invalidateQueries({ queryKey: [k] });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <button
+      onClick={onVoid}
+      disabled={busy}
+      title="Event cancelled — void this bet and release its stake"
+      className="text-xs font-medium px-2 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-warning)] hover:border-[var(--color-warning)] whitespace-nowrap disabled:opacity-50"
+    >
+      {busy ? "Voiding…" : "Void"}
+    </button>
+  );
+}
+
 function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[]; onExplain: (t: ReasoningTarget) => void; emptyText?: string }) {
   if (bets.length === 0) {
     return (
@@ -270,7 +305,12 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
                   ${b.stake_dollars.toLocaleString()}{b.stake_units != null ? ` · ${b.stake_units.toFixed(1)}u` : ""}
                 </td>
-                <td className="px-3 py-2 text-right"><ExplainButton target={reasoningTarget(b)} onExplain={onExplain} /></td>
+                <td className="px-3 py-2 text-right">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <ExplainButton target={reasoningTarget(b)} onExplain={onExplain} />
+                    <VoidButton bet={b} />
+                  </div>
+                </td>
               </tr>
             );
           })}
