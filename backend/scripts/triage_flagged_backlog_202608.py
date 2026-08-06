@@ -126,6 +126,14 @@ for e in todo:
     # have been declared already-built, when the strict count is 0 and it is not
     # built at all. A wrong "already done" is worse than no note: it retires a
     # real to-do silently.
+    #
+    # KNOWN BLIND SPOT, KALSHI ONLY. This test cannot see Polymarket entries at
+    # all: their identifier is an event SLUG while the stored source_ticker is a
+    # conditionId (0x + 64 hex), so no prefix of one appears in the other. That
+    # is how "NTT IndyCar Series: 2026 Champion" stayed flagged while its 46
+    # Polymarket rows were ingested and priced the whole time. A Polymarket
+    # entry must be checked by (sport, market_type) instead -- see the IndyCar
+    # correction. Left explicit rather than silently returning 0.
     n_markets = (
         s.query(Market).filter(Market.source_ticker.like(f"{ident}-%")).count()
         if ident.startswith("KX") else 0

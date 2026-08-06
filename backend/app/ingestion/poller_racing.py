@@ -23,11 +23,15 @@ def refresh_racing_ratings():
         log.exception("racing ratings refresh failed")
     # Warm the season-championship cache off the request path (the compute does
     # ~22 sequential ESPN name fetches; TTL-guarded so it's cheap most cycles).
-    try:
-        for _series in racing_championship.PRICED_SERIES:
+    # Per-series try: one series failing must not skip the rest. Shared, this
+    # loop meant an F1 standings hiccup left IndyCar's cache cold, and a cold
+    # cache is SILENT -- _get returns {} and every championship market for that
+    # series is simply left unpriced, with nothing in the UI saying why.
+    for _series in racing_championship.PRICED_SERIES:
+        try:
             racing_championship.warm(_series)
-    except Exception:
-        log.exception("racing championship warm failed")
+        except Exception:
+            log.exception("racing championship warm failed for %s", _series)
 
 
 def refresh_racing_markets():
