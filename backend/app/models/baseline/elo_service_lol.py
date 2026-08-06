@@ -179,10 +179,13 @@ def resolve_team_name(team: str) -> str:
 
 
 def get_team_rating(team: str) -> float | None:
+    """Resolve the name first -- see elo_service_cs2.get_team_rating for the
+    real user-reported bug (a rated team displayed as an unrated 1500 because
+    its history lives under another spelling). Same gap existed here."""
     state = _cache.get("state")
     if state is None:
         return None
-    return state.get(team)
+    return state.get(resolve_team_name(team))
 
 
 def get_matchup_ratings(team_a: str, team_b: str) -> dict | None:
@@ -211,6 +214,12 @@ def get_matchup_ratings(team_a: str, team_b: str) -> dict | None:
     else:
         pool = _cache.get("state_exp")
         name = "expanded"
+        # get_series_distribution resolves the names in THIS branch only --
+        # mirror that exactly, or the panel reports a different rating (or no
+        # rating) than the price was computed from, which is the whole defect
+        # this function exists to prevent.
+        team_a = resolve_team_name(team_a)
+        team_b = resolve_team_name(team_b)
         if pool is None or pool.games_played(team_a) < MIN_GAMES or pool.games_played(team_b) < MIN_GAMES:
             return None
     return {

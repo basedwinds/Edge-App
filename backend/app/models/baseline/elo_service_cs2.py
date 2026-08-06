@@ -201,10 +201,25 @@ def resolve_team_name(team: str) -> str:
 
 
 def get_team_rating(team: str) -> float | None:
+    """Resolve the name first, exactly as get_series_distribution does.
+
+    REAL BUG this fixes (user-reported 2026-08-05): the recommended bet
+    "Abyssal vs Ground Zero" explained that Ground Zero had 1500 Elo -- the
+    neutral BASE_RATING, i.e. "unrated" -- on a market the model had priced
+    from real games. Ground Zero's history is stored under "Ground Zero
+    Gaming" (1491.8), and get_series_distribution resolves onto that spelling
+    while this lookup read the raw market spelling and missed, falling through
+    to the 1500 default. So the panel claimed the team was unrated on a bet
+    that was in fact priced correctly.
+
+    Not display-only: esports_tournament_pricing prices tournament-winner
+    futures off this function, so an unresolved name there is a real unrated
+    team in a real price.
+    """
     state = _cache.get("state")
     if state is None:
         return None
-    return state.get(team)
+    return state.get(resolve_team_name(team))
 
 
 MIN_GAMES = 3  # both teams need this many real settled series before a rating counts as trustworthy -- see get_series_distribution's own docstring for the real Brier-by-games-bucket data behind the number
