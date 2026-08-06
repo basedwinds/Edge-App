@@ -142,6 +142,18 @@ def run_simulation(
     pro-football-undefeated-regular-season) predates this histogram and is
     kept as its own field since that market doesn't take a threshold param.
 
+    Added 2026-08-06: "seed_pct" (length-8 list, index 0 = P(missed the
+    playoffs), 1..7 = P(that conference seed) -- Kalshi KXNFLSEED) and
+    "playoff_host_pct" (P(hosts at least one playoff game) -- Kalshi
+    KXNFLPLAYOFFHOST). Both are read off the bracket this function ALREADY
+    simulates, not modelled separately: seeds come from the same `seeds` list
+    the rounds are played from, and hosts are recorded inside home_away() so no
+    round can be added without being counted. playoff_host_pct is deliberately
+    not approximated by division_pct -- the 1-seed hosts a divisional game
+    having played no wild-card game, and a wild-card seed can host a later
+    round once every better seed is out. The Super Bowl is excluded: it is a
+    neutral site (hfa=0.0 at its own call), so it is not hosting.
+
     Also added 2026-07-16: "worst_record_pct" (mirror of best_record_pct)
     and a "_DIVISIONS" entry, {div: {"order_pct": {(t1,t2,t3,t4): pct},
     "total_win_hist_pct": length-69 list, index i = P(the division's 4 teams
@@ -163,6 +175,22 @@ def run_simulation(
             # the six sum to n_trials for every team. reg = missed the playoffs.
             "stage_reg": 0, "stage_wc": 0, "stage_div": 0, "stage_conf": 0,
             "stage_sb_loss": 0, "stage_sb_win": 0,
+            # Conference seed 1-7 (index 0 = missed the playoffs), for Kalshi's
+            # KXNFLSEED. Exhaustive and mutually exclusive like stage-of-exit:
+            # a team holds exactly one seed per trial, so the eight sum to
+            # n_trials. Read straight off the `seeds` list the bracket already
+            # builds -- no separate seeding logic to drift from it.
+            "seed_hist": [0] * 8,
+            # Hosts AT LEAST ONE playoff game, for Kalshi's KXNFLPLAYOFFHOST.
+            # Counted from the actual home team of every bracket game rather
+            # than inferred from "is a division winner": division winners are
+            # the usual hosts, but a 5-seed CAN host a later round once every
+            # better seed above it is gone, and the 1-seed hosts in the
+            # divisional round despite having no wild-card game at all. Both
+            # cases fall out for free by tallying home_away()'s own answer.
+            # The Super Bowl is deliberately excluded -- it is a neutral site
+            # (see the sb_champ call, hfa=0.0), so it is not "hosting".
+            "playoff_host": 0,
         }
         for t in all_teams
     }
@@ -235,21 +263,34 @@ def run_simulation(
             wildcards = _rank_teams([t for t in conf_teams if t not in conf_div_winners], wins, head_to_head, rng)[:3]
             seeds = seeded_div_winners + wildcards  # index 0 = seed 1 ... index 6 = seed 7
             conf_seeds[conf] = seeds
-            for t in seeds:
+            for i, t in enumerate(seeds):
                 tallies[t]["playoff"] += 1
+                tallies[t]["seed_hist"][i + 1] += 1  # index 1..7 = seed
             tallies[seeds[0]]["one_seed"] += 1
 
         # stage of elimination: default everyone to "missed playoffs", then
         # overwrite each playoff team with the round it actually exits in.
         trial_stage = {t: "reg" for t in all_teams}
+        # Every team that hosts at least one bracket game this trial. Recorded
+        # INSIDE home_away rather than at its six call sites, so a future round
+        # cannot be added without being counted.
+        trial_hosts: set[str] = set()
+        # Missed the playoffs -> seed 0. Done here, once, off the same
+        # conf_seeds the bracket uses, so the histogram stays exhaustive.
+        _seeded = {t for s in conf_seeds.values() for t in s}
+        for t in all_teams:
+            if t not in _seeded:
+                tallies[t]["seed_hist"][0] += 1
 
         conf_champs: dict[str, str] = {}
         for conf in ("AFC", "NFC"):
             seeds = conf_seeds[conf]
             seed_num = {team: i + 1 for i, team in enumerate(seeds)}
 
-            def home_away(a: str, b: str) -> tuple[str, str]:
-                return (a, b) if seed_num[a] < seed_num[b] else (b, a)
+            def home_away(a: str, b: str, _hosts=trial_hosts) -> tuple[str, str]:
+                home, away = (a, b) if seed_num[a] < seed_num[b] else (b, a)
+                _hosts.add(home)
+                return home, away
 
             wc_winners = [seeds[0]]  # 1-seed byes
             for hi, lo in ((1, 6), (2, 5), (3, 4)):  # seed2v7, seed3v6, seed4v5
@@ -282,6 +323,8 @@ def run_simulation(
         trial_stage[sb_loser] = "sb_loss"
         for t, stg in trial_stage.items():
             tallies[t]["stage_" + stg] += 1
+        for t in trial_hosts:
+            tallies[t]["playoff_host"] += 1
 
     results = {
         t: {
@@ -303,6 +346,14 @@ def run_simulation(
                 "sb_loss": tallies[t]["stage_sb_loss"] / n_trials,
                 "sb_win": tallies[t]["stage_sb_win"] / n_trials,
             },
+            # index 0 = missed the playoffs, 1..7 = that conference seed.
+            # Exhaustive and mutually exclusive: sums to 1.0 per team.
+            "seed_pct": [c / n_trials for c in tallies[t]["seed_hist"]],
+            # P(hosts >= 1 playoff game). NOT the same as division_pct: the
+            # 1-seed hosts in the divisional round with no wild-card game, and
+            # a wild-card seed can host a later round once every better seed is
+            # eliminated. Super Bowl excluded -- neutral site.
+            "playoff_host_pct": tallies[t]["playoff_host"] / n_trials,
         }
         for t in all_teams
     }
