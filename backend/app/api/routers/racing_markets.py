@@ -21,6 +21,8 @@ from sqlalchemy.orm import Session
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
 from app.api.routers.settings import get_racing_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
 from app.api.schemas import RacingMarketOut, ReasoningOut, ReasoningFactorOut
+import logging
+
 from app.db.database import get_session
 from app.db.models import Market, RaceEvent
 from app.models import racing_sim
@@ -29,7 +31,15 @@ from app.models.staking import has_real_trading, kelly_fraction, size_stake_doll
 
 router = APIRouter(prefix="/racing", tags=["racing"])
 
+log = logging.getLogger("racing_markets")
+
 RACING_SPORTS = ("f1", "irl", "nascar")
+
+# Minimum share of a race's entrants that must carry a rating before the field
+# simulation is trusted to price it. See the gate in _price_event for the real
+# case (NASCAR Xfinity/Truck arriving under the Cup series ticker) and why a
+# coverage floor beats hard-coding which series exist.
+MIN_FIELD_COVERAGE = 0.80
 TRACKING_NOTE = (
     "Priced by the grid+constructor racing model (race finish) / qualifying Elo "
     "(pole). Pre-qualifying prices use driver+constructor (no grid yet); they "
@@ -96,8 +106,10 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         return racing_ratings.resolve_driver_id(series, name)
 
     race_field: dict[str, float] = {}
+    entrants: set[str] = set()
     for m in markets:
         if m.market_type in ("race_winner", "top_n"):
+            entrants.add((m.team or "").strip().lower())
             d = did(m.team or "")
             if d and d not in race_field:
                 # Grid was hardcoded None here, so every race priced in
@@ -111,7 +123,33 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
                 s = racing_ratings.strength(series, d, cc.get(d), g.get(d))
                 if s is not None:
                     race_field[d] = s
-    sim = racing_sim.simulate(race_field, trials=20000) if len(race_field) >= 2 else {}
+    # FIELD COVERAGE GATE. racing_sim normalises win probability across the
+    # drivers it was GIVEN, so an under-covered field does not merely lose the
+    # missing drivers -- it hands their share to the ones we did rate, inflating
+    # every price by roughly (entrants / rated).
+    #
+    # REAL CASE (found 2026-08-05, and the reason this exists). Kalshi files the
+    # NASCAR Cup, Xfinity ("O'Reilly Auto Parts") and Truck series under ONE
+    # series ticker, KXNASCARRACE, so all three arrive as sport="nascar". Our
+    # ratings and results come from ESPN's nascar-premier feed, which is CUP
+    # ONLY. Measured on the live board: the Cup race had 34 of 36 entrants rated
+    # and summed to 1.00 correctly, while the Xfinity race had 13 of 37 -- those
+    # 13 absorbed the entire 1.00, pricing Ryan Ellis at 8.5% against a 0.5%
+    # market, a 17x overstatement. implausible_disagreement caught the extremes,
+    # but 6 moderately-inflated Xfinity bets were staked anyway.
+    #
+    # A coverage floor is the right shape because it is series-agnostic: it fires
+    # on ANY race we cannot rate (a new series, a one-off exhibition, an
+    # unresolved-name spike), rather than hard-coding which NASCAR series exist.
+    # 0.80 separates the real cases cleanly -- Cup 94%, F1/IndyCar effectively
+    # 100%, Xfinity 35%.
+    coverage = (len(race_field) / len(entrants)) if entrants else 1.0
+    if entrants and coverage < MIN_FIELD_COVERAGE:
+        log.info("racing: skipping %s field pricing -- only %d of %d entrants rated (%.0f%%)",
+                 series, len(race_field), len(entrants), coverage * 100)
+        sim = {}
+    else:
+        sim = racing_sim.simulate(race_field, trials=20000) if len(race_field) >= 2 else {}
 
     # Pole probabilities over the FULL current grid (series-wide, from ratings),
     # not just this event's pole markets -- so constructor-pole markets, which
