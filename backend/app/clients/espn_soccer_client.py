@@ -150,8 +150,55 @@ def parse_final_results(raw_events: list[dict]) -> list[dict]:
         out.append({
             "home_team": home_name, "away_team": away_name, "match_date": match_date,
             "home_goals_ft": home_goals, "away_goals_ft": away_goals, "result_ft": result_ft,
+            # Needed to fetch half-time goals, which the scoreboard does not
+            # carry -- see fetch_half_time_goals.
+            "event_id": e.get("id"),
         })
     return out
+
+
+def fetch_half_time_goals(league: str, event_id: str) -> tuple[int, int] | None:
+    """(home_goals_ht, away_goals_ht) for one finished match, or None.
+
+    Half-time goals are NOT on the scoreboard endpoint -- every competitor
+    there has `linescores: null` (checked 2026-08-06: 0 of 37 finished MLS
+    events carried them). They ARE on the per-event SUMMARY endpoint, under
+    header.competitions[].competitors[].linescores, one entry per period with
+    index 0 = first half.
+
+    Validated on 16 finished MLS matches: the two halves summed to the final
+    score on 16 of 16, none missing (e.g. FC Cincinnati 4 = [3,1] vs Vancouver
+    3 = [2,1]).
+
+    Costs ONE request per match, unlike the chunked scoreboard, so callers
+    should only ask for matches they actually need to grade.
+    """
+    code = LEAGUE_CODES.get(league)
+    if code is None or not event_id:
+        return None
+    try:
+        resp = httpx.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/summary",
+            params={"event": event_id}, timeout=30.0,
+        )
+        resp.raise_for_status()
+        comps = ((resp.json().get("header") or {}).get("competitions")) or []
+        if not comps:
+            return None
+        goals = {}
+        for c in comps[0].get("competitors") or []:
+            lines = c.get("linescores") or []
+            if not lines:
+                return None
+            try:
+                goals[c.get("homeAway")] = int(float(lines[0].get("displayValue")))
+            except (TypeError, ValueError):
+                return None
+        if "home" not in goals or "away" not in goals:
+            return None
+        return goals["home"], goals["away"]
+    except Exception:
+        return None
 
 
 def fetch_standings(league: str) -> dict[str, dict]:

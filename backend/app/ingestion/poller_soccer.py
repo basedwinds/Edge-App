@@ -116,53 +116,73 @@ def refresh_soccer_results():
         raw = espn_soccer_client.fetch_scoreboard(league, oldest, today + datetime.timedelta(days=1))
         results_by_league[league] = espn_soccer_client.parse_final_results(raw)
 
+    # Match rows to results, and fetch half-time goals, with NO session open --
+    # `unresolved` is still a live Python list and both steps are pure functions
+    # over it, so neither needs the DB. Keeping the per-event half-time requests
+    # out here matters: they are one HTTP call each, and this file's own
+    # docstring is about not holding a connection across slow network I/O.
+    by_match_id: dict[int, dict] = {}
+    for league, match_ids in by_league_ids.items():
+        results = results_by_league.get(league, [])
+        wanted = set(match_ids)
+        for match in unresolved:
+            if match.id not in wanted:
+                continue
+            # Match on TEAMS first, then take the nearest date within a day --
+            # do NOT require match_date to be equal.
+            #
+            # REAL BUG this fixes (2026-08-06): a live-tracked row's
+            # `match_date` is the SCRAPE date, not the kickoff date -- e.g. San
+            # Jose vs Los Angeles G stored match_date 2026-07-19 with
+            # estimated_start_time 2026-07-26T02:30Z, a full week out. Measured
+            # against real ESPN results for 54 team-matched MLS rows, ESPN-date
+            # minus match_date was spread across 0,1,3,4,6,7 days with only 9
+            # exact, while ESPN-date minus estimated_start_time was exact on 51
+            # and off by one on 3 (a late kickoff crossing midnight UTC). So
+            # estimated_start_time is the real date and the old equality test on
+            # match_date was never going to fire.
+            real = _real_match_date(match)
+            cands = [
+                r for r in results
+                if team_names_match(r["home_team"], match.home_team)
+                and team_names_match(r["away_team"], match.away_team)
+            ]
+            if real is not None:
+                cands = [
+                    r for r in cands
+                    if abs((datetime.date.fromisoformat(r["match_date"]) - real).days) <= 1
+                ]
+                cands.sort(key=lambda r: abs((datetime.date.fromisoformat(r["match_date"]) - real).days))
+            if not cands:
+                continue
+            found = dict(cands[0])
+            # Half-time goals are not on the scoreboard (linescores is null on
+            # every competitor there), so they cost one request per match. Only
+            # matched rows are asked for, and a settled row is never revisited.
+            found["halves"] = espn_soccer_client.fetch_half_time_goals(league, found.get("event_id"))
+            by_match_id[match.id] = found
+
     with db_write_lock():
         session = SessionLocal()
         try:
-            updated = 0
-            total = 0
-            for league, match_ids in by_league_ids.items():
-                results = results_by_league.get(league, [])
-                total += len(match_ids)
-                for match_id in match_ids:
-                    match = session.get(SoccerMatch, match_id)
-                    if match is None:
-                        continue
-                    # Match on TEAMS first, then take the nearest date within a
-                    # day -- do NOT require match_date to be equal.
-                    #
-                    # REAL BUG this fixes (2026-08-06): a live-tracked row's
-                    # `match_date` is the SCRAPE date, not the kickoff date --
-                    # e.g. San Jose vs Los Angeles G stored match_date
-                    # 2026-07-19 with estimated_start_time 2026-07-26T02:30Z, a
-                    # full week out. Measured against real ESPN results for 54
-                    # team-matched MLS rows, ESPN-date minus match_date was
-                    # spread across 0,1,3,4,6,7 days with only 9 exact, while
-                    # ESPN-date minus estimated_start_time was exact on 51 and
-                    # off by one on 3 (a late kickoff crossing midnight UTC).
-                    # So estimated_start_time is the real date and the old
-                    # equality test on match_date was never going to fire.
-                    real = _real_match_date(match)
-                    cands = [
-                        r for r in results
-                        if team_names_match(r["home_team"], match.home_team)
-                        and team_names_match(r["away_team"], match.away_team)
-                    ]
-                    if real is not None:
-                        cands = [
-                            r for r in cands
-                            if abs((datetime.date.fromisoformat(r["match_date"]) - real).days) <= 1
-                        ]
-                        cands.sort(key=lambda r: abs((datetime.date.fromisoformat(r["match_date"]) - real).days))
-                    found = cands[0] if cands else None
-                    if found is None:
-                        continue
-                    match.home_goals_ft = found["home_goals_ft"]
-                    match.away_goals_ft = found["away_goals_ft"]
-                    match.result_ft = found["result_ft"]
-                    updated += 1
+            updated = ht = 0
+            total = sum(len(v) for v in by_league_ids.values())
+            for match_id, found in by_match_id.items():
+                match = session.get(SoccerMatch, match_id)
+                if match is None:
+                    continue
+                match.home_goals_ft = found["home_goals_ft"]
+                match.away_goals_ft = found["away_goals_ft"]
+                match.result_ft = found["result_ft"]
+                if found.get("halves") is not None:
+                    match.home_goals_ht, match.away_goals_ht = found["halves"]
+                    ht += 1
+                updated += 1
             session.commit()
-            log.info("soccer results backfill: %d/%d unresolved-but-already-played matches updated", updated, total)
+            log.info(
+                "soccer results backfill: %d/%d unresolved-but-already-played matches updated (%d with half-time goals)",
+                updated, total, ht,
+            )
         finally:
             session.close()
 
