@@ -208,6 +208,7 @@ def refresh_polymarket_mlb_f5_rfi():
 def refresh_kalshi_mlb_futures():
     futures_rows = kalshi_mlb_client.get_futures_markets()
     win_total_rows = kalshi_mlb_client.get_win_total_markets()
+    matchup_rows = kalshi_mlb_client.get_world_series_matchup_markets()
     with db_write_lock():
         session = SessionLocal()
         try:
@@ -215,8 +216,13 @@ def refresh_kalshi_mlb_futures():
                 market_catalog_mlb.upsert_kalshi_mlb_futures_market(session, row)
             for row in win_total_rows:
                 market_catalog_mlb.upsert_kalshi_mlb_win_total_market(session, row)
+            for row in matchup_rows:
+                market_catalog_mlb.upsert_kalshi_mlb_ws_matchup_market(session, row)
             session.commit()
-            log.info("refreshed kalshi mlb futures + win totals")
+            log.info(
+                "refreshed kalshi mlb futures + win totals + %d ws matchups",
+                len(matchup_rows),
+            )
         finally:
             session.close()
 

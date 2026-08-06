@@ -402,3 +402,31 @@ def mlb_news_cache_to_pydantic(cache: MlbNewsAdjustmentCache) -> NewsAdjustment:
         factors=json.loads(cache.factors_json),
         requires_review=bool(cache.requires_review),
     )
+
+
+def upsert_kalshi_mlb_ws_matchup_market(session: Session, row: dict) -> Market:
+    """World Series MATCHUP (KXTEAMSINWS) -- a two-team proposition, so it does
+    not fit the one-team `team` column alone.
+
+    The AL side goes in `team` and the NL side in `group_label` (as
+    "AL vs NL"), which keeps the pair recoverable without a schema change and
+    keeps the row readable in the UI. Pricing re-derives the pair from the
+    ticker rather than parsing the label back apart -- a label is for humans.
+    """
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="ws_matchup", sport="mlb",
+        )
+        session.add(market)
+    market.team = row["al_team"]
+    market.group_label = f'{row["al_team"]} vs {row["nl_team"]}'
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market

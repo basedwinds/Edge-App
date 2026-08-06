@@ -53,7 +53,12 @@ def refresh():
     results = run_simulation(state.ratings, season_games)
     _cache["results"] = results
     _cache["season"] = target_season
-    log.info("mlb season sim refreshed: %d teams, season %d", len(results) - 1, target_season)  # -1 for the _LEAGUE entry
+    # Count real teams explicitly. This used to be len(results) - 1 for the
+    # single "_LEAGUE" entry; there are now two underscore keys ("_MATCHUPS"
+    # was added for the World Series pairings), and a hardcoded offset would
+    # quietly under-report every time another aggregate is added.
+    n_teams = sum(1 for k in results if not k.startswith("_"))
+    log.info("mlb season sim refreshed: %d teams, season %d", n_teams, target_season)
 
 
 def get_results() -> dict[str, dict]:

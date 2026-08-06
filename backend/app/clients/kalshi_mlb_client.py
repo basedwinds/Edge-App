@@ -50,6 +50,10 @@ FUTURES_SERIES = {
 }
 
 WIN_TOTAL_SERIES_PREFIX = "KXMLBWINS-"
+# World Series MATCHUP -- one market per possible AL/NL pairing (225 open =
+# 15 x 15). Priced from the joint (AL champ, NL champ) counts the season sim
+# tallies per trial, NOT from multiplying two pennant probabilities.
+WS_MATCHUP_SERIES = "KXTEAMSINWS"
 
 
 def get_open_events(series_ticker: str) -> list[dict]:
@@ -291,4 +295,65 @@ def get_win_total_markets() -> list[dict]:
                         "status": m.get("status"),
                     }
                 )
+    return rows
+
+
+def get_world_series_matchup_markets() -> list[dict]:
+    """One row per possible World Series pairing (KXTEAMSINWS).
+
+    THE TICKER IS TWO ABBREVIATIONS CONCATENATED -- "KXTEAMSINWS-26-TORWSH" is
+    TOR + WSH -- with no separator, so it has to be split by trying every cut
+    against the known team sets. Two facts make that unambiguous rather than a
+    guess, both verified live 2026-08-06 across all 225 open markets:
+
+      * Kalshi's MLB abbreviations are IDENTICAL to the StatsAPI ones this app
+        already stores (all 30 match, no exceptions), so no mapping table is
+        needed. Checking against ESPN_TO_STATSAPI_ABBR instead would be wrong:
+        that dict holds only the two EXCEPTIONS (ARI->AZ, CHW->CWS), not the
+        roster.
+      * The pairing is always AL first, then NL. Every AL team appears only as
+        a prefix and every NL team only as a suffix, so constraining each side
+        to its own league leaves exactly one valid cut.
+
+    Result: 225 of 225 split uniquely, 0 ambiguous, 0 failed. A row that does
+    not split is skipped rather than guessed.
+
+    yes_sub_title ("Toronto vs Washington") is deliberately NOT used as the
+    key. It is human-facing and, while Kalshi does disambiguate the shared
+    cities ("Chicago C"/"Chicago WS", "New York M"/"New York Y", "Los Angeles
+    A"/"Los Angeles D"), a label is a weaker contract than a ticker.
+    """
+    from app.models.season_sim_mlb import TEAM_LEAGUE
+
+    al = {t for t, lg in TEAM_LEAGUE.items() if lg == "AL"}
+    nl = {t for t, lg in TEAM_LEAGUE.items() if lg == "NL"}
+    rows = []
+    for ev in get_open_events(WS_MATCHUP_SERIES):
+        try:
+            markets = get_markets_for_event(ev["event_ticker"])
+        except Exception:
+            continue
+        for m in markets:
+            suffix = m["ticker"].rsplit("-", 1)[-1]
+            cuts = [
+                (suffix[:i], suffix[i:])
+                for i in range(2, len(suffix) - 1)
+                if suffix[:i] in al and suffix[i:] in nl
+            ]
+            if len(cuts) != 1:
+                continue
+            rows.append(
+                {
+                    "event_ticker": ev["event_ticker"],
+                    "ticker": m["ticker"],
+                    "al_team": cuts[0][0],
+                    "nl_team": cuts[0][1],
+                    "group_label": ev.get("title", "") or "World Series Matchup",
+                    "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                    "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                    "last_price": _to_float(m.get("last_price_dollars")),
+                    "volume": _to_float(m.get("volume_fp")),
+                    "status": m.get("status"),
+                }
+            )
     return rows

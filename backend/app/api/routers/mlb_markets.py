@@ -48,6 +48,9 @@ router = APIRouter(prefix="/mlb", tags=["mlb"])
 FUTURES_MARKET_TYPES = {
     "championship", "conference_champion", "division_winner",
     "playoff_qualifier", "best_record", "worst_record", "win_total",
+    # World Series MATCHUP -- a PAIR of teams, so it is priced from the sim's
+    # joint (AL champ, NL champ) tally, not from any single team's column.
+    "ws_matchup",
 }
 # "conference_champion" naming kept for schema parity with NFL/NBA -- these
 # are the real AL/NL PENNANT winners, see season_sim_mlb.py's "pennant_pct".
@@ -255,12 +258,57 @@ def _rfi_model_prob(m: Market, game: MlbGame) -> float | None:
     return round(p_rfi if m.side != "no" else 1.0 - p_rfi, 4)
 
 
+def _ws_matchup_model_prob(m: Market, sim_results: dict) -> float | None:
+    """P(this exact AL/NL pairing is the World Series).
+
+    Read from the sim's JOINT tally (season_sim_mlb's "_MATCHUPS"), never from
+    multiplying two pennant_pct values. That product would be wrong twice over:
+    the two champions come out of ONE simulated postseason so they are not
+    independent, and a marginal cannot say which opponent a team faces. On real
+    2026 data the difference is visible -- LAD vs TB is 0.0695 jointly against
+    0.0624 if the pennants are multiplied.
+
+    The pair is recovered from the TICKER (see
+    kalshi_mlb_client.get_world_series_matchup_markets), not by parsing
+    group_label back apart -- the label is human-facing, the ticker is the
+    contract. Lookup is by frozenset because "_MATCHUPS" is keyed unordered.
+    """
+    from app.models.season_sim_mlb import TEAM_LEAGUE
+
+    matchups = sim_results.get("_MATCHUPS")
+    if not matchups or not m.source_ticker:
+        return None
+    suffix = m.source_ticker.rsplit("-", 1)[-1]
+    al = {t for t, lg in TEAM_LEAGUE.items() if lg == "AL"}
+    nl = {t for t, lg in TEAM_LEAGUE.items() if lg == "NL"}
+    cuts = [
+        (suffix[:i], suffix[i:])
+        for i in range(2, len(suffix) - 1)
+        if suffix[:i] in al and suffix[i:] in nl
+    ]
+    if len(cuts) != 1:
+        return None
+    # A pairing the sim never produced falls back to 0.0, and that is a
+    # RESOLUTION FLOOR rather than a claim of impossibility: at the default
+    # trial count only ~100 of the 225 pairings come up at all, so anything
+    # rarer than roughly 1/trials is indistinguishable from zero here.
+    #
+    # It is safe in the direction that matters. A 0.0 model probability can
+    # only ever produce a NEGATIVE edge against a positive market price, so it
+    # can never manufacture a bet -- it just declines to back a longshot the
+    # sim did not see. The opposite convention (returning None) would be worse:
+    # it reads as "no model" on a market the model does in fact cover.
+    return round(matchups.get(frozenset(cuts[0]), 0.0), 4)
+
+
 def _futures_model_prob(m: Market, sim_results: dict) -> float | None:
     """Real season Monte Carlo simulation (season_sim_mlb.py, 2026-07-17 --
     previously always None, no model built yet) -- team-Elo only (no
     starting-pitcher blend, unknowable that far ahead), 2000 trials, real
     2022+ postseason bracket (6 teams/league, no reseeding, verified live
     against the actual rule)."""
+    if m.market_type == "ws_matchup":
+        return _ws_matchup_model_prob(m, sim_results)
     if m.team is None:
         return None
     team_sim = sim_results.get(m.team)
