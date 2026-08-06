@@ -54,7 +54,24 @@ def _latest_snapshots(session: Session, market_ids: list[int]) -> dict:
     return _batch_latest_snapshots(session, market_ids)
 
 
-def phantom_priced_markets(session: Session) -> list[dict]:
+def _active_with_snapshots(session: Session, cache: dict | None = None):
+    """(active markets, {market_id: latest snapshot}) -- fetched ONCE per run.
+
+    Three of the checks below need exactly this, and the first version had each
+    of them query it independently: three full passes over ~24k markets and
+    their snapshots, which took the /health-check endpoint to 55s. `cache` is
+    threaded through run_all so a single run pays for it once.
+    """
+    if cache is not None and "markets" in cache:
+        return cache["markets"], cache["snaps"]
+    markets = session.query(Market).filter(Market.status == "active").all()
+    snaps = _latest_snapshots(session, [m.id for m in markets])
+    if cache is not None:
+        cache["markets"], cache["snaps"] = markets, snaps
+    return markets, snaps
+
+
+def phantom_priced_markets(session: Session, cache: dict | None = None) -> list[dict]:
     """Active markets whose only 'price' is a seeded 0.500 with no book.
 
     _implied_prob now returns None for these, so they cannot be bet -- this
@@ -62,8 +79,7 @@ def phantom_priced_markets(session: Session) -> list[dict]:
     starts appearing (the guard is deliberately narrow: exactly 0.500, no bid,
     no ask, no volume).
     """
-    markets = session.query(Market).filter(Market.status == "active").all()
-    snaps = _latest_snapshots(session, [m.id for m in markets])
+    markets, snaps = _active_with_snapshots(session, cache)
     by_sport: dict = defaultdict(int)
     for m in markets:
         sn = snaps.get(m.id)
@@ -74,20 +90,19 @@ def phantom_priced_markets(session: Session) -> list[dict]:
     return [{"sport": s, "count": n} for s, n in sorted(by_sport.items(), key=lambda x: -x[1])]
 
 
-def flat_ladders(session: Session) -> list[dict]:
+def flat_ladders(session: Session, cache: dict | None = None) -> list[dict]:
     """Totals ladders where every rung carries the same price.
 
     A totals ladder is monotonic by construction -- P(over 0.5) >= P(over 1.5)
     >= P(over 2.5). Flat means the quotes are placeholders, and anything graded
     or priced off them is fiction.
     """
-    markets = (
-        session.query(Market)
-        .filter(Market.status == "active", Market.line.isnot(None),
-                Market.market_type.in_(("game_total", "total", "team_total", "series_total")))
-        .all()
-    )
-    snaps = _latest_snapshots(session, [m.id for m in markets])
+    all_markets, snaps = _active_with_snapshots(session, cache)
+    markets = [
+        m for m in all_markets
+        if m.line is not None
+        and m.market_type in ("game_total", "total", "team_total", "series_total")
+    ]
     ladders: dict = defaultdict(dict)
     for m in markets:
         sn = snaps.get(m.id)
@@ -106,7 +121,7 @@ def flat_ladders(session: Session) -> list[dict]:
     return [{"sport": s, "count": n} for s, n in sorted(out.items(), key=lambda x: -x[1])]
 
 
-def resolved_looking_active_markets(session: Session, hours: int = 6) -> list[dict]:
+def resolved_looking_active_markets(session: Session, hours: int = 6, cache: dict | None = None) -> list[dict]:
     """Markets we still call active, priced at an extreme, on an event that
     already STARTED over `hours` ago.
 
@@ -132,8 +147,7 @@ def resolved_looking_active_markets(session: Session, hours: int = 6) -> list[di
             if (getattr(r, "match_date", None) or "") and str(r.match_date)[:10] < cutoff:
                 started.add((fk, r.id))
 
-    markets = session.query(Market).filter(Market.status == "active").all()
-    snaps = _latest_snapshots(session, [m.id for m in markets])
+    markets, snaps = _active_with_snapshots(session, cache)
     by: dict = defaultdict(int)
     for m in markets:
         sn = snaps.get(m.id)
@@ -244,6 +258,9 @@ def resolver_dependent_teams(session: Session) -> list[dict]:
     return out
 
 
+_CACHE_AWARE = {"phantom_priced_markets", "flat_ladders", "resolved_looking_active_markets"}
+
+
 def run_all(session: Session) -> dict:
     """Every invariant, as {check_name: rows}. Never raises -- a check that
     fails is reported as an error string rather than taking the whole report
@@ -256,10 +273,11 @@ def run_all(session: Session) -> dict:
         "finished_without_result": finished_without_result,
         "resolver_dependent_teams": resolver_dependent_teams,
     }
+    cache: dict = {}
     out: dict = {}
     for name, fn in checks.items():
         try:
-            out[name] = fn(session)
+            out[name] = fn(session, cache=cache) if name in _CACHE_AWARE else fn(session)
         except Exception as exc:
             log.exception("integrity check %s failed", name)
             out[name] = [{"error": str(exc)}]

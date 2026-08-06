@@ -234,7 +234,17 @@ export function describePick(row: PickLike): string {
   if (marketType === "series_total" && line !== null) return `${side === "under" ? "Under" : "Over"} ${line} maps`;
   if (line === null) return team ?? "—";
   if (marketType.startsWith("spread") || marketType === "game_spread") {
-    if (sport === "soccer" && team) return `${team} wins by ${Math.ceil(line)}+ goals`;
+    // Soccer's branch assumed the line is always positive and rendered
+    // Math.ceil(line) raw, so a negative line printed "wins by -1+ goals".
+    // Latent rather than live -- all 471 soccer game_spread markets carry a
+    // positive line (1.5/2.5/3.5/4.5) -- but it was silent nonsense waiting for
+    // the first negative one, and it is the same sign-blindness that produced
+    // the inverted handicap label. Caught by findConventionViolations.
+    if (sport === "soccer" && team) {
+      return line < 0
+        ? `${team} doesn't lose by ${Math.ceil(Math.abs(line))}+ goals`
+        : `${team} wins by ${Math.ceil(line)}+ goals`;
+    }
     return team ? describeSpreadPick(team, line) : String(line);
   }
   // total/team_total/half-totals AND every remaining ladder market (win_total,

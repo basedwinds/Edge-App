@@ -4,6 +4,7 @@ import { PageShell } from "../components/layout/PageShell";
 import { StatTile } from "../components/markets/StatTile";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchHealthCheck, type HealthIssue } from "../api/health";
+import { findConventionViolations } from "../utils/labelConsistency";
 
 const SPORT_LABEL: Record<string, string> = {
   nfl: "NFL", nba: "NBA", wnba: "WNBA", mlb: "MLB", mma: "MMA", tennis: "Tennis",
@@ -48,6 +49,10 @@ export function Health() {
     refetchOnWindowFocus: true,
   });
 
+  // Pure function over pickLabel itself -- no data, no fetch -- so it is cheap
+  // to recompute on render and always reflects the CURRENT label code.
+  const labelViolations = findConventionViolations();
+
   return (
     <PageShell title="Health Check">
       <div className="flex items-center justify-between mb-4">
@@ -84,7 +89,30 @@ export function Health() {
             <StatTile label="Info" value={String(data.counts.info)} sublabel="expected / context" />
           </div>
 
-          {data.issues.length === 0 ? (
+          {/* Label-vs-model convention check. Runs client-side because the
+              labels live here, not in the API -- the backend's integrity checks
+              cannot see a label that describes the wrong side of correct data,
+              which is exactly the defect this exists for. Pure function, no
+              data fetch. */}
+          {labelViolations.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {labelViolations.map((v, i) => (
+                <div
+                  key={i}
+                  className="rounded-lg border border-[var(--color-bad)]/30 bg-[var(--color-bad)]/10 px-4 py-3 text-sm"
+                >
+                  <div className="flex items-center gap-2 font-medium text-[var(--color-bad)]">
+                    <XCircle size={15} /> Label describes the wrong side — {v.sport} {v.marketType}
+                  </div>
+                  <div className="text-[var(--color-text-muted)] mt-1">
+                    line {v.line > 0 ? `+${v.line}` : v.line} renders as “{v.label}” — {v.expected}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {data.issues.length === 0 && labelViolations.length === 0 ? (
             <div className="flex items-center gap-2 rounded-lg border border-[var(--color-good)]/30 bg-[var(--color-good)]/10 px-4 py-6 text-sm text-[var(--color-good)]">
               <CheckCircle2 size={18} /> All clear — no data-integrity issues detected.
             </div>
