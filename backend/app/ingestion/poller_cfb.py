@@ -75,6 +75,58 @@ def refresh_cfb_ratings():
     elo_service_cfb.refresh_ratings()
 
 
+def refresh_kalshi_cfb_spread():
+    """KXNCAAFSPREAD -- priced from game_lines_cfb, whose slope and spread were
+    fitted on 4,836 CFB games (NFL's constants are 3.3x off; see that module).
+
+    Team resolution and game matching are the SAME path the moneyline uses, on
+    purpose: a 130-team sport needs both the ticker suffix and the display name,
+    and the opponent is recovered from the other rows sharing this event. The
+    only addition is `line`.
+
+    The opponent lookup deliberately reuses the spread rows themselves -- a
+    spread event carries rungs for BOTH teams, so the opposing team appears in
+    this same list, exactly as it does for moneyline.
+    """
+    schedule = _load_schedule_readonly()
+    if not schedule:
+        log.info("cfb spread: no schedule rows yet, skipping")
+        return
+    game_index = build_game_index(schedule)
+    known = {g["home_abbr"] for g in schedule} | {g["away_abbr"] for g in schedule}
+    name_index = _NAME_INDEX_CACHE.get("index") or {}
+
+    rows = kalshi_cfb_client.get_spread_markets()
+    if not rows:
+        # Not an error: Kalshi lists CFB spreads near game week, and the series
+        # had zero markets in every status when this was built (2026-08-06).
+        log.info("cfb spread: no open markets listed")
+        return
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            matched = unmatched = unresolved = 0
+            for row in rows:
+                team = resolve_team(row.get("team_abbr_kalshi"), row.get("display_name"), name_index, known)
+                parsed = parse_kalshi_event_ticker(row["event_ticker"])
+                if team is None or parsed is None:
+                    unresolved += 1
+                    continue
+                opponent = _opponent_for(row["event_ticker"], rows, name_index, known, team)
+                game_id = (
+                    match_game(team, opponent, parsed["date"], game_index)
+                    or match_game(opponent, team, parsed["date"], game_index)
+                ) if opponent else None
+                matched += game_id is not None
+                unmatched += game_id is None
+                market_catalog_cfb.upsert_kalshi_cfb_spread_market(session, dict(row, team=team), game_id)
+            session.commit()
+            log.info("kalshi cfb spread: %d rows, %d matched, %d unmatched, %d unresolved",
+                     len(rows), matched, unmatched, unresolved)
+        finally:
+            session.close()
+
+
 def refresh_kalshi_cfb_moneyline():
     schedule = _load_schedule_readonly()
     if not schedule:
@@ -254,6 +306,7 @@ def settle_placed_bets_cfb():
 def run_full_refresh_cfb():
     for step in (refresh_cfb_games, refresh_cfb_ratings, refresh_cfb_season_sim,
                  refresh_cfb_conference_sim, refresh_kalshi_cfb_moneyline,
+                 refresh_kalshi_cfb_spread,
                  refresh_kalshi_cfb_win_totals, refresh_kalshi_cfb_conference_futures,
                  refresh_cfb_playoff_sim, refresh_kalshi_cfb_playoff_futures):
         try:

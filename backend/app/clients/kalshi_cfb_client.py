@@ -90,6 +90,66 @@ def get_moneyline_markets() -> list[dict]:
     return out
 
 
+def get_spread_markets() -> list[dict]:
+    """One row per (game, team, line) for the KXNCAAFSPREAD ladders.
+
+    THE LINE COMES FROM floor_strike, NOT FROM THE TICKER. NFL's equivalent
+    ticker ends "-KC8" for a 7.5-point line -- the trailing digit is a rung
+    INDEX, not the line -- so parsing the number out of the ticker would be off
+    by one and silently mis-price every rung. floor_strike carries the real
+    threshold (verified live on KXNFLSPREAD: -KC8 has floor_strike 7.5, -KC7 has
+    6.5). Reading it directly also means this does not depend on the rung
+    numbering scheme staying the same.
+
+    TEAM RESOLUTION mirrors get_moneyline_markets and for the same reason: 130
+    teams cannot be covered by an alias table, so market_matcher_cfb.resolve_team
+    needs the ticker suffix AND a display name. The suffix here carries a
+    trailing rung index ("ND3"), stripped below. The sub-title is a full
+    sentence ("Notre Dame wins by over 3.5 points") rather than the bare team
+    name the moneyline markets give, so the phrase is trimmed back to the team.
+
+    STRUCTURE IS INFERRED, NOT OBSERVED -- stated plainly because it matters.
+    KXNCAAFSPREAD is a real series ("College Football Spread", confirmed via
+    /series) but has ZERO markets in every status as of 2026-08-06: Kalshi opens
+    spreads near game week and the season starts late August. The shape above is
+    taken from the two verified neighbours -- KXNFLSPREAD's live rung markets and
+    KXNCAAFGAME's live event/suffix convention -- and deliberately leans on
+    floor_strike so the one unobservable part (rung numbering) cannot break it.
+    Re-check the first time real markets appear.
+    """
+    try:
+        data = get_json(f"{KALSHI_BASE}/markets?series_ticker={SPREAD_SERIES}&status=open&limit=1000")
+    except Exception:
+        log.exception("kalshi cfb spread fetch failed")
+        return []
+    out = []
+    for m in data.get("markets", []):
+        ticker = m.get("ticker") or ""
+        line = _to_float(m.get("floor_strike"))
+        if not ticker or not m.get("event_ticker") or line is None:
+            continue  # no threshold -> nothing to price against, don't guess one
+        suffix = ticker.rsplit("-", 1)[-1] if "-" in ticker else ""
+        team = suffix.rstrip("0123456789")
+        if not team:
+            continue
+        sub = (m.get("yes_sub_title") or "").strip()
+        display = sub.split(" wins by")[0].strip() or None
+        out.append({
+            "ticker": ticker,
+            "event_ticker": m["event_ticker"],
+            "team_abbr_kalshi": team,
+            "display_name": display,
+            "line": line,
+            "close_time": m.get("close_time") or m.get("expiration_time"),
+            "status": m.get("status") or "active",
+            "last_price": _to_float(m.get("last_price_dollars")),
+            "yes_bid": _to_float(m.get("yes_bid_dollars")),
+            "yes_ask": _to_float(m.get("yes_ask_dollars")),
+            "volume": _to_float(m.get("volume_fp")),
+        })
+    return out
+
+
 def get_win_total_markets() -> list[dict]:
     """One row per (team, win threshold) for the KXNCAAFWINS ladders.
 

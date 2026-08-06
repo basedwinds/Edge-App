@@ -69,6 +69,42 @@ def upsert_kalshi_cfb_moneyline_market(session: Session, row: dict, cfb_game_id:
     return market
 
 
+def upsert_kalshi_cfb_spread_market(session: Session, row: dict, cfb_game_id: str | None) -> Market:
+    """KXNCAAFSPREAD -- one market per (game, team, line).
+
+    Same shape as the moneyline upsert plus `line`, which holds the market's
+    floor_strike (the real threshold) and NOT the rung index from the ticker --
+    see kalshi_cfb_client.get_spread_markets on why those differ.
+    """
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi",
+            source_ticker=row["ticker"],
+            source_event_id=row["event_ticker"],
+            market_type="spread",
+            sport="cfb",
+        )
+        session.add(market)
+    market.cfb_game_id = cfb_game_id
+    market.team = row["team"]          # already an ESPN abbreviation, as above
+    market.line = row["line"]
+    market.status = row.get("status") or "active"
+    session.flush()
+
+    session.add(
+        MarketSnapshot(
+            market_id=market.id,
+            ts=datetime.datetime.utcnow(),
+            yes_bid=row.get("yes_bid"),
+            yes_ask=row.get("yes_ask"),
+            last_price=row.get("last_price"),
+            volume=row.get("volume"),
+        )
+    )
+    return market
+
+
 def upsert_kalshi_cfb_win_total_market(session: Session, row: dict, team: str) -> Market:
     """Season win-total ladder. No cfb_game_id -- this is a season-long market,
     not tied to any single game, same shape as the soccer team-points ladders."""

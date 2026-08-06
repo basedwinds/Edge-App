@@ -4,8 +4,8 @@ SEPARATE FROM game_lines.py ON PURPOSE. Reusing NFL's constants here would have
 been badly wrong, and the size of the error is the reason this module exists:
 
                      NFL          CFB (fitted)
-    MARGIN_SLOPE     0.04146      0.13636      3.3x steeper
-    MARGIN_STD       13.52        19.82        47% wider
+    MARGIN_SLOPE     0.04146      0.08569      2.1x steeper
+    MARGIN_STD       13.52        19.16        42% wider
 
 College football has a far wider talent spread than the NFL -- mismatches are
 routine and blowouts are ordinary -- so a given Elo gap converts to many more
@@ -20,18 +20,29 @@ actual margin regressed on the pre-game Elo difference.
 
 OUT-OF-SAMPLE, holding each season out and fitting on the other four:
 
-    2021  n=976  slope(train)=0.13311  held-out sd=20.75  mean resid=-0.61
-    2022  n=971  slope(train)=0.13773  held-out sd=19.90  mean resid=-1.04
-    2023  n=966  slope(train)=0.13715  held-out sd=19.34  mean resid=-0.58
-    2024  n=965  slope(train)=0.13952  held-out sd=19.77  mean resid=-0.51
-    2025  n=958  slope(train)=0.13468  held-out sd=19.32  mean resid=+0.63
+    2021  n=976  slope(train)=0.08401  held-out sd=20.10  mean resid=-0.28
+    2022  n=971  slope(train)=0.08744  held-out sd=19.40  mean resid=-0.99
+    2023  n=966  slope(train)=0.08635  held-out sd=18.70  mean resid=-0.36
+    2024  n=965  slope(train)=0.08674  held-out sd=18.97  mean resid=-0.25
+    2025  n=958  slope(train)=0.08405  held-out sd=18.58  mean resid=+0.87
 
-The slope moves only between 0.133 and 0.140 across folds and the held-out
+The slope moves only between 0.084 and 0.087 across folds and the held-out
 residual is centred within about a point, so this is a stable fit rather than
 one season's quirk.
 
-HOME-FIELD ADVANTAGE was swept rather than assumed: 55 Elo points leaves the
-least-biased residual (-0.42 points, against +6.54 at zero and -1.88 at 100).
+FITTED ON THE APP'S OWN ELO SCALE, which is the whole reason these numbers are
+trustworthy. The first attempt hand-rolled its own Elo replay and produced
+slope 0.13636 -- unusable, because elo_service_cfb builds ratings through
+EloState/update_ratings and the two scales differ by 3.6x (sd 60 vs 218 over all
+257 shared teams, regression slope 3.349). Applying the narrow-scale slope to
+the wide-scale ratings overstated every margin by that factor, which showed up
+as a 99.7% cover probability on a game the moneyline model priced at 86%.
+Caught before shipping; the replay now uses the app's own primitives.
+
+HOME-FIELD ADVANTAGE was swept rather than assumed: 80 Elo points leaves the
+least-biased residual (-0.20 points, against +6.20 at zero and -0.97 at 100).
+It is larger than elo.py's 55 because that constant is fitted for WIN
+probability, not for margin -- a difference worth keeping visible.
 
 NO TOTALS MODEL HERE, and that is a measured decision, not an omission. A
 per-team offence/defence scoring model was built and walk-forward tested on the
@@ -49,11 +60,11 @@ closing line.
 import math
 
 # Points of margin per Elo point of pre-game difference. See module docstring.
-MARGIN_SLOPE = 0.13636
+MARGIN_SLOPE = 0.08569
 # Standard deviation of actual margin around that prediction.
-MARGIN_STD = 19.82
+MARGIN_STD = 19.16
 # Elo points of home-field advantage, swept for the least-biased residual.
-HOME_FIELD_ADV = 55.0
+HOME_FIELD_ADV = 80.0
 
 
 def _norm_cdf(x: float, mu: float, sigma: float) -> float:

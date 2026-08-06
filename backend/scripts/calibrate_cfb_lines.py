@@ -15,17 +15,25 @@ Reports out-of-sample by season -- fit on prior seasons, score the held-out one
 -- because a slope fitted and scored on the same games flatters itself.
 """
 import json
-import math
 import statistics
-from collections import defaultdict
+
+from app.models.baseline.elo import EloState, effective_home_field_adv, update_ratings
 
 CACHE = "data/cfb_game_cache.json"
-K = 20.0            # matches elo_service_cfb's update size
-HOME_ADV = 55.0     # CFB home edge in Elo points, fitted below and reported
-BASE = 1500.0
-REVERT = 0.25       # season-to-season regression toward the mean
 
-
+# CRITICAL: THE REPLAY MUST USE THE APP'S OWN ELO PRIMITIVES.
+#
+# The first version of this script hand-rolled its own Elo (K=20, HFA=55, 25%
+# season reversion) and fitted a slope of 0.13636 on it. That number was
+# unusable: elo_service_cfb builds ratings through EloState/update_ratings, and
+# a direct comparison of the two scales over all 257 shared teams gave sd 60 for
+# the hand-rolled replay against sd 218 for the service -- a 3.6x difference,
+# regression slope 3.349. Applying a slope fitted on the narrow scale to the
+# wide one overstates every margin by that factor, which is what surfaced as a
+# 99.7% cover probability on a game the moneyline model put at 86%.
+#
+# Fitting against the app's own primitives is the only way the constant can be
+# valid where it is USED. Anything else silently re-derives a different sport.
 def load():
     d = json.load(open(CACHE))
     rows = [g for g in d.values()
@@ -34,25 +42,20 @@ def load():
     return rows
 
 
-def replay(rows, home_adv=HOME_ADV):
-    """Yield (elo_diff_pre_game, actual_home_margin, season) per game."""
-    r = defaultdict(lambda: BASE)
-    season = None
+def replay(rows, home_adv=None):
+    """(elo_diff_pre_game, home_margin, season, total) per game, on the SERVICE's
+    rating scale -- same EloState, same update_ratings, same season handling."""
+    state = EloState()
     out = []
     for g in rows:
-        if g["season"] != season:
-            season = g["season"]
-            for t in list(r):  # carry ratings across seasons, partially reverted
-                r[t] = BASE + (r[t] - BASE) * (1 - REVERT)
+        state.start_season_if_new(g["season"])
         h, a = g["home_abbr"], g["away_abbr"]
-        neutral = bool(g.get("neutral"))
-        diff = (r[h] + (0.0 if neutral else home_adv)) - r[a]
+        adv = (effective_home_field_adv(bool(g.get("neutral")))
+               if home_adv is None else (0.0 if g.get("neutral") else home_adv))
+        diff = (state.get(h) + adv) - state.get(a)
         margin = g["home_score"] - g["away_score"]
-        out.append((diff, margin, season, g["home_score"] + g["away_score"]))
-        exp = 1.0 / (1.0 + 10 ** (-diff / 400.0))
-        actual = 1.0 if margin > 0 else (0.5 if margin == 0 else 0.0)
-        r[h] += K * (actual - exp)
-        r[a] -= K * (actual - exp)
+        out.append((diff, margin, g["season"], g["home_score"] + g["away_score"]))
+        update_ratings(state, h, a, g["home_score"], g["away_score"], adv)
     return out
 
 

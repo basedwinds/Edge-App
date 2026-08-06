@@ -1,10 +1,15 @@
-"""College-football markets API -- parallel to routers/wnba_markets.py,
-moneyline scope.
+"""College-football markets API -- parallel to routers/wnba_markets.py.
 
-Moneyline only, on purpose: KXNCAAFSPREAD and KXNCAAFTOTAL exist as series but
-had zero open markets as of 2026-08-02, and elo_cfb is a win-probability model
-with no validated margin or totals layer. Adding either would mean shipping
-constants nothing measured.
+Moneyline and SPREAD. The spread was added 2026-08-06 once a CFB margin model
+existed to price it: game_lines_cfb, fitted on 4,836 games (2021-25) with a
+slope 3.3x NFL's and a 47% wider spread, stable across held-out seasons. Before
+that this file said "moneyline only, on purpose" because adding a spread would
+have meant shipping constants nothing measured -- which was right at the time.
+
+TOTALS ARE STILL ABSENT, and now for a measured reason rather than an absent
+one: a per-team CFB scoring model was walk-forward tested and beat the running
+league average by only 4.8% (13.01 vs 13.66 mean absolute error). Too thin to
+stake, so KXNCAAFTOTAL/KXNCAAFTEAMTOTAL stay unpriced.
 
 model_validated is always False, and for CFB that matters more than usual: the
 Elo's ~0.186 Brier / 71% accuracy looks far stronger than WNBA's 0.222 / 65.4%,
@@ -24,7 +29,7 @@ from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import CfbGame, Market
 from app.models import calibration_temp
-from app.models import playoff_sim_cfb, season_sim_cfb
+from app.models import game_lines_cfb, playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
 from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
 from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, size_stake_dollars
@@ -38,7 +43,7 @@ WEAK_POOL_NOTE = "rating built outside FBS play - tracking only"
 
 
 
-GAME_MARKET_TYPES = {"moneyline"}
+GAME_MARKET_TYPES = {"moneyline", "spread"}
 # Season-long ladders -- no cfb_game_id, priced from the season Monte Carlo
 # rather than a single game's Elo.
 SEASON_MARKET_TYPES = {
@@ -111,6 +116,32 @@ class CfbMarketOut(BaseModel):
     suggested_stake_dollars: float | None
     suggested_stake_units: float | None
     stake_pool: str | None
+
+
+def _spread_model_prob(m: Market, game: CfbGame) -> float | None:
+    """P(this team wins by MORE than m.line), from game_lines_cfb.
+
+    Unrated teams are refused for the same reason the moneyline refuses them --
+    an unrated side would otherwise be priced at the base rating, fabricating a
+    line-cover probability out of a team we know nothing about.
+
+    NO TEMPERATURE HERE, deliberately. calibration_temp's T=1.26 was fitted on
+    CFB moneyline WIN probabilities; it is a correction to that model's
+    over-confidence, not a general CFB constant. The margin model has its own
+    fitted spread (MARGIN_STD 19.82, stable out of sample), so applying a
+    temperature fitted for a different quantity would be double-correcting with
+    a number that was never measured against margins.
+    """
+    if m.team is None or m.line is None:
+        return None
+    if not (elo_service_cfb.is_rated(game.home_team) and elo_service_cfb.is_rated(game.away_team)):
+        return None
+    home_r = elo_service_cfb.rating(game.home_team)
+    away_r = elo_service_cfb.rating(game.away_team)
+    if home_r is None or away_r is None:
+        return None
+    elo_diff = game_lines_cfb.elo_diff_for(home_r, away_r, neutral=bool(game.neutral))
+    return round(game_lines_cfb.prob_team_covers(m.team == game.home_team, m.line, elo_diff), 4)
 
 
 def _moneyline_model_prob(m: Market, game: CfbGame) -> float | None:
@@ -252,6 +283,10 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             model_prob, no_baseline_reason = _cfb_season_model_prob(m, win_dist, sim_trials, po_sim, conf_sim)
         elif game is None:
             no_baseline_reason = "Not linked to a scheduled game yet."
+        elif m.market_type == "spread":
+            model_prob = _spread_model_prob(m, game)
+            if model_prob is None:
+                no_baseline_reason = "No baseline -- at least one team has no rating history (likely a non-FBS opponent)."
         else:
             model_prob = _moneyline_model_prob(m, game)
             if model_prob is None:
