@@ -8,15 +8,16 @@ market-odds edge read (the standalone scripts/backtest_wnba_market.py measured
 import datetime
 import logging
 
-from app.clients import kalshi_wnba_client
+from app.clients import espn_wnba_client, kalshi_wnba_client
 from app.clients import polymarket_wnba_client
 from app.db.database import SessionLocal
-from app.db.models import WnbaGame
+from app.db.models import Market, WnbaGame
 from app.ingestion import market_catalog_wnba, wnba_data
 from app.ingestion.market_matcher_wnba import build_game_index, match_kalshi_event_ticker, match_polymarket_slug
 from app.ingestion.poller_lock import db_write_lock
 from app.models import season_sim_wnba
 from app.models.baseline import elo_service_wnba
+from app.models.news_adjustment.injury_rules_wnba import compute_injury_adjustment
 
 log = logging.getLogger("poller_wnba")
 
@@ -214,8 +215,72 @@ def settle_placed_bets_wnba():
             session.close()
 
 
+def refresh_wnba_news_adjustments():
+    """Availability adjustment for tracked, not-yet-played WNBA games.
+
+    INJURIES ONLY. The rest/schedule-spot half that poller_nba has was measured
+    for the WNBA and REJECTED -- flat and wrong-signed over 1,467 games, see
+    scripts/backtest_wnba_rest.py -- so it is deliberately absent rather than
+    ported across for symmetry.
+
+    Network first, DB second, per poller_lock.py: the injuries feed and the
+    per-player minutes lookups all happen with NO session open, then a single
+    write-locked session does the writes with no network left inside it.
+    """
+    injuries_by_team = espn_wnba_client.fetch_all_injuries()
+    # One stats call PER INJURED PLAYER, scoped to the small set actually on
+    # today's report (39 league-wide when checked) -- far too expensive to
+    # pre-fetch league-wide, cheap at this size. Built once, shared by every
+    # game below.
+    player_mpg: dict[str, float] = {}
+    for team_injuries in injuries_by_team.values():
+        for inj in team_injuries:
+            name, athlete_id = inj.get("player_name"), inj.get("athlete_id")
+            if not name or not athlete_id or name in player_mpg:
+                continue
+            mpg = espn_wnba_client.fetch_player_season_avg_minutes(athlete_id)
+            if mpg is not None:
+                player_mpg[name] = mpg
+
+    read_session = SessionLocal()
+    try:
+        tracked_ids = {
+            row[0] for row in read_session.query(Market.wnba_game_id)
+            .filter(Market.wnba_game_id.isnot(None)).distinct().all()
+        }
+        games = [
+            {"id": g.id, "home_team": g.home_team, "away_team": g.away_team}
+            for g in read_session.query(WnbaGame).filter(WnbaGame.id.in_(tracked_ids)).all()
+            if g.home_score is None and g.game_type != "PRE"
+        ] if tracked_ids else []
+    finally:
+        read_session.close()
+
+    if not games:
+        return
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            written = 0
+            for g in games:
+                adj = compute_injury_adjustment(
+                    injuries_by_team.get(g["home_team"]) or [],
+                    injuries_by_team.get(g["away_team"]) or [],
+                    player_mpg,
+                )
+                if adj is None:
+                    continue
+                market_catalog_wnba.upsert_wnba_news_adjustment(session, g["id"], adj)
+                written += 1
+            session.commit()
+            log.info("wnba news adjustments: %d of %d tracked games scored", written, len(games))
+        finally:
+            session.close()
+
+
 def run_full_refresh_wnba():
     refresh_wnba_games()
+    refresh_wnba_news_adjustments()
     # refresh_wnba_season_sim is NOT in this chain -- it runs as its own
     # scheduler job (see scheduler.py). It fetches its own season schedule and
     # needs only Elo, and refresh_wnba_games ahead of it is ~124 sequential ESPN

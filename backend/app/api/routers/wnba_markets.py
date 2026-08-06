@@ -8,7 +8,9 @@ Simpler than the NBA router in two real ways: (1) WNBA gametime is stored as a
 UTC clock reading paired with the UTC date (both split from ESPN's single ISO
 instant, see wnba_data.py), so the already-started guard combines them as UTC
 directly -- no per-arena timezone round-trip like the NBA needs; (2) no
-news/injury or futures layer is wired, so no news-blend handling here.
+futures layer is wired. An INJURY/availability layer now is (see
+injury_rules_wnba.py, calibrated on 602 real box scores); the rest/schedule-spot
+half was measured and rejected -- scripts/backtest_wnba_rest.py.
 """
 import datetime
 
@@ -21,7 +23,10 @@ from app.api.routers.settings import get_staking_params, get_flat_params, get_un
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import Market, WnbaGame
+from app.ingestion.market_catalog_wnba import wnba_news_cache_to_pydantic
 from app.models import calibration_temp
+from app.models.combine import combine_probability
+from app.models.news_adjustment.schema import NewsAdjustment
 from app.models import game_lines_wnba
 from app.models.baseline import elo_service_wnba, scoring_ratings_wnba
 from app.models.baseline.elo import implied_elo_diff
@@ -95,7 +100,21 @@ class WnbaMarketOut(BaseModel):
     stake_pool: str | None
 
 
-def _moneyline_model_prob(m: Market, game: WnbaGame) -> float | None:
+def _batch_news_adjustments(session: Session, game_ids: set[str]) -> dict[str, NewsAdjustment]:
+    """Cached availability adjustments for a slate, one query for the lot."""
+    if not game_ids:
+        return {}
+    from app.db.models import WnbaNewsAdjustmentCache
+
+    rows = (
+        session.query(WnbaNewsAdjustmentCache)
+        .filter(WnbaNewsAdjustmentCache.wnba_game_id.in_(game_ids))
+        .all()
+    )
+    return {r.wnba_game_id: wnba_news_cache_to_pydantic(r) for r in rows}
+
+
+def _moneyline_model_prob(m: Market, game: WnbaGame, news: NewsAdjustment | None = None) -> float | None:
     p_home = elo_service_wnba.get_home_win_prob(game.home_team, game.away_team, game.location)
     if p_home is None or m.team is None:
         return None
@@ -103,6 +122,12 @@ def _moneyline_model_prob(m: Market, game: WnbaGame) -> float | None:
     # well-calibrated/noise; see calibration_temp.py). Applied on the
     # home-perspective prob before flipping to the market's team side.
     p_home = calibration_temp.apply("wnba", p_home)
+    # Availability blend, applied on the HOME-perspective probability before
+    # the side flip -- same order every other sport uses, so an away-team row
+    # gets the exact mirror rather than a separately-derived number.
+    # is_divisional is False: the WNBA has no divisional-squeeze effect
+    # measured for it, same posture as the NBA router.
+    p_home = combine_probability(p_home, news, is_divisional=False)
     return round(p_home, 4) if m.team == game.home_team else round(1 - p_home, 4)
 
 
@@ -216,6 +241,9 @@ def list_wnba_markets(session: Session = Depends(get_session)):
     scoring = scoring_ratings_wnba.compute_current_scoring_ratings()
     game_ids = {m.wnba_game_id for m in markets if m.wnba_game_id}
     games_by_id = {g.id: g for g in session.query(WnbaGame).filter(WnbaGame.id.in_(game_ids)).all()} if game_ids else {}
+    # One query for the whole slate's availability adjustments, not one per
+    # market -- the same batching every other sport's router uses.
+    news_by_game = _batch_news_adjustments(session, game_ids)
     now_utc = datetime.datetime.now(datetime.timezone.utc)
 
     def _game_already_final(m: Market) -> bool:
@@ -267,7 +295,7 @@ def list_wnba_markets(session: Session = Depends(get_session)):
         elif game is not None:
             no_baseline_reason = NO_BASELINE_REASONS.get(game.game_type)
             if no_baseline_reason is None and m.market_type == "moneyline":
-                model_prob = _moneyline_model_prob(m, game)
+                model_prob = _moneyline_model_prob(m, game, news_by_game.get(m.wnba_game_id))
             elif no_baseline_reason is None and m.market_type == "spread":
                 model_prob = _spread_model_prob(m, game)
             elif no_baseline_reason is None and m.market_type == "total":
@@ -386,7 +414,8 @@ def get_wnba_market_reasoning(
         methodology=(
             "Walk-forward team Elo (K=32, home-court +30, 1/3 season regression), fit on 1,540 ESPN "
             "games 2021-2026. Brier 0.222 / 65.4% in backtest; the market beats it by ~0.008 Brier "
-            "(model_validated: false). No injury/rest/news layer is wired for WNBA yet."
+            "(model_validated: false). Availability/injury adjustments are applied; a rest "
+            "adjustment was measured for the WNBA and rejected as noise."
         ),
         factors=factors,
         caveats=[

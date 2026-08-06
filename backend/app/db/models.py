@@ -818,6 +818,26 @@ class NbaNewsAdjustmentCache(Base):
     computed_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
 
 
+class WnbaNewsAdjustmentCache(Base):
+    """Cached result of the WNBA availability pass (injury_rules_wnba.py).
+
+    Its own table for the same reason NBA's is: the primary key is this
+    sport's own game id. WNBA carries injuries ONLY -- the rest/schedule-spot
+    half that NBA has was measured for the WNBA and rejected (flat, wrong-
+    signed slope over 1,467 games; see scripts/backtest_wnba_rest.py), so
+    there is deliberately nothing here for it.
+    """
+
+    __tablename__ = "wnba_news_adjustment_cache"
+
+    wnba_game_id = Column(String, ForeignKey("wnba_games.id"), primary_key=True)
+    adjustment_pct = Column(Float, nullable=False)
+    confidence = Column(String, nullable=False)
+    factors_json = Column(String, nullable=False)
+    requires_review = Column(Integer, nullable=False)
+    computed_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+
+
 class MlbNewsAdjustmentCache(Base):
     """Cached result of the free, rule-based MLB situational-factors pass
     (position-player injuries only so far -- see

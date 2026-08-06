@@ -4,12 +4,14 @@ written on each moneyline upsert is what gives WNBA real closing-price capture
 (and therefore CLV) for free, the same mechanism every other sport uses.
 """
 import datetime
+import json
 
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
-from app.db.models import Market, MarketSnapshot, WnbaGame
+from app.db.models import Market, MarketSnapshot, WnbaGame, WnbaNewsAdjustmentCache
 from app.ingestion.market_matcher_wnba import to_espn_abbr
+from app.models.news_adjustment.schema import NewsAdjustment
 
 
 def upsert_wnba_games(session: Session, games: list[dict]) -> int:
@@ -243,3 +245,26 @@ def upsert_kalshi_wnba_standings_market(session: Session, row: dict) -> Market:
         )
     )
     return market
+
+
+def wnba_news_cache_to_pydantic(cache) -> NewsAdjustment:
+    return NewsAdjustment(
+        adjustment_pct=cache.adjustment_pct,
+        confidence=cache.confidence,
+        factors=json.loads(cache.factors_json),
+        requires_review=bool(cache.requires_review),
+    )
+
+
+def upsert_wnba_news_adjustment(session: Session, wnba_game_id: str, adj: NewsAdjustment):
+    """One cached availability adjustment per tracked WNBA game."""
+    row = session.get(WnbaNewsAdjustmentCache, wnba_game_id)
+    if row is None:
+        row = WnbaNewsAdjustmentCache(wnba_game_id=wnba_game_id)
+        session.add(row)
+    row.adjustment_pct = adj.adjustment_pct
+    row.confidence = adj.confidence
+    row.factors_json = json.dumps([f.model_dump() for f in adj.factors])
+    row.requires_review = int(adj.requires_review)
+    row.computed_at = datetime.datetime.utcnow()
+    return row
