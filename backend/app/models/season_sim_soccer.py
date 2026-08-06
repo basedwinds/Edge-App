@@ -126,6 +126,26 @@ RELEGATION_ZONE_SIZE = {
 # all 1,072 team-seasons this model has never put a historically top-half club
 # above 30% relegation, so a live number like that is extrapolation with no
 # validation behind it in either direction.
+#
+# SHRINKING TOWARD THE PRIOR WAS TESTED AND REJECTED TOO (2026-08-05).
+# p' = base + lam*(p - base), base = zone_size/n_teams, swept over the same
+# 1,072 predictions:
+#
+#     lam   1.00 gap 1.70pp | 0.95 gap 1.22pp | 0.90 1.63pp | 0.80 1.92pp | 0.75 2.18pp
+#
+# All 11 folds fitted lam=0.95, but held-out it is a COIN FLIP -- 6 seasons
+# better, 5 worse -- and 0.95 barely moves the band it was meant to fix (the
+# >=40% gap only closes -10.8pp -> -9.6pp). The lam that DOES fix the tail
+# (0.75 takes that gap to -2.9pp) makes pooled calibration clearly WORSE,
+# because it drags the large, already-correct low-probability mass off target
+# to rescue 57 predictions.
+#
+# So the tail bias is real but a global shrink is the wrong instrument, and a
+# tail-only correction would be fitted on 57 points spread over 11 seasons --
+# roughly 5 per fold, which cannot be validated. Left documented rather than
+# "fixed" with something unvalidatable. ONLY the four soccer market types
+# ABOVE relegation were checked clean (league_winner 1.19pp, top2 1.13pp,
+# top4 1.70pp, top_half 2.26pp), so this is specific to relegation, not the sim.
 
 # Real, data-grounded promotion discount -- derived 2026-07-19 from 476
 # genuine historical promotion events across all 5 leagues (see
