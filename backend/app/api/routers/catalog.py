@@ -38,6 +38,11 @@ class CatalogEntryOut(BaseModel):
     category: str
     category_note: str
     auto_priceable: bool
+    # The human's own reason, distinct from `category_note` (which is the
+    # auto-classifier's guess). Only this one records a DECISION -- what was
+    # concluded and what would unblock it. See CatalogEntry.note.
+    note: str | None = None
+    disposition: str | None = None
 
     class Config:
         from_attributes = True
@@ -49,6 +54,7 @@ def _to_out(r: CatalogEntry) -> CatalogEntryOut:
         id=r.id, platform=r.platform, identifier=r.identifier, title=r.title,
         sport=r.sport, first_seen=r.first_seen.isoformat(),
         category=category, category_note=note, auto_priceable=is_auto_priceable(category),
+        note=r.note, disposition=r.disposition,
     )
 
 
@@ -64,6 +70,11 @@ class DismissIn(BaseModel):
     # dismissed, so a real "worth doing" decision doesn't depend on
     # someone remembering it later.
     disposition: str = "not_relevant"
+    # Optional free-text reason, stored on the entry. Worth writing for BOTH
+    # dispositions: on a flag it says what would unblock the build, and on a
+    # not_relevant it says why, so a later scan re-surfacing the same series
+    # does not restart the analysis from nothing.
+    note: str | None = None
 
 
 @router.get("/new", response_model=list[CatalogEntryOut])
@@ -98,6 +109,8 @@ def dismiss_entry(entry_id: int, body: DismissIn = DismissIn(), session: Session
     if row is not None:
         row.dismissed = 1
         row.disposition = body.disposition
+        if body.note:
+            row.note = body.note
         session.commit()
     return {"status": "ok"}
 

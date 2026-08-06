@@ -455,6 +455,12 @@ export interface CatalogEntryPayload {
   category: "news" | "stat_leader" | "futures" | "match_outcome" | "review";
   category_note: string;
   auto_priceable: boolean;
+  /** The HUMAN's recorded reason -- why this was deferred or dismissed, and
+   * what would unblock it. Distinct from `category_note`, which is only the
+   * auto-classifier's guess about what KIND of market this is. A flagged entry
+   * without one is indistinguishable from one nobody has looked at. */
+  note?: string | null;
+  disposition?: string | null;
 }
 
 export async function fetchNewCatalogEntries(): Promise<CatalogEntryPayload[]> {
@@ -470,8 +476,12 @@ export async function fetchFlaggedCatalogEntries(): Promise<CatalogEntryPayload[
  * see catalog.py's DismissIn docstring: this does NOT auto-build
  * ingestion, it just keeps the entry in a persistent backlog instead of
  * letting the decision vanish the moment it's dismissed). */
-export async function dismissCatalogEntry(id: number, disposition: "not_relevant" | "flagged" = "not_relevant"): Promise<{ status: string }> {
-  return apiPost(`/catalog/${id}/dismiss`, { disposition });
+export async function dismissCatalogEntry(
+  id: number,
+  disposition: "not_relevant" | "flagged" = "not_relevant",
+  note?: string,
+): Promise<{ status: string }> {
+  return apiPost(`/catalog/${id}/dismiss`, { disposition, note });
 }
 
 export async function resolveFlaggedCatalogEntry(id: number): Promise<{ status: string }> {

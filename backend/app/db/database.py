@@ -76,6 +76,7 @@ _MISSING_COLUMNS_BY_TABLE = {
     "catalog_entries": [
         ("sport", "VARCHAR"),
         ("disposition", "VARCHAR"),
+        ("note", "VARCHAR"),
     ],
     "race_events": [
         ("result_json", "VARCHAR"),

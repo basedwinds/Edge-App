@@ -683,6 +683,16 @@ class CatalogEntry(Base):
     last_seen = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
     dismissed = Column(Integer, nullable=False, default=0)  # 0/1, sqlite has no bool
     disposition = Column(String, nullable=True)  # null (undecided) | "bootstrapped" | "flagged" -- set on dismiss, see catalog.py
+    # WHY a free-text note and not just the disposition (added 2026-08-06, at
+    # the user's request while triaging the backlog): "flagged" says an entry is
+    # deferred but not WHY, so a deferred item is indistinguishable from one
+    # nobody has looked at -- "I don't want to think they're just sitting
+    # there". This records the actual blocker in the user's own terms, e.g.
+    # "quoted but zero traded volume, revisit when volume appears" or "needs a
+    # Serie C results source". It is decision provenance: when a scan
+    # re-surfaces the same series months later, the reasoning is still attached
+    # instead of being re-derived from scratch.
+    note = Column(String, nullable=True)
 
 
 class PlacedBet(Base):

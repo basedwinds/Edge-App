@@ -160,6 +160,16 @@ export function NewMarkets() {
                   <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
                     {entry.identifier} · flagged {new Date(entry.first_seen).toLocaleDateString()}
                   </div>
+                  {/* The whole point of the backlog: WHY it's waiting and what
+                      would unblock it. Without this a flagged row is
+                      indistinguishable from one nobody has looked at, which is
+                      exactly the "am I just staring at a list that sits there?"
+                      problem this list is supposed to solve. */}
+                  {entry.note && (
+                    <div className="text-xs text-[var(--color-text-dim)] mt-1.5 leading-relaxed border-l-2 border-[var(--color-border)] pl-2">
+                      {entry.note}
+                    </div>
+                  )}
                 </div>
                 <button
                   onClick={() => handleResolveFlagged(entry.id)}
