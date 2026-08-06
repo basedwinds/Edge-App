@@ -488,7 +488,16 @@ def settle_placed_bets():
             session.close()
 
     try:
-        from app.ingestion.market_resolution_settlement import settle_from_kalshi_resolution
+        from app.ingestion.market_resolution_settlement import (
+            reconcile_kalshi_market_status, settle_from_kalshi_resolution,
+        )
+        # Status FIRST, then settle. A market that resolved is otherwise frozen
+        # at "active" forever -- the per-sport refreshes only fetch OPEN markets,
+        # so nothing ever walks back over it -- and the routers filter on
+        # status == "active", so it stays priceable and recommendable at a 0/1
+        # price. Reconciling first also means the settle pass below sees an
+        # accurate board.
+        reconcile_kalshi_market_status()
         settle_from_kalshi_resolution()
     except Exception:
         log.exception("kalshi-resolution settlement failed")

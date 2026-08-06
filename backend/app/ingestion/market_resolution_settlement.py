@@ -43,6 +43,85 @@ def _fetch_resolutions(tickers: list[str]) -> dict:
     return out
 
 
+def _fetch_statuses(tickers: list[str]) -> dict:
+    """{ticker: status} for whatever Kalshi currently says, not just finalized."""
+    out: dict[str, str] = {}
+    for i in range(0, len(tickers), _BATCH):
+        chunk = tickers[i : i + _BATCH]
+        try:
+            d = get_json(f"{_MARKETS_URL}?tickers={','.join(chunk)}&limit={_BATCH}")
+        except Exception:
+            log.exception("kalshi batch status fetch failed for a chunk")
+            continue
+        for m in d.get("markets", []):
+            st = m.get("status")
+            if st:
+                out[m.get("ticker")] = st
+    return out
+
+
+def reconcile_kalshi_market_status() -> int:
+    """Refresh Market.status for rows we still believe are active.
+
+    REAL BUG this fixes (user-reported 2026-08-06: a finished CS2 series, "33 vs
+    SPARTA", still showing as a live market at 100%). Every per-sport Kalshi
+    refresh fetches only OPEN markets, so the moment a market resolves it stops
+    being returned and its stored status is frozen at whatever it last was --
+    "active", forever. Nothing ever walks back over a resolved market to correct
+    it.
+
+    Measured on a random 180-ticker sample of the 10,586 Kalshi markets this app
+    called active: 38 of 180 (21%) were already FINALIZED on Kalshi, spread
+    across mlb/tennis/cs2/wnba/lol/valorant. That is roughly 2,200 resolved
+    markets being served as live ones.
+
+    This matters beyond cosmetics: routers filter on status == "active", so a
+    stale-active row is still eligible to be priced and recommended, and its
+    last traded price sits at 0 or 1 -- which is exactly the shape that
+    manufactures a huge fake edge against any confident model.
+
+    Network first, then a single locked write, per poller_lock.
+    """
+    session = SessionLocal()
+    try:
+        rows = (
+            session.query(Market.id, Market.source_ticker)
+            .filter(Market.source == "kalshi", Market.status == "active", Market.source_ticker.isnot(None))
+            .all()
+        )
+    finally:
+        session.close()
+    if not rows:
+        return 0
+
+    statuses = _fetch_statuses(sorted({t for _mid, t in rows if t}))
+    if not statuses:
+        return 0
+
+    changed = 0
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for mid, ticker in rows:
+                real = statuses.get(ticker)
+                # Only ever write a status Kalshi actually reported, and only
+                # when it differs -- a missing ticker (delisted, or dropped from
+                # a failed chunk) must not be guessed at.
+                if not real or real == "active":
+                    continue
+                m = session.get(Market, mid)
+                if m is None or m.status == real:
+                    continue
+                m.status = real
+                changed += 1
+            if changed:
+                session.commit()
+                log.info("reconciled %d kalshi market statuses away from 'active'", changed)
+        finally:
+            session.close()
+    return changed
+
+
 def settle_from_kalshi_resolution() -> int:
     """Grade every pending bet whose Kalshi market has finalized. Returns count."""
     # 1) read pending Kalshi bets + their tickers (no lock)
