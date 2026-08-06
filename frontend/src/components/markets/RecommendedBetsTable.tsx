@@ -102,6 +102,32 @@ function mlbKickoffInstant(gameday: string, gametime: string, homeTeam: string):
   return null; // neither candidate round-tripped -- genuinely unknown, don't guess
 }
 
+// THE DATE AND THE TIME MUST COME OFF THE SAME CLOCK.
+//
+// REAL BUG (user report 2026-08-06, "the recommended bets are not in
+// chronological order exactly"). This column used to print the date from
+// `gameday` and the time from the real instant rendered in the VIEWER'S LOCAL
+// zone. Those are two different clocks, so the two halves of one label could
+// disagree by a day. A LoL match with gameday 2026-08-07 and instant
+// 2026-08-07T00:00:00Z rendered as "Aug 7, 8:00 PM" for a viewer at UTC-4 --
+// the date said Aug 7 (its UTC day) while 8:00 PM was Aug 6 locally.
+//
+// The rows were SORTED correctly the whole time, on the true instant. Only the
+// labels lied, which made a correctly-ordered list read as scrambled: three
+// evening rows shown under one date, then a 6:00 AM row shown under the same
+// date, which is genuinely later. Nothing was wrong with the ordering, so no
+// amount of sort-key fixing would ever have addressed the complaint.
+//
+// Deriving both halves from the same Date object is what makes the column
+// monotonic. It also removes tennis's special case: tennis re-derived both
+// already (its gameday is a discovery-time placeholder that disagrees with the
+// instant by a full day), which was the correct behaviour for every sport all
+// along, not a tennis quirk.
+function localLabel(t: Date): string {
+  return `${t.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, `
+    + t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 function formatGameDate(
   gameday: string | null, gametime: string | null,
   sport: SportKey, homeTeam: string | null,
@@ -134,12 +160,14 @@ function formatGameDate(
   // confirmed live to disagree with the real instant by a full calendar day
   // on a real match, so Tennis alone re-derives BOTH the date and time
   // labels from the real instant.
-  if (sport === "mma" || sport === "tennis" || sport === "soccer" || sport === "valorant" || sport === "cs2" || sport === "lol") {
-    if (!estimatedStartTime) return <span className="whitespace-nowrap font-mono">{dateStr}</span>; // not yet known (far out) -- date only, don't guess
-    const t = new Date(estimatedStartTime);
-    const timeStr = t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-    const labelDateStr = sport === "tennis" ? t.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : dateStr;
-    return <span className="whitespace-nowrap font-mono">{labelDateStr}, {timeStr} (est.)</span>;
+  //
+  // DERIVED, NOT LISTED (2026-08-06) -- for the same reason sortKeyFor now is.
+  // Racing was missing from this list too, so f1/nascar/irl rows fell through to
+  // the "no gametime -> date only" early-return below and showed NO time at all,
+  // sitting next to rows that did. Testing for the instant itself covers every
+  // sport that has one, including the next one added.
+  if (estimatedStartTime) {
+    return <span className="whitespace-nowrap font-mono">{localLabel(new Date(estimatedStartTime))} (est.)</span>;
   }
 
   // "00:00" is nflverse/ESPN's placeholder for "kickoff not yet announced"
@@ -163,8 +191,7 @@ function formatGameDate(
   } else {
     t = new Date(`${gameday}T${gametime}:00Z`);
   }
-  const timeStr = t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return <span className="whitespace-nowrap font-mono">{dateStr}, {timeStr}</span>;
+  return <span className="whitespace-nowrap font-mono">{localLabel(t)}</span>;
 }
 
 
@@ -196,13 +223,23 @@ function sortKeyFor(row: RecommendedBetRow): string {
   // since 2026-07-19, esports since this Recommended page's own build) --
   // same display-only-not-sort-key gap already fixed once for MMA/Tennis,
   // caught again live here while fixing esports' missing time display.
-  if (
-    (row.sport === "mma" || row.sport === "tennis" || row.sport === "soccer"
-      || row.sport === "valorant" || row.sport === "cs2" || row.sport === "lol")
-    && row.estimatedStartTime
-  ) {
-    return row.estimatedStartTime;
-  }
+  //
+  // DERIVED, NOT LISTED (2026-08-06). This used to test a hardcoded sport list
+  // -- mma/tennis/soccer/valorant/cs2/lol -- and RACING was never added to it,
+  // so every f1/nascar/irl row fell through to the "23:59" placeholder and sorted
+  // to the END of its own day despite carrying a real instant. Live at the time
+  // of the fix: NASCAR 2026-08-09T22:30Z sorted after a 23:00Z fixture on the
+  // same date. That is the FOURTH time this identical gap has been fixed by
+  // appending one more sport to the list (MMA/Tennis, then Soccer, then the
+  // three esports titles, now racing), each caught by a user noticing the order
+  // was wrong. The list was always just a proxy for "this row has a real
+  // instant", so ask that directly and a new sport is covered on arrival.
+  if (row.estimatedStartTime) return row.estimatedStartTime;
+  // Everything below reconstructs from gameday+gametime. KNOWN RESIDUAL, not
+  // introduced here: NFL's gametime is stadium-LOCAL while every instant above
+  // is UTC, so cross-sport ordering between NFL and other sports can be off by
+  // the stadium's offset. Harmless today (NFL markets are pre-season and carry
+  // "00:00" placeholders) but real once the season starts.
   return `${row.gameday}T${row.gametime ?? "23:59"}`;
 }
 
