@@ -80,6 +80,35 @@ def _entity_id(m: Market) -> str | None:
         return f"cs2:{m.cs2_match_id}"
     if m.lol_match_id:
         return f"lol:{m.lol_match_id}"
+    # RACING WAS MISSING FROM THIS LIST ENTIRELY (added 2026-08-06). Every racing
+    # market returned None here, so F1, NASCAR and IndyCar were silently excluded
+    # from divergence scanning -- even though F1 has carried BOTH platforms all
+    # along (33 Kalshi + 134 Polymarket) and NASCAR likewise (255 + 112). The
+    # scanner reported 0 racing divergences and that read as "the prices agree"
+    # rather than "racing was never looked at".
+    #
+    # A race is a single scheduled event, the same role a game id plays for the
+    # team sports, so it keys the same way. Season-title markets also carry a
+    # race_event_id and are legitimately comparable across platforms -- the
+    # market_type in _prop_key keeps them from colliding with per-race rows.
+    #
+    # Third hand-maintained per-sport list this session that a later sport was
+    # never added to (see health._LINK_FIELDS, kalshi_racing_client._TAGS).
+    #
+    # NECESSARY BUT NOT YET SUFFICIENT, and worth being precise about: adding
+    # this alone still yields ZERO racing divergences, because the two platforms
+    # do not SHARE RaceEvent rows. Each poller creates its own from its own
+    # identifier -- Kalshi "KXINDYCARRACE-FREEDOM26", Polymarket
+    # "indycar-ontario-honda-dealers-indy-markham-winner-2026-08-16" -- so the
+    # same real race exists twice and the join can never fire. Measured
+    # 2026-08-06: 0 of the racing race_events carry markets from both sources.
+    #
+    # Unifying them needs a race-identity step (series + date, the way
+    # _match_espn_event already pairs our races to ESPN's), which is a separate
+    # piece of work. This branch is still correct and is a prerequisite for it,
+    # so it goes in now rather than being reverted and rewritten later.
+    if m.race_event_id:
+        return f"racing:{m.race_event_id}"
     return None
 
 

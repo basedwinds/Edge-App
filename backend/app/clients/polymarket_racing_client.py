@@ -1,4 +1,4 @@
-"""Polymarket racing client (F1 + NASCAR).
+"""Polymarket racing client (F1 + NASCAR + IndyCar).
 
 Kalshi doesn't quote racing markets this far out (they sit unpriced), but
 Polymarket lists PRICED, liquid per-race markets right now -- confirmed live
@@ -8,8 +8,9 @@ Polymarket lists PRICED, liquid per-race markets right now -- confirmed live
     real race instant. Maps to our race_winner model (racing_sim).
   - "{Race}: Driver Pole Position" -> same per-driver Yes/No shape -> pole
     (quali-Elo model).
-Season "Drivers'/Constructors' Champion" events (huge liquidity) are a separate
-futures shape our model doesn't price yet -- skipped here.
+Season "Drivers'/Constructors' Champion" events are a separate futures shape,
+handled by fetch_polymarket_racing_futures and priced by the championship sim
+(F1 + IndyCar only -- see that function on why NASCAR is excluded).
 
 Yes-price is P(driver wins/poles), already a 0-1 probability, so it's stored as
 last_price directly (the racing router's _implied_prob reads it as-is, same as
@@ -23,7 +24,17 @@ from app.clients.polymarket_client import extract_market_prices
 log = logging.getLogger("polymarket_racing_client")
 
 GAMMA = "https://gamma-api.polymarket.com"
-_TAGS = {"f1": "f1", "nascar": "nascar"}  # Polymarket has no IndyCar tag
+# IndyCar was excluded here on the note "Polymarket has no IndyCar tag". That is
+# NO LONGER TRUE (re-checked live 2026-08-06): tag_slug="indycar" returns 5 open
+# events -- the season title plus Race Winner and Pole Position for each of the
+# next two rounds, ~200 markets. ("indy-car" and "indy-500" really do return 0,
+# which is probably how the original note was arrived at.)
+#
+# Nothing else needed changing: _classify already reads the event TITLE, and
+# IndyCar's titles are the same "<Race>: Race Winner" / "<Race>: Pole Position"
+# shape as F1's, so the existing parse + persist path handles them as-is. Worth
+# re-testing a "platform doesn't have this" note before building around it.
+_TAGS = {"f1": "f1", "nascar": "nascar", "irl": "indycar"}
 
 
 def _events(tag: str, limit: int = 100) -> list[dict]:
@@ -79,50 +90,64 @@ def _futures_type_for(event_title: str) -> str | None:
         return "constructors_champion"
     if "driver" in t:
         return "drivers_champion"
-    return None
+    # A bare "<Series>: 2026 Champion" is the DRIVERS' title. F1 names both of
+    # its titles explicitly, so the two checks above claim those first and this
+    # can only be reached by a series that runs a single championship --
+    # IndyCar's event is "NTT IndyCar Series: 2026 Champion", which returned None
+    # here and left 46 markets unread.
+    return "drivers_champion"
 
 
 def fetch_polymarket_racing_futures() -> list[dict]:
     """One row per (season-title event, driver/constructor) for the Drivers'/
     Constructors' Champion markets. Same row shape as fetch_polymarket_racing so
     market_catalog_racing persists it uniformly; priced by the championship sim,
-    not racing_sim. F1 only (cumulative-points title); NASCAR's playoff title
-    isn't a points question so it's left unpriced."""
+    not racing_sim.
+
+    SCOPED TO THE SERIES THE CHAMPIONSHIP MODEL CAN ACTUALLY PRICE -- F1 and
+    IndyCar, both cumulative-points titles, which is exactly
+    racing_championship.PRICED_SERIES. NASCAR is excluded on purpose and not by
+    omission: its title is an elimination playoff ending in a winner-take-all
+    Championship 4, so a points sim would be wrong rather than merely
+    unvalidated. IndyCar was previously missing here for the same stale reason
+    as the race markets -- see the note on _TAGS.
+    """
     out: list[dict] = []
-    try:
-        events = _events("f1")
-    except Exception:
-        log.exception("polymarket f1 futures fetch failed")
-        return out
-    for e in events:
-        ftype = _futures_type_for(e.get("title", ""))
-        if not ftype:
+    for series, tag in (("f1", "f1"), ("irl", "indycar")):
+        try:
+            events = _events(tag)
+        except Exception:
+            log.exception("polymarket %s futures fetch failed", series)
             continue
-        for m in e.get("markets", []):
-            name = (m.get("groupItemTitle") or "").strip()  # driver or constructor
-            if not name:
+        for e in events:
+            ftype = _futures_type_for(e.get("title", ""))
+            if not ftype:
                 continue
-            p = extract_market_prices(m)
-            if p["outcomes"] != ["Yes", "No"] or not p["outcome_prices"]:
-                continue
-            out.append({
-                "series": "f1",
-                "market_type": ftype,
-                "line": None,
-                "driver": name,  # constructor name for constructors_champion
-                "event_ticker": e.get("slug", ""),
-                "event_title": e.get("title", ""),
-                "ticker": p["condition_id"] or m.get("slug"),
-                "close_time": _norm_start(m.get("gameStartTime")),
-                "status": "closed" if (m.get("closed") or not m.get("active", True)) else "active",
-                "last_price": p["outcome_prices"][0],  # P(Yes) = P(champion), 0-1
-                "yes_bid": None,
-                "yes_ask": None,
-                "volume": p["volume"],
-                        "raw_bid": p["best_bid"],
-                        "raw_ask": p["best_ask"],
-                "source": "polymarket",
-            })
+            for m in e.get("markets", []):
+                name = (m.get("groupItemTitle") or "").strip()  # driver or constructor
+                if not name:
+                    continue
+                p = extract_market_prices(m)
+                if p["outcomes"] != ["Yes", "No"] or not p["outcome_prices"]:
+                    continue
+                out.append({
+                    "series": series,
+                    "market_type": ftype,
+                    "line": None,
+                    "driver": name,  # constructor name for constructors_champion
+                    "event_ticker": e.get("slug", ""),
+                    "event_title": e.get("title", ""),
+                    "ticker": p["condition_id"] or m.get("slug"),
+                    "close_time": _norm_start(m.get("gameStartTime")),
+                    "status": "closed" if (m.get("closed") or not m.get("active", True)) else "active",
+                    "last_price": p["outcome_prices"][0],  # P(Yes) = P(champion), 0-1
+                    "yes_bid": None,
+                    "yes_ask": None,
+                    "volume": p["volume"],
+                            "raw_bid": p["best_bid"],
+                            "raw_ask": p["best_ask"],
+                    "source": "polymarket",
+                })
     return out
 
 

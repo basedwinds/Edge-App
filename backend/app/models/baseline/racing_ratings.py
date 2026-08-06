@@ -139,9 +139,28 @@ def _series_state(series: str) -> dict:
     return _cache[series]
 
 
+# Normalised-name aliases, applied before the lookup. Platforms spell the same
+# driver differently in ways _norm cannot reconcile because the letters actually
+# differ -- a given name vs the racing name ("Patricio" vs "Pato" O'Ward), or a
+# dropped middle name ("Sting Robb" vs "Sting Ray Robb"). Both measured live on
+# Polymarket's IndyCar race markets 2026-08-06, where they were the only two real
+# drivers out of 39 entrants that failed to resolve.
+#
+# Keyed and valued on the NORMALISED form, so this is checked after _norm and
+# before name_to_id. Kept tiny and explicit on purpose: a fuzzy surname fallback
+# already exists in resolve_driver_loose, and anything looser than an exact
+# alias risks resolving one driver onto another.
+_DRIVER_ALIASES = {
+    "patriciooward": "patooward",
+    "stingrobb": "stingrayrobb",
+}
+
+
 def resolve_driver_id(series: str, name: str) -> str | None:
-    """Kalshi driver name -> our ESPN driver_id (normalized match)."""
-    return _series_state(series)["name_to_id"].get(_norm(name))
+    """Platform driver name -> our ESPN driver_id (normalized match + aliases)."""
+    key = _norm(name)
+    key = _DRIVER_ALIASES.get(key, key)
+    return _series_state(series)["name_to_id"].get(key)
 
 
 def resolve_driver_loose(series: str, name: str) -> str | None:
