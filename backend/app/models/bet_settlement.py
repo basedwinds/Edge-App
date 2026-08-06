@@ -179,6 +179,23 @@ def _grade_soccer_total(bet: PlacedBet, game: SoccerMatch) -> str:
     return "won" if actual_total > bet.line else "lost"  # side == "over" -- Soccer's own total ladder is always framed as Over, see market_catalog_soccer.py
 
 
+def _grade_soccer_team_total(bet: PlacedBet, game: SoccerMatch) -> str:
+    """Soccer's own team_total, reading goals rather than home_score/away_score.
+
+    REAL BUG this fixes (2026-08-06): "team_total" is one of the few market
+    types soccer SHARES by name with the score sports, so it resolved to
+    _grade_team_total, which reads game.home_score -- a field SoccerMatch does
+    not have. That raised AttributeError inside settle_finished_games, which
+    grades EVERY sport in one loop, so a single soccer team_total bet aborted
+    settlement for all sports. It stayed hidden only because soccer results
+    were never being written, so the grader never actually ran.
+    """
+    team_goals = game.home_goals_ft if bet.team == game.home_team else game.away_goals_ft
+    if team_goals == bet.line:
+        return "push"
+    return "won" if team_goals > bet.line else "lost"
+
+
 def _grade_soccer_btts(bet: PlacedBet, game: SoccerMatch) -> str:
     """No push, no "no" side to grade -- market.side is always "yes" for
     this market type (see market_catalog_soccer.py::upsert_kalshi_soccer_
@@ -525,14 +542,25 @@ _RACING_GRADERS = {
 }
 
 
-_GRADERS = {  # score-based game sports (nfl/nba/wnba/mlb) + soccer
+_GRADERS = {  # score-based game sports (nfl/nba/wnba/mlb/cfb)
     "moneyline": _grade_moneyline,
     "spread": _grade_spread,
     "total": _grade_total,
     "team_total": _grade_team_total,
+}
+
+# Soccer gets its OWN table rather than sharing _GRADERS. Sharing was unsafe:
+# the two sports overlap on the market_type NAME "team_total" while storing
+# their scores in different columns (home_score vs home_goals_ft), so soccer
+# silently picked up a grader that could not read its rows. A separate table
+# also means an unrecognised soccer market_type resolves to None and the bet
+# stays pending, instead of being graded by whatever the score sports happen
+# to register under that name later.
+_SOCCER_GRADERS = {
     "moneyline_3way": _grade_soccer_moneyline_3way,
     "game_spread": _grade_soccer_spread,
     "game_total": _grade_soccer_total,
+    "team_total": _grade_soccer_team_total,
     "btts": _grade_soccer_btts,
 }
 
@@ -618,7 +646,9 @@ def _pick_grader(bet: PlacedBet):
         return _TENNIS_GRADERS.get(bet.market_type)
     if bet.sport in ("f1", "irl", "nascar"):
         return _RACING_GRADERS.get(bet.market_type)
-    return _GRADERS.get(bet.market_type)  # nfl/nba/wnba/mlb/soccer
+    if bet.sport == "soccer":
+        return _SOCCER_GRADERS.get(bet.market_type)
+    return _GRADERS.get(bet.market_type)  # nfl/nba/wnba/cfb/mlb
 
 
 def _settlement_note(bet: PlacedBet, game) -> str:

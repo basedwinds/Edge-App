@@ -61,20 +61,56 @@ STANDINGS_LEAGUE_CODES = {
 LEAGUE_CODES = {**STANDINGS_LEAGUE_CODES, "MLS": "usa.1"}
 
 
+# ESPN's scoreboard returns AT MOST 100 events per call and silently truncates
+# from the START of the requested range -- there is no page cursor and no
+# indication in the body that anything was dropped.
+#
+# REAL BUG this caused (found 2026-08-06): refresh_soccer_results asked for one
+# window spanning every unresolved match (2026-03-07 -> today, five months). It
+# got back exactly 100 events covering 2026-03-07 to 2026-04-25, so every MLS
+# result after April was invisible and NOT ONE of 74 already-played matches
+# could ever be backfilled. The truncation is silent, so this read as "ESPN has
+# no result for these games" rather than "we never asked past April".
+#
+# 21 days is comfortably inside the cap for the densest league here (MLS peaks
+# around 12 fixtures a week, so ~36 per chunk against a limit of 100).
+_CHUNK_DAYS = 21
+
+
 def fetch_scoreboard(league: str, start: dt.date, end: dt.date) -> list[dict]:
-    """Same real shape/limitations as fetch_range (see module docstring:
-    date-RANGE queries only, chunked conservatively) -- parameterized by
-    league instead of hardcoded to MLS's usa.1."""
+    """Real ESPN results for a league over a date range, fetched in chunks and
+    de-duplicated by event id (chunk edges can repeat an event).
+
+    Note the endpoint needs a RANGE: `dates=YYYYMMDD-YYYYMMDD` with start ==
+    end returns 0 events even on a day that definitely had fixtures, so a
+    single-day query is not a valid way to probe this API."""
     code = LEAGUE_CODES.get(league)
-    if code is None:
+    if code is None or start > end:
         return []
-    params = {"dates": f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}"}
-    try:
-        resp = httpx.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard", params=params, timeout=30.0)
-        resp.raise_for_status()
-        return resp.json().get("events", [])
-    except Exception:
-        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + dt.timedelta(days=_CHUNK_DAYS - 1), end)
+        params = {"dates": f"{chunk_start.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"}
+        try:
+            resp = httpx.get(
+                f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard",
+                params=params, timeout=30.0,
+            )
+            resp.raise_for_status()
+            events = resp.json().get("events", [])
+        except Exception:
+            events = []
+        for e in events:
+            eid = str(e.get("id") or "")
+            if eid and eid in seen:
+                continue
+            if eid:
+                seen.add(eid)
+            out.append(e)
+        chunk_start = chunk_end + dt.timedelta(days=1)
+    return out
 
 
 def parse_final_results(raw_events: list[dict]) -> list[dict]:

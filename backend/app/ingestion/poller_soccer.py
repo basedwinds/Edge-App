@@ -23,6 +23,25 @@ def refresh_soccer_ratings():
     elo_service_soccer.refresh_ratings()
 
 
+def _real_match_date(match) -> datetime.date | None:
+    """The date the match is actually PLAYED.
+
+    `match_date` on a live-tracked row is the date the listing was scraped,
+    which can sit days away from kickoff (measured 2026-08-06: up to 7).
+    `estimated_start_time` carries the real kickoff, so it wins whenever it
+    parses; match_date is only the fallback for rows that predate it."""
+    est = getattr(match, "estimated_start_time", None)
+    if est:
+        try:
+            return datetime.datetime.fromisoformat(str(est).replace("Z", "+00:00")).date()
+        except (TypeError, ValueError):
+            pass
+    try:
+        return datetime.date.fromisoformat(match.match_date)
+    except (TypeError, ValueError):
+        return None
+
+
 def refresh_soccer_results():
     """Backfills REAL final scores onto live-tracked SoccerMatch rows once
     their real match has actually been played.
@@ -66,11 +85,11 @@ def refresh_soccer_results():
         today = datetime.date.today()
         by_league_ids: dict[str, list[int]] = {}
         for match in unresolved:
-            try:
-                match_date = datetime.date.fromisoformat(match.match_date)
-            except (TypeError, ValueError):
-                continue
-            if match_date > today:
+            # Gate on the REAL kickoff, not the scrape date -- a row scraped
+            # today for a match a week out would otherwise look "already
+            # played" and be re-fetched pointlessly every cycle.
+            match_date = _real_match_date(match)
+            if match_date is None or match_date > today:
                 continue  # real match hasn't happened yet, nothing to backfill
             by_league_ids.setdefault(match.league, []).append(match.id)
     finally:
@@ -83,12 +102,18 @@ def refresh_soccer_results():
         # `unresolved` (still a live Python list, no DB access needed) to
         # avoid keeping the read_session's own ORM objects around across
         # the network fetch below.
+        # Real kickoff dates, same reason as the gate above -- a window built
+        # from scrape dates can start after a match actually happened.
         league_dates = [
-            datetime.date.fromisoformat(m.match_date) for m in unresolved
-            if m.id in match_ids
+            d for m in unresolved if m.id in match_ids
+            and (d := _real_match_date(m)) is not None
         ]
-        oldest = min(league_dates)
-        raw = espn_soccer_client.fetch_scoreboard(league, oldest, today)
+        if not league_dates:
+            continue
+        # One day of slack each side: ESPN dates a late kickoff on the next
+        # UTC day, which is the off-by-one the matcher below tolerates too.
+        oldest = min(league_dates) - datetime.timedelta(days=1)
+        raw = espn_soccer_client.fetch_scoreboard(league, oldest, today + datetime.timedelta(days=1))
         results_by_league[league] = espn_soccer_client.parse_final_results(raw)
 
     with db_write_lock():
@@ -103,15 +128,33 @@ def refresh_soccer_results():
                     match = session.get(SoccerMatch, match_id)
                     if match is None:
                         continue
-                    found = next(
-                        (
-                            r for r in results
-                            if r["match_date"] == match.match_date
-                            and team_names_match(r["home_team"], match.home_team)
-                            and team_names_match(r["away_team"], match.away_team)
-                        ),
-                        None,
-                    )
+                    # Match on TEAMS first, then take the nearest date within a
+                    # day -- do NOT require match_date to be equal.
+                    #
+                    # REAL BUG this fixes (2026-08-06): a live-tracked row's
+                    # `match_date` is the SCRAPE date, not the kickoff date --
+                    # e.g. San Jose vs Los Angeles G stored match_date
+                    # 2026-07-19 with estimated_start_time 2026-07-26T02:30Z, a
+                    # full week out. Measured against real ESPN results for 54
+                    # team-matched MLS rows, ESPN-date minus match_date was
+                    # spread across 0,1,3,4,6,7 days with only 9 exact, while
+                    # ESPN-date minus estimated_start_time was exact on 51 and
+                    # off by one on 3 (a late kickoff crossing midnight UTC).
+                    # So estimated_start_time is the real date and the old
+                    # equality test on match_date was never going to fire.
+                    real = _real_match_date(match)
+                    cands = [
+                        r for r in results
+                        if team_names_match(r["home_team"], match.home_team)
+                        and team_names_match(r["away_team"], match.away_team)
+                    ]
+                    if real is not None:
+                        cands = [
+                            r for r in cands
+                            if abs((datetime.date.fromisoformat(r["match_date"]) - real).days) <= 1
+                        ]
+                        cands.sort(key=lambda r: abs((datetime.date.fromisoformat(r["match_date"]) - real).days))
+                    found = cands[0] if cands else None
                     if found is None:
                         continue
                     match.home_goals_ft = found["home_goals_ft"]
