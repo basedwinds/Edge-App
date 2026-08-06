@@ -10,7 +10,7 @@ import datetime
 import logging
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import get_session
@@ -63,26 +63,33 @@ def health_check(session: Session = Depends(get_session)):
     now = datetime.datetime.utcnow()
     issues: list[dict] = []
 
+    # ONE fetch of (active markets, latest snapshot each), shared by check 1 here
+    # and by every cache-aware integrity check in step 6.
+    #
+    # This endpoint used to take ~30s, and 20s of that was the two GROUP BY
+    # aggregates check 1 originally used: each joined all 49k active markets to
+    # an 18.1M-row snapshot table and scanned it. The per-market lookup below
+    # walks ix_market_snapshots_market_ts instead and costs 4.3s -- which step 6
+    # was already paying anyway, so check 1 is now effectively free.
+    from app.models.integrity_checks import _active_with_snapshots
+
+    integrity_cache: dict = {}
+    active_markets, latest_snaps = _active_with_snapshots(session, integrity_cache)
+
     # Active-market counts per sport (the denominator for everything else).
-    active = dict(
-        session.query(Market.sport, func.count(Market.id))
-        .filter(Market.status == "active")
-        .group_by(Market.sport)
-        .all()
-    )
+    active: dict = {}
+    for m in active_markets:
+        active[m.sport] = active.get(m.sport, 0) + 1
 
     # 1) Stalled poller: freshest SNAPSHOT per sport. Must use snapshot ts, NOT
     #    markets.updated_at -- the latter only bumps when a market ROW field
     #    changes, so a perfectly healthy poller writing fresh snapshots on flat
     #    odds (common for MMA/NBA futures) looked "25h stale" and false-alarmed.
     #    The snapshot ts is the true "the poller ran and wrote a price" signal.
-    latest = dict(
-        session.query(Market.sport, func.max(MarketSnapshot.ts))
-        .join(MarketSnapshot, MarketSnapshot.market_id == Market.id)
-        .filter(Market.status == "active")
-        .group_by(Market.sport)
-        .all()
-    )
+    #    Max over the per-market latest snapshots == max over all snapshots, so
+    #    reading it off the shared cache is the same number, verified per sport
+    #    against the old aggregate before the switch.
+    latest: dict = {}
     # Distinguish a STALLED poller from inventory the exchange simply hasn't
     # started quoting. A stalled poller leaves markets that WERE being quoted and
     # stopped updating, so nearly all of them still carry a price; unquoted
@@ -93,14 +100,23 @@ def health_check(session: Session = Depends(get_session)):
     # race day, and the no_market_price INFO below already says so, so the ERROR
     # was pure noise that would never clear. Hence a proportional gate, not a
     # zero-check (a zero-check would not have caught NASCAR's 9%).
-    priced_counts = dict(
-        session.query(Market.sport, func.count(func.distinct(Market.id)))
-        .join(MarketSnapshot, MarketSnapshot.market_id == Market.id)
-        .filter(Market.status == "active",
-                or_(MarketSnapshot.last_price.isnot(None), MarketSnapshot.yes_bid.isnot(None)))
-        .group_by(Market.sport)
-        .all()
-    )
+    #
+    #    The counted condition tightened slightly with the cache: it now asks
+    #    whether the market's LATEST snapshot carries a quote, where the old
+    #    aggregate asked whether ANY snapshot ever did. That is the better
+    #    question for this gate -- "is the exchange quoting this now" is exactly
+    #    what separates a stall from unquoted inventory -- and both readings
+    #    agree on every sport in the current data (all 49,468 active markets have
+    #    a priced latest snapshot, so no row currently distinguishes them).
+    priced_counts: dict = {}
+    for m in active_markets:
+        sn = latest_snaps.get(m.id)
+        if sn is None:
+            continue
+        if sn.ts is not None and (m.sport not in latest or sn.ts > latest[m.sport]):
+            latest[m.sport] = sn.ts
+        if sn.last_price is not None or sn.yes_bid is not None:
+            priced_counts[m.sport] = priced_counts.get(m.sport, 0) + 1
     for sport, n in active.items():
         ts = latest.get(sport)
         if not ts:
@@ -208,7 +224,7 @@ def health_check(session: Session = Depends(get_session)):
     try:
         from app.models.integrity_checks import run_all as _integrity
 
-        results = _integrity(session)
+        results = _integrity(session, cache=integrity_cache)
         for row in results.get("phantom_priced_markets", []):
             if row.get("count"):
                 _issue(issues, "warning", "phantom_price", row.get("sport"),

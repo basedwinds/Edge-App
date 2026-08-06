@@ -261,10 +261,15 @@ def resolver_dependent_teams(session: Session) -> list[dict]:
 _CACHE_AWARE = {"phantom_priced_markets", "flat_ladders", "resolved_looking_active_markets"}
 
 
-def run_all(session: Session) -> dict:
+def run_all(session: Session, cache: dict | None = None) -> dict:
     """Every invariant, as {check_name: rows}. Never raises -- a check that
     fails is reported as an error string rather than taking the whole report
-    down with it, since this runs beside a user-facing health endpoint."""
+    down with it, since this runs beside a user-facing health endpoint.
+
+    `cache` lets a caller that has ALREADY fetched the active-markets-and-latest-
+    snapshots pair hand it over instead of paying for it twice -- the health
+    endpoint's stale-poller check needs exactly the same data.
+    """
     checks = {
         "phantom_priced_markets": phantom_priced_markets,
         "flat_ladders": flat_ladders,
@@ -273,7 +278,7 @@ def run_all(session: Session) -> dict:
         "finished_without_result": finished_without_result,
         "resolver_dependent_teams": resolver_dependent_teams,
     }
-    cache: dict = {}
+    cache = {} if cache is None else cache
     out: dict = {}
     for name, fn in checks.items():
         try:
