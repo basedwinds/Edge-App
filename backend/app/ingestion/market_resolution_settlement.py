@@ -27,6 +27,40 @@ _MARKETS_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
 _BATCH = 100
 
 
+def normalize_result(market: dict) -> str:
+    """Kalshi's result for one market, reduced to 'yes'|'no'|'void'|''.
+
+    Exists for result == "scalar", which the settler used to skip -- leaving the
+    bet pending FOREVER, because nothing ever revisits a finalized market. Found
+    2026-08-06: 32 pending bets across tennis/mma/cs2/valorant were stranded this
+    way.
+
+    A scalar result on a market Kalshi itself labels `market_type: "binary"` is
+    not a third outcome, it is the refund: the market settles at a value between
+    0 and 1 instead of resolving either way. All 32 stranded markets settled
+    strictly between (0.03 to 0.70, none at an endpoint), and one cross-confirms
+    against the other exchange -- KXWTASETWINNER-26JUL24OLIAVA is the same
+    Oliynyk/Avanesyan match Polymarket refunded 0.50/0.50, and Kalshi settled it
+    at 0.51.
+
+    The endpoints are still honoured rather than assumed away: a scalar that
+    lands on 1.0 or 0.0 IS a clean win or loss, so it maps that way. Only the
+    strictly-between case becomes void.
+    """
+    result = (market.get("result") or "")
+    if result != "scalar":
+        return result
+    try:
+        value = float(market.get("settlement_value_dollars"))
+    except (TypeError, ValueError):
+        return ""  # unreadable -> void, same as Kalshi's own empty result
+    if value >= 0.999:
+        return "yes"
+    if value <= 0.001:
+        return "no"
+    return "void"
+
+
 def _fetch_resolutions(tickers: list[str]) -> dict:
     """{ticker: 'yes'|'no'|'void'|''} for the FINALIZED ones among `tickers`."""
     out: dict[str, str] = {}
@@ -39,7 +73,7 @@ def _fetch_resolutions(tickers: list[str]) -> dict:
             continue
         for m in d.get("markets", []):
             if m.get("status") in ("finalized", "settled"):
-                out[m.get("ticker")] = (m.get("result") or "")
+                out[m.get("ticker")] = normalize_result(m)
     return out
 
 

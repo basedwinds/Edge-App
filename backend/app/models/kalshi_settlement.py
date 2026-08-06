@@ -55,7 +55,12 @@ def _market_result(ticker: str) -> tuple[str | None, str | None]:
         log.debug("kalshi lookup failed for %s", ticker, exc_info=True)
         return None, None
     m = data.get("market") or {}
-    return m.get("status"), (m.get("result") or None)
+    # Reduce Kalshi's "scalar" result to yes/no/void here, so this path does not
+    # strand the bets the batch settler stopped stranding. See
+    # market_resolution_settlement.normalize_result.
+    from app.ingestion.market_resolution_settlement import normalize_result
+
+    return m.get("status"), (normalize_result(m) or None)
 
 
 def settle_pending_from_kalshi(session: Session, bets: list[PlacedBet]) -> int:
