@@ -174,9 +174,16 @@ def refresh_wnba_season_sim():
 
 
 def refresh_kalshi_wnba_standings():
-    """#1 seed + playoff qualifier (KXWNBA1SEED / KXWNBAPLAYOFF). Both resolve
-    on the regular-season table, so they are priced from the season sim's own
-    win matrix -- no bracket. See season_sim_wnba.standings_probs."""
+    """The five one-per-team season markets.
+
+    KXWNBA1SEED / KXWNBAPLAYOFF resolve on the regular-season TABLE and are
+    priced from the season sim's win matrix (standings_probs, no bracket).
+    KXWNBA / KXWNBAFINAL / KXWNBASEMIFINAL resolve on the BRACKET and are priced
+    from bracket_probs, whose reseeding rule was recovered from the 2024/25
+    postseasons rather than assumed.
+
+    One fetch and one upsert covers all five because the row shape is identical
+    -- the upsert takes market_type straight from the row's own market_kind."""
     rows = kalshi_wnba_client.get_standings_markets()
     with db_write_lock():
         session = SessionLocal()

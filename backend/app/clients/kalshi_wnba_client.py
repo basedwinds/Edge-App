@@ -25,9 +25,25 @@ TOTAL_SERIES = "KXWNBATOTAL"
 WIN_TOTAL_SERIES = "KXWNBAWINS"   # season win ladders (45 open, 15 teams)
 # Season FINISHING-POSITION markets, one per team. Both resolve on the
 # regular-season table, so neither needs a playoff bracket -- see
-# season_sim_wnba.standings_probs. KXWNBACHAMP/KXWNBAFINALS, which WOULD
-# need one, have 0 open markets (checked 2026-08-06) and are not fetched.
+# season_sim_wnba.standings_probs.
 STANDINGS_SERIES = {"one_seed": "KXWNBA1SEED", "playoff_qualifier": "KXWNBAPLAYOFF"}
+
+# Season BRACKET markets, same one-per-team shape but resolving on the playoff
+# bracket rather than the table -- priced from season_sim_wnba.bracket_probs,
+# whose reseeding rule was recovered from the 2024/25 postseasons.
+#
+# A previous comment here claimed the championship markets "have 0 open markets
+# (checked 2026-08-06)" and named them KXWNBACHAMP/KXWNBAFINALS. Both parts were
+# wrong: the real series are KXWNBA / KXWNBAFINAL / KXWNBASEMIFINAL and all
+# three are open. The 0-count came from probing series tickers that do not
+# exist, which returns empty exactly like a real-but-unlisted series does --
+# worth remembering, because "no markets" and "wrong ticker" look identical
+# through this API.
+BRACKET_SERIES = {
+    "championship": "KXWNBA",
+    "finals_qualifier": "KXWNBAFINAL",
+    "semifinal_qualifier": "KXWNBASEMIFINAL",
+}
 HALF_WINNER_SERIES = {1: "KXWNBA1HWINNER", 2: "KXWNBA2HWINNER"}
 HALF_SPREAD_SERIES = {1: "KXWNBA1HSPREAD", 2: "KXWNBA2HSPREAD"}
 HALF_TOTAL_SERIES = {1: "KXWNBA1HTOTAL", 2: "KXWNBA2HTOTAL"}
@@ -188,16 +204,23 @@ def get_win_total_markets() -> list[dict]:
 
 
 def get_standings_markets() -> list[dict]:
-    """#1 seed and playoff-qualifier markets, one row per team.
+    """Season team markets, one row per team: #1 seed, playoff qualifier, and
+    the three bracket outcomes (championship / finals / semifinals).
 
-    Unlike the win ladders, the team lives in the MARKET ticker suffix
-    ("KXWNBA1SEED-26-WSH" -> "WSH"), not the event ticker, and there is no
-    floor_strike -- these are plain yes/no propositions on where a team
-    finishes. The suffix is a KALSHI abbreviation, so callers map it through
-    to_espn_abbr before matching a team.
+    All five share one shape, which is why they share one fetcher -- the team
+    lives in the MARKET ticker suffix ("KXWNBA1SEED-26-WSH" -> "WSH"), not the
+    event ticker, and there is no floor_strike; they are plain yes/no
+    propositions. What differs is only what PRICES them: the first two resolve
+    on the regular-season table, the last three on the playoff bracket. The
+    suffix is a KALSHI abbreviation, so callers map it through to_espn_abbr
+    before matching a team.
+
+    KXWNBA is a bare series ticker, so its markets read "KXWNBA-26-WSH" -- the
+    same rsplit still yields the team, and the digit guard below still rejects
+    a suffix that is a year rather than a team.
     """
     out = []
-    for market_kind, series in STANDINGS_SERIES.items():
+    for market_kind, series in {**STANDINGS_SERIES, **BRACKET_SERIES}.items():
         for m in get_open_markets_for_series(series):
             ticker = m.get("ticker")
             if not ticker:
