@@ -47,14 +47,30 @@ class LolLineupResolver:
     def for_match(self, match_date: str | None, team_a: str, team_b: str):
         if not match_date:
             return None, None
-        key = (match_date, frozenset((_norm(team_a), _norm(team_b))))
-        if key in self._for_match_cache:
-            return self._for_match_cache[key]
-        games = self._idx.get(key)
+        # Two DIFFERENT keys. The index is keyed unordered, because a cache
+        # entry can list the pair either way round and both must find it. The
+        # memo must be keyed ORDERED, because its value is the ordered tuple
+        # (lineup_for_team_a, lineup_for_team_b).
+        #
+        # REAL BUG this fixes (user-reported 2026-08-05): memoizing the ordered
+        # result under the unordered key meant that when the same pair appears
+        # twice on one date with team_a/team_b swapped -- which happens
+        # routinely, a Bo3 is stored as several rows and the sides are not
+        # consistently ordered -- the second row read the first row's tuple
+        # back REVERSED and handed each team its opponent's roster. Live case:
+        # "Gen.G vs DN SOOPers" on 2026-08-04 got DN SOOPers rated with Gen.G's
+        # lineup (Kiin/Canyon/Chovy/Ruler/Duro), which via the 0.4-weight
+        # player blend turned DRX from a 70.6% favourite into a 45.9% dog and
+        # produced a staked $10 bet on the wrong side.
+        idx_key = (match_date, frozenset((_norm(team_a), _norm(team_b))))
+        memo_key = (match_date, _norm(team_a), _norm(team_b))
+        if memo_key in self._for_match_cache:
+            return self._for_match_cache[memo_key]
+        games = self._idx.get(idx_key)
         result = (None, None)
         if games:
             result = (self._side(games, team_a), self._side(games, team_b))
-        self._for_match_cache[key] = result
+        self._for_match_cache[memo_key] = result
         return result
 
     @staticmethod
