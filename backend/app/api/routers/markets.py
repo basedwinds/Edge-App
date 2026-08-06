@@ -304,6 +304,43 @@ def _implied_prob(snap):
         if snap.yes_ask - snap.yes_bid >= NO_BOOK_SPREAD - 1e-9 and snap.last_price is not None:
             return snap.last_price
         return round((snap.yes_bid + snap.yes_ask) / 2, 4)
+
+    # NO BOOK AT ALL. The >=90c guard above only fires when both sides exist;
+    # this is the other shape of the same pathology, and it was the bigger one.
+    #
+    # Polymarket SEEDS last_price on a market that has never traded (already
+    # documented in staking.has_real_trading, which is why volume==0 alone is
+    # treated as untraded there). When that seed is exactly 0.500 it is not a
+    # price, it is the absence of one -- and a confident model scored against
+    # it manufactures a ~30pp edge out of nothing.
+    #
+    # Measured 2026-08-06 over every settled bet, flat-unit ROI split by
+    # whether the bet was booked at exactly 0.500. Phantom-priced bets beat
+    # real ones in EVERY sport, which is the signature of a measurement
+    # artifact rather than an edge (a "win" at a fake 0.500 books +1.0 unit
+    # when the true price might have been 0.80, worth +0.25):
+    #
+    #   sport    phantom ROI (n)     clean ROI (n)
+    #   tennis   +28.1% (704)        +14.5% (2411)
+    #   mlb      +29.8% (131)         +1.8% (2817)
+    #   f1      +100.0% (18)          +9.5% (503)
+    #   wnba    +100.0% (8)           +4.4% (407)
+    #   cs2      +33.3% (6)          +10.9% (131)
+    #
+    # Returning None (no price, so no edge and no stake) rather than a
+    # degenerate 50/50 dressed up as a real number -- the same treatment
+    # elo_service_*.get_series_distribution already gives an unrated matchup.
+    #
+    # Deliberately narrow, in the spirit of the 30-70c band left alone above:
+    # requires no book AND exactly 0.500 AND no volume. A market that really
+    # traded at 50c keeps its price (152 of 6,046 tennis rows), and a seeded
+    # last_price at any other value is left to has_real_trading's volume gate.
+    if (
+        snap.last_price is not None
+        and abs(snap.last_price - 0.5) < 1e-9
+        and not snap.volume
+    ):
+        return None
     return snap.last_price
 
 
