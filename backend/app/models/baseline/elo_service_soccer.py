@@ -41,8 +41,31 @@ log = logging.getLogger("elo_service_soccer")
 _cache: dict = {"states_by_league": {}}
 
 
+# Exhibition squads are not clubs. football-data's MLS feed includes the
+# All-Star Game, whose participants are "MLS All-Stars" / "Liga MX All-Stars"
+# plus a visiting European club -- 5 matches, all MLS.
+#
+# REAL CONTAMINATION this removes (found 2026-08-06 while mapping cross-league
+# bridges, which is how it surfaced: Arsenal and Atletico Madrid showed up as
+# the ONLY "teams" shared between MLS and E0/SP1/SP2): both clubs were carrying
+# a rating inside the MLS pool built from a single blowout exhibition -- Arsenal
+# from one 5-0, Atletico from one 3-0 -- and every real MLS side that played an
+# All-Star squad had its own rating moved by a result against a team that does
+# not exist. season_sim_wnba already guards the identical case ("ESPN tags the
+# All-Star game REG too ... restrict to real franchises"); soccer did not.
+_EXHIBITION_MARKERS = ("all-stars", "all stars", "allstars")
+
+
+def _is_exhibition(match: dict) -> bool:
+    return any(
+        marker in (match.get(side) or "").lower()
+        for side in ("home_team", "away_team")
+        for marker in _EXHIBITION_MARKERS
+    )
+
+
 def refresh_ratings():
-    matches = soccer_data.load_matches()
+    matches = [m for m in soccer_data.load_matches() if not _is_exhibition(m)]
     states: dict[str, SoccerRatingState] = {}
     for m in matches:
         league = m["league"]
