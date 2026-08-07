@@ -45,6 +45,20 @@ DIVISIONS = {
     "I1": "Italy - Serie A",
     "D1": "Germany - Bundesliga",
     "F1": "France - Ligue 1",
+    # Added 2026-08-07 to price the four Liga Portugal 1st-half markets Kalshi
+    # listed (KXLIGAPORTUGAL1H/1HBTTS/1HSPREAD/1HTOTAL). Confirmed live on the
+    # same mmz4281 URL pattern: P1 returns 306 rows / 18 clubs for 2025-26.
+    #
+    # This was previously deferred as "waiting on volume -- Kalshi quotes it
+    # with ~0 trades". That measurement was taken in JULY, with every European
+    # league off-season, and it does not survive re-checking: on 2026-08-07
+    # KXEPLGAME -- a league this app has priced all along -- also reports 0
+    # volume, because the season starts on the 14th. "0 volume in the
+    # off-season" says nothing about a league's worth. The runtime
+    # has_real_trading gate is what decides whether these can be staked, so
+    # building them cannot produce a bad bet; it only decides whether there is
+    # anything to look at when trading opens.
+    "P1": "Portugal - Primeira Liga",
 }
 
 # Second tier of each country -- added 2026-07-19 specifically to fix a real

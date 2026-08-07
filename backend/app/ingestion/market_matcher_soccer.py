@@ -203,6 +203,31 @@ TEAM_ALIASES: dict[str, str] = {
     # 2025-26 club set with 1,061 rated matches, and no other rated key contains
     # the token "betis".
     "real betis": "betis",
+    # ---- Liga Portugal (P1), 2026-08-07 --------------------------------------
+    # Polymarket does not list Liga Portugal at all, so the cross-platform
+    # fixture alignment that derived the La Liga table above is UNAVAILABLE here.
+    # These five are instead anchored on a shared distinctive token AND
+    # constrained to the clubs actually in football-data's current P1 season, so
+    # each has exactly one candidate:
+    "sl benfica": "benfica",                 # "benfica"
+    "santa clara azores": "santa clara",     # "santa clara"
+    "vicente barcelos": "gil vicente",       # "vicente" (Gil Vicente play in Barcelos)
+    "braga": "sp braga",                     # "braga"
+    # "estrela" and "est amadora" BOTH exist as historical keys; restricting to
+    # the current season's club list leaves only "estrela", which is what makes
+    # this one safe rather than a coin flip between two spellings of the club.
+    "estrela amadora": "estrela",
+    #
+    # DELIBERATELY NOT MAPPED -- no evidence, and the wrong guess is expensive:
+    #   "Sporting CP"  -> almost certainly "sp lisbon", but it shares NO token
+    #                     with it, and the neighbouring key is "sp braga". A
+    #                     guess on the word "Sporting" alone could put Lisbon's
+    #                     markets onto Braga's ratings. Same shape as the
+    #                     Espanyol/Barcelona near-miss.
+    #   "Madeira", "Viseu" -> newly promoted, no P1 history under any spelling.
+    # Left unresolved and visible (they price as "no baseline") until either
+    # Polymarket lists the league, or these clubs appear in a football-data
+    # season we can align against.
 }
 
 
