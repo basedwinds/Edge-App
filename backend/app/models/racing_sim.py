@@ -32,12 +32,25 @@ def _weights(ratings: dict[str, float]) -> dict[str, float]:
 
 
 def simulate(ratings: dict[str, float], trials: int = DEFAULT_TRIALS,
-             top_ns: tuple[int, ...] = (1, 3, 5, 10), seed: int | None = None) -> dict[str, dict]:
-    """Returns {driver: {"win": p, "top3": p, "top5": p, "top10": p}} plus a
-    "_order_counts" helper isn't exposed -- use simulate_h2h for pairwise. Needs
-    >=2 drivers with a rating; returns {} otherwise. Deterministic given `seed`
-    (default: seeded from the field so displayed prices don't jitter between
-    cache refreshes for an unchanged field)."""
+             top_ns: tuple[int, ...] = (1, 3, 5, 10, 20), seed: int | None = None) -> dict[str, dict]:
+    """Returns {driver: {"win": p, "top3": p, "top5": p, "top10": p, "top20": p}}.
+    Needs >=2 drivers with a rating; returns {} otherwise. Deterministic given
+    `seed` (default: seeded from the field so displayed prices don't jitter
+    between cache refreshes for an unchanged field).
+
+    20 was ADDED 2026-08-07. KXNASCARTOP20 has been wired for ingestion in
+    kalshi_racing_client for some time, but this default stopped at 10, so
+    `sim[driver].get("top20")` was always None and all 36 of the Iowa Corn 350's
+    top-20 markets sat unpriced while top-3/5/10 on the SAME race priced 34 of
+    36. Ingested-but-unpriceable is the quiet failure mode: nothing errors, the
+    rows just never produce a bet.
+
+    A top-N line at or beyond the rated field size is DEGENERATE and is not
+    emitted. With 18 rated drivers every one of them finishes top-20 in every
+    trial, so the model would say 100% against a market pricing ~85% and book a
+    15pp edge on all of them -- an artifact of the field being short, not a real
+    disagreement. Returning no number leaves those rows unpriced instead, which
+    is the same posture the field-coverage gate takes in racing_markets.py."""
     field = [d for d in ratings]
     if len(field) < 2:
         return {}
@@ -74,6 +87,8 @@ def simulate(ratings: dict[str, float], trials: int = DEFAULT_TRIALS,
     for d in field:
         row = {}
         for n in top_ns:
+            if n > 1 and n >= len(field):
+                continue  # degenerate: everyone makes it, see docstring
             key = "win" if n == 1 else f"top{n}"
             row[key] = round(counts[d][n] / trials, 4)
         out[d] = row
