@@ -100,6 +100,12 @@ TEAM_ALIASES: dict[str, str] = {
     "salt lake": "real salt lake",
     "san jose": "san jose earthquakes",
     "seattle": "seattle sounders fc",
+    # The FULLER renderings, found unrated in a 2026-08-07 sweep of every live
+    # soccer market's team against the rating pools. The short keys above only
+    # cover the city-only form some listings use; a listing that spells the club
+    # out lands on neither the short key nor the ESPN cache's own spelling.
+    "saint louis city sc": "st louis city sc",
+    "seattle sounders": "seattle sounders fc",
     "toronto": "toronto fc",
     "vancouver": "vancouver whitecaps",
     "vancouver whitecaps fc": "vancouver whitecaps",
@@ -218,16 +224,23 @@ TEAM_ALIASES: dict[str, str] = {
     # this one safe rather than a coin flip between two spellings of the club.
     "estrela amadora": "estrela",
     #
-    # DELIBERATELY NOT MAPPED -- no evidence, and the wrong guess is expensive:
-    #   "Sporting CP"  -> almost certainly "sp lisbon", but it shares NO token
-    #                     with it, and the neighbouring key is "sp braga". A
-    #                     guess on the word "Sporting" alone could put Lisbon's
-    #                     markets onto Braga's ratings. Same shape as the
-    #                     Espanyol/Barcelona near-miss.
-    #   "Madeira", "Viseu" -> newly promoted, no P1 history under any spelling.
-    # Left unresolved and visible (they price as "no baseline") until either
-    # Polymarket lists the league, or these clubs appear in a football-data
-    # season we can align against.
+    # "Sporting CP" -> "sp lisbon". This was DELIBERATELY LEFT UNMAPPED at first,
+    # on the reasoning that it shares no token with "sp lisbon" while the
+    # neighbouring key is "sp braga", so guessing off the word "Sporting" could
+    # put Lisbon's markets onto Braga's ratings -- the Espanyol/Barcelona shape.
+    # The caution was right; the conclusion is now settled by data rather than by
+    # guessing. "Sp Lisbon" and "Sp Braga" appear on OPPOSITE SIDES of 63 P1
+    # fixtures, most recently 2026-03-07, so they are certainly two clubs, and
+    # both are in the current 18-team season alongside each other. Sp Lisbon is
+    # the deepest-rated club in the league at 1,028 matches. Leaving the biggest
+    # club in Portugal unpriced was the more expensive error of the two.
+    "sporting cp": "sp lisbon",
+    #
+    # STILL DELIBERATELY NOT MAPPED:
+    #   "Viseu" -> Academico de Viseu, a SECOND-TIER club. We only ingest P1, so
+    #              there is no rating to map it to and there should not be one.
+    # Left unresolved and visible (it prices as "no baseline") rather than being
+    # attached to whichever top-flight key looks closest.
     #
     # ---- E1 + P1, 2026-08-07 (second pass) -----------------------------------
     # Adding Polymarket coverage for these two leagues made the cross-platform
@@ -235,16 +248,31 @@ TEAM_ALIASES: dict[str, str] = {
     # -- the exact evidence source the P1 block above says was missing. Re-ran
     # scripts/derive_soccer_team_aliases.py and it pinned 58 name observations.
     #
-    # Three of these could not have been guessed safely from the strings alone:
+    # Two of these could not have been guessed safely from the strings alone:
     #   vitoria sc  -> guimaraes  (Vitoria SC is Vitoria de Guimaraes)
     #   sc braga    -> sp braga
-    #   cs maritimo -> madeira    (the alignment OVERRULED a token match to the
-    #                              "maritimo" key -- and this is what the thin
-    #                              34-match "madeira" key flagged yesterday
-    #                              actually is)
+    #
+    # CORRECTED 2026-08-07. This block originally shipped `cs maritimo ->
+    # madeira`, on the grounds that the cross-platform fixture alignment
+    # OVERRULED the obvious token match to the "maritimo" key. The alignment was
+    # wrong and the obvious answer was right: Madeira and Maritimo are two
+    # different clubs that PLAYED EACH OTHER TWICE in the 1994-95 Primeira Liga
+    # (Maritimo 1-0 Madeira on 1995-01-08, Madeira 2-2 Maritimo on 1995-05-21).
+    # "Madeira" is Uniao da Madeira, 34 matches in that one season; "Maritimo"
+    # is CS Maritimo, 924 matches from 1994 to 2023. The alias sent every CS
+    # Maritimo market to a 31-year-old rating belonging to a different club.
+    #
+    # THE GENERAL LESSON, which is why this is written out: fixture alignment is
+    # evidence, not proof, and it is exactly as capable of being wrong as the
+    # string heuristic it was introduced to overrule (it was introduced to stop
+    # `rcd espanyol de barcelona -> barcelona`). A head-to-head existence check
+    # is strictly stronger than either: two names that appear on OPPOSITE SIDES
+    # of the same fixture cannot be the same club, and that is a fact about the
+    # data rather than a judgement about the names. Run that check before
+    # trusting alignment to overrule a token match.
     "sport lisboa e benfica": "benfica",
     "cf estrela da amadora": "estrela",
-    "cs maritimo": "madeira",
+    "cs maritimo": "maritimo",
     "sc braga": "sp braga",
     "vitoria sc": "guimaraes",
     "cd nacional": "nacional",
@@ -259,6 +287,10 @@ TEAM_ALIASES: dict[str, str] = {
     "moreirense fc": "moreirense",
     "rio ave fc": "rio ave",
     # E1: Polymarket suffixes every club with FC/AFC.
+    # QPR is the one E1 club whose football-data key is an ABBREVIATION rather
+    # than a shortened name, so stripping the "FC" suffix (which is all the rest
+    # of this block does) still misses it. 1,050 E1 matches through 2026-05-02.
+    "queens park rangers fc": "qpr",
     "blackburn rovers fc": "blackburn",
     "bristol city fc": "bristol city",
     "burnley fc": "burnley",

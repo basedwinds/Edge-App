@@ -107,7 +107,27 @@ def _season_code(start_year: int) -> str:
 def fetch_season_csv(div: str, start_year: int) -> pd.DataFrame | None:
     """Returns None (not raises) for a season/division combo with no file --
     early seasons for some divisions, or a not-yet-started current season,
-    simply don't have a file published yet."""
+    simply don't have a file published yet.
+
+    A MISSING FILE DOES NOT 404. football-data.co.uk redirects a request for a
+    season/division it has never published to a DIFFERENT division's file, and
+    the redirect returns 200 with a perfectly well-formed CSV. Asking for
+    9394/P1.csv (Liga Portugal's first season is 94/95) lands on 9394/SP1.csv
+    and hands back a full Spanish La Liga season. Verified live, four such
+    combos exist across the 11 football-data divisions we pull:
+
+        SP2 1993, SP2 1994, SP2 1995, P1 1993   -> all served SP1
+
+    Because this used to `assign(_div=div)` on whatever came back, 1,602
+    Spanish matches were training into the Liga Portugal and Segunda rating
+    pools -- Barcelona, Ath Madrid, Ath Bilbao, Celta and La Coruna were all
+    rated Portuguese clubs, and soccer Elo is per-league so nothing else
+    diluted them. Found while auditing the Liga Portugal pricing shipped in
+    a3b03b8.
+
+    The file states its own division in the `Div` column, so trust THAT over
+    the division we asked for, and keep only rows that agree. Status code and
+    column-shape checks cannot catch this: the wrong file is a valid file."""
     url = BASE_URL.format(season=_season_code(start_year), div=div)
     resp = httpx.get(url, timeout=30.0, follow_redirects=True, headers=_HEADERS)
     if resp.status_code != 200 or len(resp.content) < 200:
@@ -118,6 +138,10 @@ def fetch_season_csv(div: str, start_year: int) -> pd.DataFrame | None:
         return None
     if "Date" not in df.columns or "FTR" not in df.columns:
         return None
+    if "Div" in df.columns:
+        df = df[df["Div"].astype(str).str.strip() == div]
+        if df.empty:
+            return None
     return df.assign(_div=div, _season_start_year=start_year)
 
 

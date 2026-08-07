@@ -296,6 +296,69 @@ def stale_bet_market_types(session: Session) -> list[dict]:
             for s, bt, mt, n in sorted(rows, key=lambda r: -r[3])]
 
 
+def foreign_league_seasons(session: Session) -> list[dict]:
+    """Soccer league-seasons whose clubs look like ANOTHER league's clubs.
+
+    Guards a silent data-poisoning bug found 2026-08-07. football-data.co.uk does
+    not 404 a season/division it never published -- it REDIRECTS to a different
+    division and returns 200 with a valid CSV. Requesting 9394/P1.csv (Liga
+    Portugal starts 94/95) yields 9394/SP1.csv, a full Spanish La Liga season.
+    The client stamped the division it ASKED for onto whatever came back, so
+    1,602 Spanish matches trained into the Portuguese and Spanish-second-tier
+    rating pools: Barcelona, Ath Madrid, Ath Bilbao, Celta and La Coruna were all
+    rated Liga Portugal clubs. Soccer Elo is per-league, so nothing diluted them
+    and nothing complained -- the pools just quietly had the wrong teams in them.
+
+    fetch_season_csv now keeps only rows whose own `Div` column matches, which
+    fixes the known cause. This checks the SYMPTOM instead, so a new variant --
+    a different redirect, a re-labelled file, a bad merge -- still surfaces.
+
+    Method: for each (league, season), compare its club set against each league's
+    own recent-5-season club set. A season that matches some OTHER league better
+    than its own, by at least half its clubs, is reported. Verified to find
+    exactly the four real blocks (P1 93-94, SP2 93-94/94-95/95-96) before the fix
+    and zero after it.
+
+    Reads the football-data cache, not the DB; `session` is unused and kept only
+    to match the run_all() calling convention.
+    """
+    from collections import defaultdict
+
+    from app.ingestion import soccer_data
+
+    teams: dict[tuple, set] = defaultdict(set)
+    counts: dict[tuple, int] = defaultdict(int)
+    for m in soccer_data.load_matches():
+        key = (m["league"], m.get("season"))
+        teams[key].add(m["home_team"])
+        teams[key].add(m["away_team"])
+        counts[key] += 1
+
+    by_league: dict[str, list] = defaultdict(list)
+    for league, season in teams:
+        if season:
+            by_league[league].append(season)
+    recent = {
+        league: set().union(*[teams[(league, s)] for s in sorted(seasons)[-5:]])
+        for league, seasons in by_league.items()
+    }
+
+    out = []
+    for (league, season), clubs in teams.items():
+        if not season or not clubs:
+            continue
+        own = len(clubs & recent.get(league, set())) / len(clubs)
+        rival = max(
+            ((other, len(clubs & pool) / len(clubs)) for other, pool in recent.items() if other != league),
+            key=lambda x: x[1], default=None,
+        )
+        if rival and rival[1] > own and rival[1] >= 0.5:
+            out.append({"league": league, "season": season, "matches": counts[(league, season)],
+                        "own_league_overlap": round(own, 3),
+                        "looks_like": rival[0], "overlap": round(rival[1], 3)})
+    return sorted(out, key=lambda r: -r["matches"])
+
+
 _CACHE_AWARE = {"phantom_priced_markets", "flat_ladders", "resolved_looking_active_markets"}
 
 
@@ -316,6 +379,7 @@ def run_all(session: Session, cache: dict | None = None) -> dict:
         "finished_without_result": finished_without_result,
         "resolver_dependent_teams": resolver_dependent_teams,
         "stale_bet_market_types": stale_bet_market_types,
+        "foreign_league_seasons": foreign_league_seasons,
     }
     cache = {} if cache is None else cache
     out: dict = {}
