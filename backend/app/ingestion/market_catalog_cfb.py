@@ -161,3 +161,50 @@ def upsert_kalshi_cfb_conference_market(session: Session, row: dict, team: str, 
         volume=row.get("volume"),
     ))
     return market
+
+
+def upsert_polymarket_cfb_futures_market(session: Session, row: dict, team: str | None) -> Market | None:
+    """Polymarket CFB season futures (national champion / playoff rounds / win
+    totals / conference winners).
+
+    Returns None for an unresolved team rather than storing the raw Polymarket
+    name -- same "unknown, don't guess" convention as the NBA/WNBA Polymarket
+    upserts. An unlinked market is recoverable; one linked to the wrong team
+    misprices silently.
+
+    source_ticker is condition_id + team because Polymarket's conditionId is
+    already unique per market; the team suffix only makes the row readable in
+    the DB and guards against a future event that reuses one.
+    """
+    if not team or not row.get("condition_id"):
+        return None
+    source_ticker = f"{row['condition_id']}-{team}"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket",
+            source_ticker=source_ticker,
+            source_event_id=row.get("event_slug"),
+            market_type=row["market_type"],
+            sport="cfb",
+        )
+        session.add(market)
+    market.team = team
+    market.line = row.get("line")
+    market.group_label = row.get("event_title")
+    market.status = "active"
+    session.flush()
+
+    # outcome_prices[0] is the YES side on the Yes/No markets and the OVER side
+    # on the win-total rungs ("O 8.5" is listed first) -- both are the side this
+    # app treats as "yes", so one read covers every type here.
+    prices = row.get("outcome_prices") or []
+    session.add(MarketSnapshot(
+        market_id=market.id,
+        ts=datetime.datetime.utcnow(),
+        yes_bid=row.get("best_bid"),
+        yes_ask=row.get("best_ask"),
+        last_price=prices[0] if prices else row.get("last_trade_price"),
+        volume=row.get("volume"),
+    ))
+    return market

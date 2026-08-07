@@ -8,7 +8,7 @@ before the schedule would leave freshly-listed games unlinked for a cycle.
 import datetime
 import logging
 
-from app.clients import espn_cfb_client, kalshi_cfb_client
+from app.clients import espn_cfb_client, kalshi_cfb_client, polymarket_cfb_client
 from app.db.database import SessionLocal
 from app.ingestion.poller_lock import db_write_lock
 from app.db.models import CfbGame
@@ -303,12 +303,53 @@ def settle_placed_bets_cfb():
     return
 
 
+def refresh_polymarket_cfb_futures():
+    """Polymarket CFB season futures. CFB was the only sport in this app with
+    zero Polymarket coverage (audited 2026-08-07), so before this every CFB
+    market was single-source: no cross-platform divergence could be found on it
+    and there was no second book to compare a Kalshi price against.
+
+    Uses the SAME name index the Kalshi path uses -- Polymarket writes full
+    display names with mascots ("Boston College Eagles"), which is the shape
+    resolve_team already handles. Measured at ingestion time: 402/402 rows
+    resolved.
+    """
+    rows = polymarket_cfb_client.get_cfb_futures_markets()
+    if not rows:
+        log.info("polymarket cfb futures: no rows returned")
+        return
+    name_index = _NAME_INDEX_CACHE.get("index") or {}
+    if not name_index:
+        # Ordered after refresh_cfb_games in run_full_refresh_cfb, which is what
+        # populates this. Bail rather than drop all 402 rows as unresolved --
+        # that would look like Polymarket had no supply.
+        log.warning("polymarket cfb futures: name index empty, skipping this cycle")
+        return
+    known = set(name_index.values())
+    stored = unresolved = 0
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for row in rows:
+                team = resolve_team(None, row["team_name"], name_index, known)
+                if market_catalog_cfb.upsert_polymarket_cfb_futures_market(session, row, team) is None:
+                    unresolved += 1
+                else:
+                    stored += 1
+            session.commit()
+        finally:
+            session.close()
+    log.info("polymarket cfb futures: %d stored, %d unresolved, across %d market types",
+             stored, unresolved, len({r["market_type"] for r in rows}))
+
+
 def run_full_refresh_cfb():
     for step in (refresh_cfb_games, refresh_cfb_ratings, refresh_cfb_season_sim,
                  refresh_cfb_conference_sim, refresh_kalshi_cfb_moneyline,
                  refresh_kalshi_cfb_spread,
                  refresh_kalshi_cfb_win_totals, refresh_kalshi_cfb_conference_futures,
-                 refresh_cfb_playoff_sim, refresh_kalshi_cfb_playoff_futures):
+                 refresh_cfb_playoff_sim, refresh_kalshi_cfb_playoff_futures,
+                 refresh_polymarket_cfb_futures):
         try:
             step()
         except Exception:

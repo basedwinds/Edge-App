@@ -20,6 +20,11 @@ const MARKET_TYPE_LABEL: Record<CfbMarketRow["market_type"], string> = {
   cfb_playoff: "Playoff",
   cfb_quarterfinal: "Quarterfinal",
   cfb_title_conference: "Natl. title (conf.)",
+  // Polymarket-only bracket rounds (added 2026-08-07).
+  cfb_top4_seed: "Top-4 Seed",
+  cfb_semifinal: "Semifinal",
+  cfb_finalist: "Natl. title game",
+  cfb_national_champion: "National Champion",
 };
 
 function formatPct(v: number | null) {

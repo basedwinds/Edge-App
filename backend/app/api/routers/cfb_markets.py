@@ -43,12 +43,29 @@ WEAK_POOL_NOTE = "rating built outside FBS play - tracking only"
 
 
 
+# Bracket rounds Polymarket lists and Kalshi does not (added 2026-08-07 with the
+# Polymarket CFB pipeline). All four read straight off playoff_sim_cfb, which
+# already simulated the bracket to a champion -- "title" in particular was being
+# computed and discarded every run because no Kalshi market asked for it.
+POLYMARKET_BRACKET_MARKET_TYPES = {
+    "cfb_national_champion", "cfb_finalist", "cfb_semifinal", "cfb_top4_seed",
+}
+_BRACKET_SIM_KEY = {
+    "cfb_playoff": "playoff",
+    "cfb_quarterfinal": "quarterfinal",
+    "cfb_semifinal": "semifinal",
+    "cfb_finalist": "finalist",
+    "cfb_top4_seed": "top4_seed",
+    "cfb_national_champion": "title",
+}
+
 GAME_MARKET_TYPES = {"moneyline", "spread"}
 # Season-long ladders -- no cfb_game_id, priced from the season Monte Carlo
 # rather than a single game's Elo.
 SEASON_MARKET_TYPES = {
     "win_total", "conference_champion", "conference_qualifier", "conference_regtop",
     "cfb_playoff", "cfb_quarterfinal", "cfb_title_conference",
+    *POLYMARKET_BRACKET_MARKET_TYPES,
 }
 # Kalshi's short conference codes -> the ESPN conference names playoff_sim_cfb
 # keys on. "OTHER" is everything else and is computed as the remainder.
@@ -69,12 +86,18 @@ SEASON_MARKET_TYPES = {
 # The honest design is: stake them like anything else, flag them clearly in the
 # UI, and let the CLV-selection gate retire them if the data says so. That gate
 # exists precisely for this.
-APPROXIMATE_MARKET_TYPES = {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"}
+# The new Polymarket bracket rounds come from the SAME simulation and inherit
+# the same proxy, so they carry the same badge -- not badging them would imply
+# the national-champion number is better founded than the quarterfinal one when
+# it is strictly more compounded.
+APPROXIMATE_MARKET_TYPES = {"cfb_playoff", "cfb_quarterfinal", "cfb_title_conference",
+                            *POLYMARKET_BRACKET_MARKET_TYPES}
 
 # Season-long types draw from the futures sub-pool; moneyline from the weekly one.
 FUTURES_MARKET_TYPES = {
     "win_total", "conference_champion", "conference_qualifier", "conference_regtop",
     "cfb_playoff", "cfb_quarterfinal", "cfb_title_conference",
+    *POLYMARKET_BRACKET_MARKET_TYPES,
 }
 
 _KALSHI_CONF_CODE = {
@@ -179,7 +202,7 @@ def _cfb_season_model_prob(m, win_dist, sim_trials, po_sim, conf_sim):
             model_prob = season_sim_cfb.prob_wins_at_least(win_dist[m.team], m.line, sim_trials)
             if model_prob is not None:
                 model_prob = round(model_prob, 4)
-    elif m.market_type in ("cfb_playoff", "cfb_quarterfinal", "cfb_title_conference"):
+    elif m.market_type in _BRACKET_SIM_KEY or m.market_type == "cfb_title_conference":
         if not po_sim:
             no_baseline_reason = "Playoff simulation not warm yet."
         elif m.market_type == "cfb_title_conference":
@@ -195,7 +218,7 @@ def _cfb_season_model_prob(m, win_dist, sim_trials, po_sim, conf_sim):
             else:
                 no_baseline_reason = "Unmapped conference code."
         else:
-            key = "playoff" if m.market_type == "cfb_playoff" else "quarterfinal"
+            key = _BRACKET_SIM_KEY[m.market_type]
             src = po_sim.get(key) or {}
             if m.team in src:
                 model_prob = round(src[m.team], 4)

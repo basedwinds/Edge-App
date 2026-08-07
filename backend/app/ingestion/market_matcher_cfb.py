@@ -111,6 +111,28 @@ def build_game_index(cfb_games: list[dict]) -> dict:
     return index
 
 
+# Spellings no live ESPN row produces, so build_name_index below can't learn
+# them. Found 2026-08-07 by resolving all 513 real Polymarket CFB team labels
+# against the index: 3 distinct names failed, everything else that failed was a
+# placeholder, a conference, or the "Other" bucket.
+#
+# Keys are ALREADY normalized the way _norm_name normalizes ("Miami (FL)" and
+# "Miami FL" both fold to "miamifl", so one entry covers both spellings).
+#
+# "mississippirebels" is keyed on the FULL string on purpose. Ole Miss is MISS
+# and Mississippi State is MSST -- aliasing the bare token "mississippi" would
+# merge two different schools. The mascot is what disambiguates them (Rebels vs
+# Bulldogs), so the mascot has to stay in the key. Same reasoning that killed
+# the Espanyol/Barcelona and cs maritimo/madeira merges on the soccer side: a
+# unique-looking token match is not automatically a safe one.
+_EXTRA_NAME_ALIASES = {
+    "miamifl": "MIA",              # ESPN: "Miami Hurricanes"; Miami (OH) is M-OH
+    "northcarolinast": "NCSU",     # ESPN: "NC State Wolfpack"
+    "northcarolinastate": "NCSU",  # the _name_variants St./State expansion
+    "mississippirebels": "MISS",   # Ole Miss, NOT Mississippi State (MSST)
+}
+
+
 def build_name_index(cfb_games: list[dict]) -> dict:
     """Normalised display name -> ESPN abbreviation, for resolving a team whose
     Kalshi abbreviation isn't in the alias table.
@@ -121,7 +143,7 @@ def build_name_index(cfb_games: list[dict]) -> dict:
     built from it maps "158" -> "NEB" and the fallback silently never fires.
     Found exactly that way -- the fallback looked like it was working because
     every test case happened to resolve on abbreviation alone."""
-    out: dict[str, str] = {}
+    out: dict[str, str] = dict(_EXTRA_NAME_ALIASES)
     for g in cfb_games:
         for name_key, abbr_key in (("home_name", "home_team"), ("away_name", "away_team"),
                                    ("home_short", "home_team"), ("away_short", "away_team"),

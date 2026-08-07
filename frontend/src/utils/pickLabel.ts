@@ -89,6 +89,10 @@ const GAME_MARKET_TYPE_LABELS: Record<string, string> = {
   cfb_playoff: "Make Playoff",
   cfb_quarterfinal: "Reach Quarterfinal",
   cfb_title_conference: "Champion's Conference",
+  cfb_top4_seed: "Earn Top-4 Seed",
+  cfb_semifinal: "Reach Semifinal",
+  cfb_finalist: "Reach Natl. Title Game",
+  cfb_national_champion: "Win National Title",
 };
 
 // Tennis is checked FIRST because it collides with soccer on two keys:

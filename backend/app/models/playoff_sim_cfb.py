@@ -136,6 +136,13 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict:
 
     made = np.zeros(n_teams); qf = np.zeros(n_teams); title = np.zeros(n_teams)
     title_conf = np.zeros(len(conf_ids))
+    # Three more rounds of the SAME bracket this loop already plays out, added
+    # 2026-08-07 because Polymarket lists all three as real markets and Kalshi
+    # lists none of them ("CFB Playoff Top 4 Seeds", "team to make Semis",
+    # "Team to Make National Championship" -- 150 markets between them). Free:
+    # the bracket is simulated to a champion regardless, so these are counters
+    # on state that was already being computed and discarded.
+    top4 = np.zeros(n_teams); semi = np.zeros(n_teams); finalist = np.zeros(n_teams)
 
     chunk = 250
     done = 0
@@ -182,6 +189,9 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict:
             made[field] += 1
 
             byes = field[:BYES]
+            # Seeds 1-4 ARE the bye teams -- BYES is defined as "seeds 1-4 skip
+            # the first round" -- so the top-4-seed market needs no extra logic.
+            top4[byes] += 1
             rest = field[BYES:]
             # 5v12, 6v11, 7v10, 8v9
             winners = []
@@ -198,6 +208,15 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict:
                     pa = _neutral_win_prob(strength[a_], strength[b_])
                     nxt.append(a_ if rng.random() < pa else b_)
                 bracket = nxt
+                # The bracket enters this loop at 8 (4 byes + 4 first-round
+                # winners) and halves: 8 -> 4 -> 2 -> 1. So the survivors ARE
+                # the semifinalists at 4 and the finalists at 2 -- counted by
+                # size rather than by round index so this stays correct if
+                # FIELD_SIZE/BYES ever change the bracket's depth.
+                if len(bracket) == 4:
+                    semi[bracket] += 1
+                elif len(bracket) == 2:
+                    finalist[bracket] += 1
             champ = bracket[0]
             title[champ] += 1
             title_conf[conf_index[champ]] += 1
@@ -206,6 +225,9 @@ def simulate(trials: int = 4000, games: list[dict] | None = None) -> dict:
     return {
         "playoff": {teams[i]: made[i] / trials for i in range(n_teams)},
         "quarterfinal": {teams[i]: qf[i] / trials for i in range(n_teams)},
+        "top4_seed": {teams[i]: top4[i] / trials for i in range(n_teams)},
+        "semifinal": {teams[i]: semi[i] / trials for i in range(n_teams)},
+        "finalist": {teams[i]: finalist[i] / trials for i in range(n_teams)},
         "title": {teams[i]: title[i] / trials for i in range(n_teams)},
         "title_by_conference": {conf_ids[i]: title_conf[i] / trials for i in range(len(conf_ids))},
     }

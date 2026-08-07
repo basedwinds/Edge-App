@@ -264,7 +264,11 @@ export interface CfbMarketRow {
     | "conference_regtop"
     | "cfb_playoff"
     | "cfb_quarterfinal"
-    | "cfb_title_conference";
+    | "cfb_title_conference"
+    | "cfb_top4_seed"
+    | "cfb_semifinal"
+    | "cfb_finalist"
+    | "cfb_national_champion";
   source: "kalshi" | "polymarket";
   team: string | null;
   line: number | null;
