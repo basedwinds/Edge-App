@@ -68,6 +68,12 @@ TRACKING_NOTE = (
     "(pole). Pre-qualifying prices use driver+constructor (no grid yet); they "
     "sharpen at the race weekend. Validated forward by CLV, not backtested."
 )
+PRE_QUALIFYING_NOTE = (
+    "Priced but not staked: qualifying hasn't run, so there is no starting grid and the model is "
+    "pricing on driver and constructor form alone. Measured across every series' race history, the "
+    "grid is the single biggest input -- without it the model is flat, which reads as an edge on "
+    "every backmarker. It sharpens and becomes stakeable once the grid is published."
+)
 CHAMP_NOTE = (
     "Season-title price: a standings-aware Monte Carlo simulates the remaining "
     "races from current championship points and driver strength. model_validated: "
@@ -402,6 +408,53 @@ def list_racing_markets(session: Session = Depends(get_session)):
                 # constructors' title), which is what row.driver holds.
                 team=row.driver if _is_champ else None,
             )
+            # PRE-QUALIFYING FIELD MARKETS ARE PRICED BUT NOT STAKED.
+            #
+            # strength() carries a grid term, and before qualifying there is no
+            # grid, so the model prices the race on driver+constructor alone and
+            # comes out FLAT. Measured over each series' full race history
+            # (scripts/fit_racing_params_per_series.py), with grid against
+            # without:
+            #
+            #     series    Brier            winner-hit
+            #     cup       .02574 -> .02510   7.0% -> 14.8%
+            #     xfinity   .02509 -> .02387  10.3% -> 19.1%
+            #     truck     .02695 -> .02517  21.5% -> 22.6%
+            #     f1        .04113 -> .02806  45.0% -> 57.8%
+            #     irl       .03486 -> .03186  31.0% -> 25.9%
+            #
+            # CALIBRATION IMPROVES IN ALL FIVE, which is the metric that governs
+            # here for the same reason it governed the grid_pts refit: this model
+            # never has to pick one driver, it bets wherever model_prob beats the
+            # price, so profit turns on the probability being right. IndyCar is
+            # the one series whose winner-hit gets WORSE with the grid, and an
+            # earlier reading of this table called the grid "contraindicated" for
+            # it on that basis -- that was reading off winner-hit, the metric
+            # explicitly rejected as the objective. Applying one metric to the
+            # parameter choice and another to this gate would be incoherent.
+            #
+            # WHAT IT PREVENTS, observed live: with no grid the field flattens
+            # and every backmarker inherits a plausible-looking probability, so
+            # top_n starts staking drivers the market prices as no-hopers --
+            # Cody Ware at model 31.0% against a 3.5% market, an 8.9x ratio that
+            # slips under implausible_disagreement's 10x threshold.
+            #
+            # SCOPE. Only race_winner and top_n, the two that consume the grid
+            # term. Pole is exempt because quali_strength is a different model
+            # AND a pole market resolves AT qualifying -- gating it on
+            # qualifying would mean never pricing it. h2h is exempt because
+            # _h2h_model_prob passes grid=None unconditionally, so it is always
+            # in this state and gating it would block it permanently.
+            # Championships have no grid concept at all.
+            #
+            # Priced, visible, tracked, not staked -- the same posture as map
+            # markets. The row keeps its model number and edge so it still
+            # accrues forward CLV, which is how this gate gets judged.
+            if (row.market_type in ("race_winner", "top_n")
+                    and not (grid_by_event or {}).get(row.race_event_id)):
+                stake = None
+                kelly = None
+                row.model_note = f"{row.model_note or ''} {PRE_QUALIFYING_NOTE}".strip()
             row.kelly_fraction = kelly
             row.suggested_stake_dollars = stake
             row.suggested_stake_units = round(stake / unit_dollars, 2) if (stake is not None and unit_dollars) else None
