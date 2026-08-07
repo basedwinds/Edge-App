@@ -553,8 +553,16 @@ def _game_insight_valorant(match: ValorantMatch, market_type: str, model_prob: f
             # move favours -- otherwise name the team, or the pronoun points at
             # the wrong one.
             whose = "their" if moved_to == a else f"{moved_to}'s"
+            # State the rate against what Elo implied. A LOSING record can still
+            # push a side up -- Team Heretics are 4-10 vs Fnatic, but 4/14 = 29%
+            # is better than the 19% team Elo gave them, so h2h correctly moved
+            # them up. Without the comparison that reads as a losing record
+            # being offered as evidence in their favour.
+            rate = wins / t if t else 0.0
+            elo_implied = stages["p_elo_only"] if moved_to == a else 1.0 - stages["p_elo_only"]
             drivers.append(
-                f"{whose} {wins}-{losses} head-to-head record in {t} prior meeting{'s' if t != 1 else ''}"
+                f"{whose} {wins}-{losses} head-to-head record in {t} prior meeting{'s' if t != 1 else ''} "
+                f"({rate * 100:.0f}% where team Elo implies {elo_implied * 100:.0f}%)"
             )
         if _helped(d_rest):
             drivers.append(f"a rest/schedule advantage to {moved_to}")

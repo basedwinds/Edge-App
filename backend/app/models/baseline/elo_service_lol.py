@@ -413,3 +413,52 @@ def get_series_distribution(team_a: str, team_b: str, best_of: int, match_date: 
     dist = _blend_h2h(pool, team_a, team_b, predict_series(pool, team_a, team_b, best_of))
     dist = _blend_rest(team_a, team_b, dist, match_date, last_played)
     return _blend_player(pool, dist, team_a, team_b, resolver)
+
+
+def explain_series(team_a: str, team_b: str, best_of: int, match_date: str | None = None) -> dict | None:
+    """Stage-by-stage build of the series number, so the reasoning drawer can
+    report the SAME components the price was actually made of.
+
+    Measured 2026-08-07: 20 of 63 live LoL matches have the blends moving the
+    number by 5pp or more, up to 17.3pp, and the drawer said nothing about any
+    of it -- it recited the two team ratings and then quoted a model number the
+    ratings alone do not produce. Same defect Valorant had.
+
+    Mirrors get_series_distribution's POOL ROUTING exactly rather than
+    re-deriving it. That is not optional here: LoL prices lower-tier teams from
+    the EXPANDED pool, and reading the primary pool instead reports a baseline
+    the price never used. A first pass at this measurement did exactly that and
+    produced phantom 40pp "moves" from a fake 50.0% baseline -- which is the
+    very 1500/1500 bug get_matchup_ratings was written to stop.
+    """
+    state = _cache.get("state")
+    if state is None or not best_of:
+        return None
+    if state.games_played(team_a) >= MIN_GAMES and state.games_played(team_b) >= MIN_GAMES:
+        pool, last_played, resolver = state, _cache.get("last_played_date", {}), _cache.get("lineup_resolver")
+        pool_name = "primary"
+    else:
+        exp = _cache.get("state_exp")
+        team_a = resolve_team_name(team_a)
+        team_b = resolve_team_name(team_b)
+        if exp is None or exp.games_played(team_a) < MIN_GAMES or exp.games_played(team_b) < MIN_GAMES:
+            return None
+        pool, last_played, resolver = exp, _cache.get("last_played_date_exp", {}), _cache.get("lineup_resolver_exp")
+        pool_name = "expanded"
+
+    base = predict_series(pool, team_a, team_b, best_of)
+    after_h2h = _blend_h2h(pool, team_a, team_b, base)
+    after_rest = _blend_rest(team_a, team_b, after_h2h, match_date, last_played)
+    final = _blend_player(pool, after_rest, team_a, team_b, resolver)
+
+    wins_a, total = pool.h2h_record(team_a, team_b) if hasattr(pool, "h2h_record") else (0, 0)
+    return {
+        "dist": final,
+        "pool": pool_name,
+        "p_elo_only": base.prob_series_win_a(),
+        "p_after_h2h": after_h2h.prob_series_win_a(),
+        "p_after_rest": after_rest.prob_series_win_a(),
+        "p_final": final.prob_series_win_a(),
+        "h2h_wins_a": wins_a,
+        "h2h_total": total,
+    }

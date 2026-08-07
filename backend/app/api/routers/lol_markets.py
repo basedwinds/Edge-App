@@ -509,6 +509,55 @@ def _game_insight_lol(match: LolMatch, model_prob: float | None, market_prob: fl
                 f"The ratings favor {stronger} here, sitting above {weaker} ({s_r:.0f} to {w_r:.0f}).",
                 f"Team Elo gives {stronger} the edge, ahead of {weaker} ({s_r:.0f} to {w_r:.0f}).",
             ]))
+    # Say WHY the priced number left the pure team-Elo view. Measured 2026-08-07:
+    # 20 of 63 live LoL matches have the blends moving it 5pp+ (up to 17.3pp),
+    # and none of it was mentioned -- the drawer recited two ratings and then
+    # quoted a number those ratings do not produce. Same defect Valorant had;
+    # this mirrors the corrected wording there, including the three errors found
+    # while fixing it (direction not "pick", attribute by each stage's own delta,
+    # and don't call it a player edge unless there is one).
+    stages = elo_service_lol.explain_series(match.team_a, match.team_b, match.best_of or 3)
+    if stages is not None and abs(stages["p_final"] - stages["p_elo_only"]) >= 0.05:
+        a, b = match.team_a, match.team_b
+        moved_to = a if stages["p_final"] > stages["p_elo_only"] else b
+        toward_a = stages["p_final"] > stages["p_elo_only"]
+        d_h2h = stages["p_after_h2h"] - stages["p_elo_only"]
+        d_rest = stages["p_after_rest"] - stages["p_after_h2h"]
+        d_player = stages["p_final"] - stages["p_after_rest"]
+
+        def _helped(delta: float) -> bool:
+            return abs(delta) > 0.005 and (delta > 0) == toward_a
+
+        drivers = []
+        if stages["h2h_total"] and _helped(d_h2h):
+            w, t = stages["h2h_wins_a"], stages["h2h_total"]
+            wins, losses = (w, t - w) if moved_to == a else (t - w, w)
+            whose = "their" if moved_to == a else f"{moved_to}'s"
+            # State the rate against what Elo implied. A LOSING record can still
+            # push a side up -- Team Heretics are 4-10 vs Fnatic, but 4/14 = 29%
+            # is better than the 19% team Elo gave them, so h2h correctly moved
+            # them up. Without the comparison that reads as a losing record
+            # being offered as evidence in their favour.
+            rate = wins / t if t else 0.0
+            elo_implied = stages["p_elo_only"] if moved_to == a else 1.0 - stages["p_elo_only"]
+            drivers.append(
+                f"{whose} {wins}-{losses} head-to-head record in {t} prior meeting{'s' if t != 1 else ''} "
+                f"({rate * 100:.0f}% where team Elo implies {elo_implied * 100:.0f}%)"
+            )
+        if _helped(d_rest):
+            drivers.append(f"a rest/schedule advantage to {moved_to}")
+        if _helped(d_player):
+            drivers.append(f"a player-level read that differs from the team ratings, favouring {moved_to}")
+        if drivers:
+            many = len(drivers) > 1
+            subject = "them" if moved_to == a else match.team_a
+            sentences.append(
+                f"The blends pull toward {moved_to}, taking {subject} from "
+                f"{stages['p_elo_only'] * 100:.0f}% to {stages['p_final'] * 100:.0f}% on "
+                f"{' and '.join(drivers)}. {'These carry' if many else 'That carries'} less weight than the team "
+                f"rating, and {'they have' if many else 'it has'} not been shown to beat the MARKET -- so read "
+                f"this as the disagreement resting on {'them' if many else 'it'} rather than on the Elo."
+            )
     sentences.append(_edge_sentence(model_prob, market_prob))
     return " ".join(sentences)
 
