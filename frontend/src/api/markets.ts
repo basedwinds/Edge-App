@@ -490,7 +490,19 @@ export async function resolveFlaggedCatalogEntry(id: number): Promise<{ status: 
 
 /** football-data.co.uk division codes are opaque on screen ("E0"), so map the
  * five leagues this app tracks to their common names. */
-const SOCCER_LEAGUE_LABEL: Record<string, string> = {"E0": "EPL", "SP1": "La Liga", "I1": "Serie A", "D1": "Bundesliga", "F1": "Ligue 1", "MLS": "MLS"};
+// Every division football_data_client pulls needs an entry, or the row renders
+// the raw code. E1/SP2/I2/D2/F2 have been ingested since 2026-07-19 and P1 since
+// 2026-08-07, none of which were ever added here -- so an EFL Championship bet
+// has been reading "E1" and a Liga Portugal one "P1". N1 (Eredivisie) added the
+// same day would have joined them.
+const SOCCER_LEAGUE_LABEL: Record<string, string> = {
+  "E0": "EPL", "SP1": "La Liga", "I1": "Serie A", "D1": "Bundesliga", "F1": "Ligue 1",
+  "P1": "Liga Portugal",
+  "N1": "Eredivisie",
+  "E1": "EFL Championship", "SP2": "La Liga 2", "I2": "Serie B",
+  "D2": "2. Bundesliga", "F2": "Ligue 2",
+  "MLS": "MLS",
+};
 
 /** ATP/WTA + tier -> one readable label. Tier is what actually matters for
  * identifying a tennis row: a Tour match and an ITF match look identical

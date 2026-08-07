@@ -320,6 +320,57 @@ TEAM_ALIASES: dict[str, str] = {
     "preston north end fc": "preston",
     "stoke city fc": "stoke",
     "swansea city afc": "swansea",
+    #
+    # ---- N1 (Eredivisie), 2026-08-07 ----------------------------------------
+    # Kalshi names several Dutch clubs by their CITY, which football-data names
+    # by the club, so six of the eighteen share no usable token. Rather than
+    # lean on knowing Dutch geography, these were read off KALSHI'S OWN TICKER
+    # CODES, which encode the club independently of the display name:
+    #
+    #   KXEREDIVISIE-27-TWE -> "Enschede"   => Twente  (the one with NO shared
+    #                                          token at all; FC Twente plays in
+    #                                          Enschede, and Kalshi codes it TWE)
+    #   KXEREDIVISIE-27-AZA -> "Alkmaar"    => AZ Alkmaar
+    #   KXEREDIVISIE-27-PSV -> "Eindhoven"  => PSV Eindhoven
+    #   KXEREDIVISIE-27-FOR -> "Sittard"    => For Sittard
+    #   KXEREDIVISIE-27-GAE -> "GA Eagles"  => Go Ahead Eagles
+    #   KXEREDIVISIE-27-SPA -> "Sparta"     => Sparta Rotterdam (see below)
+    #
+    # SPARTA IS THE DANGEROUS ONE and the reason this block spells its evidence
+    # out. football-data carries BOTH "Sparta" (473 matches, 1993-08-14 to
+    # 2010-05-02) and "Sparta Rotterdam" (298 matches, 2016-08-07 to
+    # 2026-05-17). They are one club under two spellings from different eras --
+    # they NEVER met (0 head-to-head fixtures) and their spans do not overlap,
+    # the same disproof used for Maritimo/Madeira, run the other way. Without an
+    # alias Kalshi's "Sparta" normalises straight onto the STALE 1993-2010 key
+    # and every Sparta Rotterdam market would price off a 16-year-old rating.
+    # ("Roda JC" 1993-2010 / "Roda" 2010-2018 is the same split; both are long
+    # out of the division, so it is recorded here rather than aliased.)
+    #
+    # THE ALIAS ALSO MERGES THE TWO KEYS IN THE RATING POOL, which is worth
+    # stating because it is easy to assume otherwise. elo_service_soccer's
+    # refresh_ratings() runs canonical_team_key over the TRAINING matches, not
+    # just over market names, so aliasing "sparta" here folds football-data's
+    # own historical "Sparta" rows onto "sparta rotterdam" as well: the key goes
+    # from 298 matches to 771. Verified by counting after the change.
+    #
+    # That merge is defensible -- it is genuinely one club, and the alternative
+    # (Kalshi's "Sparta" landing on the stale 1993-2010 key) is plainly wrong --
+    # but it IS a change to how that rating is built, and it carries a six-year
+    # second-tier gap in the middle. Sparta Rotterdam's rating should be treated
+    # as the least trustworthy in the N1 pool until it has been settled against.
+    # There is no way to alias the market name without also merging the history
+    # while the alias table is global.
+    #
+    # Ajax / Excelsior / Feyenoord / Groningen / Heerenveen / Nijmegen /
+    # Telstar / Utrecht / Zwolle / Willem II / Cambuur / Den Haag already match
+    # exactly and need no entry.
+    "alkmaar": "az alkmaar",
+    "eindhoven": "psv eindhoven",
+    "enschede": "twente",
+    "sittard": "for sittard",
+    "ga eagles": "go ahead eagles",
+    "sparta": "sparta rotterdam",
 }
 
 

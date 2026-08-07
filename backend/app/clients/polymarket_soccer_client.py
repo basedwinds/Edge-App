@@ -64,6 +64,15 @@ TAG_SLUGS = {
     # concluding a league is absent from Polymarket.
     "P1": "primeira-liga",
     "E1": "efl-championship",
+    # N1 (Eredivisie) is DELIBERATELY ABSENT, checked 2026-08-07 rather than
+    # assumed. "eredivisie", "netherlands-eredivisie" and "dutch-eredivisie" all
+    # return 0 open events, AND 0 events with closed=true -- i.e. Polymarket has
+    # never listed the league at all, so this is not an off-season artifact of
+    # the kind that wrongly deferred Liga Portugal in July. Control run in the
+    # same breath: "primeira-liga" returned 100 open events, so the query itself
+    # was working. Eredivisie is therefore Kalshi-only and no cross-platform
+    # divergence exists for it. Re-check if Polymarket adds Dutch football;
+    # adding a slug that resolves to nothing would just cost a fetch per cycle.
 }
 
 _QUESTION_DATE_RE = re.compile(r"on (\d{4}-\d{2}-\d{2})\?$")

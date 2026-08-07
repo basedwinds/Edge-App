@@ -59,6 +59,17 @@ DIVISIONS = {
     # building them cannot produce a bad bet; it only decides whether there is
     # anything to look at when trading opens.
     "P1": "Portugal - Primeira Liga",
+    # Added 2026-08-07. Kalshi lists KXEREDIVISIEGAME (30 open markets) and
+    # KXEREDIVISIE (18 league-winner), none of which we could price. Verified
+    # live on the same mmz4281 pattern before wiring: N1 serves 1993-94 through
+    # 2025-26, 306 rows / 18 clubs a season, and every file self-reports
+    # Div="N1" -- so it is NOT subject to the redirect-substitution bug that put
+    # a Spanish season into the Portuguese pool (see fetch_season_csv).
+    #
+    # No Dutch second tier is added: football-data does not publish one, so
+    # promoted Eredivisie clubs will have no prior rating and simply price as
+    # "no baseline" rather than getting a fabricated one.
+    "N1": "Netherlands - Eredivisie",
 }
 
 # Second tier of each country -- added 2026-07-19 specifically to fix a real
