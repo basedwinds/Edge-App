@@ -52,6 +52,18 @@ TAG_SLUGS = {
     "D1": "bundesliga",
     "F1": "ligue-1",
     "MLS": "mls",
+    # Added 2026-08-07 alongside the Kalshi side of these two leagues. Both were
+    # a real one-sided gap, not a Polymarket limitation: checked live, tag_slug
+    # "primeira-liga" returns 129 open events and "efl-championship" returns 84,
+    # while this app had ZERO Polymarket markets for either. Without them both
+    # leagues would be Kalshi-only, so no cross-platform divergence could ever
+    # be found on them.
+    #
+    # The slug is not guessable from the league name -- "liga-portugal",
+    # "portugal", "championship" and "efl" all return 0. Check the tag before
+    # concluding a league is absent from Polymarket.
+    "P1": "primeira-liga",
+    "E1": "efl-championship",
 }
 
 _QUESTION_DATE_RE = re.compile(r"on (\d{4}-\d{2}-\d{2})\?$")
