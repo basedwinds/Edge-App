@@ -86,10 +86,14 @@ def _cross_platform_key(obj) -> str:
 
 
 def _fetch_priced() -> list[dict]:
+    from app.shutdown import is_shutting_down
+
     out: list[dict] = []
     try:
         with httpx.Client(timeout=90.0) as client:
             for ep in _ENDPOINTS:
+                if is_shutting_down():  # see app/shutdown.py -- unkillable worker
+                    break
                 try:
                     r = client.get(f"{_BASE}{ep}")
                     if r.status_code == 200:

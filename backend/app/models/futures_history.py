@@ -40,9 +40,13 @@ MIN_INTERVAL = datetime.timedelta(minutes=50)
 def _fetch_rows() -> list[dict]:
     import httpx
 
+    from app.shutdown import is_shutting_down
+
     rows: list[dict] = []
     with httpx.Client(timeout=90.0) as client:
         for path in FUTURES_PATHS:
+            if is_shutting_down():  # see app/shutdown.py -- unkillable worker
+                break
             try:
                 resp = client.get(f"{BASE}{path}")
                 if resp.status_code == 200:

@@ -29,6 +29,7 @@ from app.ingestion.poller_racing import run_full_refresh_racing
 from app.ingestion.poller_lock import serialized
 from app.models.baseline.warm_all import warm_all_elo
 from app import scheduler as scheduler_module
+from app import shutdown
 
 logging.basicConfig(level=logging.INFO)
 
@@ -123,6 +124,14 @@ async def lifespan(app: FastAPI):
     # have actually had time to finish, not just start.
     _schedule((len(pollers) + 2) * STARTUP_POLLER_STAGGER_SECONDS, serialized(scheduler_module.run_sanity_check))
     yield
+    # FIRST thing on the way out, before anything is torn down: raise the flag
+    # that tells every self-HTTP loop to stop calling this server. Those loops
+    # run on APScheduler pool threads, and concurrent.futures joins those
+    # threads unconditionally at interpreter exit -- so a job still looping over
+    # ~20 endpoints at a 90s timeout makes the worker literally unkillable and
+    # the port stays held by a server that no longer answers. Full autopsy with
+    # the py-spy stack in app/shutdown.py.
+    shutdown.begin_shutdown()
     for timer in startup_timers:
         timer.cancel()
     scheduler_module.stop()

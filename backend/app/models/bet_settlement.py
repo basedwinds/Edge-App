@@ -363,10 +363,28 @@ def _mma_winner_name(fight: MmaFight) -> "str | None":
 
 
 def _grade_mma_moneyline(bet: PlacedBet, fight: MmaFight) -> "str | None":
-    w = _mma_winner_name(fight)
-    if w is None:
+    """Graded by resolving the bet's team to a SIDE of the fight and comparing
+    that to winner_id, rather than string-comparing the bet's team against the
+    winner's name.
+
+    The string compare was actively dangerous, not merely lossy: on a name it
+    couldn't match it fell through to "lost". So a bet on the Kalshi spelling
+    "Yadier Delvalle" would be settled as a LOSS even when he won, because
+    ufcstats calls him "Yadier del Valle". Resolving the side instead makes an
+    unrecognised name return None (stays pending, visible as unsettled) instead
+    of silently booking a false loss.
+    """
+    from app.ingestion.market_matcher_mma import resolve_fight_side
+
+    if fight.winner_id is None:
+        return None  # draw / no-contest -> not gradeable as a straight winner
+    side = resolve_fight_side(bet.team, fight.fighter_a_name, fight.fighter_b_name)
+    if side is None:
+        return None  # can't tell which fighter was backed -> never assume a loss
+    backed_id = fight.fighter_a_id if side == "a" else fight.fighter_b_id
+    if fight.winner_id not in (fight.fighter_a_id, fight.fighter_b_id):
         return None
-    return "won" if _names_eq(bet.team, w) else "lost"
+    return "won" if fight.winner_id == backed_id else "lost"
 
 
 def _grade_mma_distance(bet: PlacedBet, fight: MmaFight) -> "str | None":

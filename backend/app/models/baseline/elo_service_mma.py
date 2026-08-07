@@ -62,9 +62,34 @@ def get_current_age(fighter_id: str) -> float | None:
 def get_fight_win_prob(fighter_a_id: str, fighter_b_id: str) -> float | None:
     """Fighter_a's pre-fight win probability off CURRENT ratings, age-
     adjusted using each fighter's real age as of today -- does NOT update
-    anything (live scoring, not training)."""
+    anything (live scoring, not training).
+
+    None if EITHER fighter has never fought in the rating history. MmaEloState.get
+    silently returns BASE_RATING (1500) for an unknown id, which is fine while
+    training but is a fabricated input at scoring time, and it was reaching the
+    UI as if it were a real read:
+
+      * both fighters unrated -> 1500 v 1500 -> exactly 0.500. Against Kalshi's
+        0.30 on Giovanna Canuto (a UFC debutant) that showed as a +20.5pp edge
+        and drew a real $10 suggested stake -- a coin flip dressed up as a model.
+      * one unrated -> WORSE, because it looks confident rather than neutral: a
+        1650-rated veteran against a debutant defaulted to 1500 returns ~0.71,
+        with nothing behind the 1500 at all. The debutant may be an undefeated
+        regional champion; the model has simply never heard of them.
+
+    24 active moneyline markets were in that state when this was added (six
+    debutants across the August cards). Returning None routes them to the
+    normal "no baseline yet" path, which is the honest answer.
+
+    Fighters with 1-2 prior fights are deliberately still priced: their rating
+    is noisy but it is at least DERIVED FROM RESULTS. Where to put a minimum-
+    fights threshold is a calibration question and should be measured, not
+    guessed at here.
+    """
     state = _cache.get("state")
     if state is None:
+        return None
+    if fighter_a_id not in state.ratings or fighter_b_id not in state.ratings:
         return None
     a_r = state.get(fighter_a_id) + age_adjustment_elo(get_current_age(fighter_a_id))
     b_r = state.get(fighter_b_id) + age_adjustment_elo(get_current_age(fighter_b_id))

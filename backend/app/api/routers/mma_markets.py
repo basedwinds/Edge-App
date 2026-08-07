@@ -52,7 +52,7 @@ from app.api.routers.settings import get_mma_pool_dollars, get_staking_params, g
 from app.api.schemas import MmaMarketOut, ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import Market, MmaFight
-from app.ingestion.market_matcher_mma import fighter_names_match
+from app.ingestion.market_matcher_mma import resolve_fight_side
 from app.models import distance_service_mma, method_service_mma, rounds_service_mma
 from app.models.baseline import elo_service_mma
 from app.models.ladder_sanity import find_resolved_entities
@@ -122,15 +122,23 @@ def _moneyline_model_prob(market: Market, fight: MmaFight | None) -> float | Non
     Delgado" vs ufcstats' canonical "Jose Delgado" for the same fighter
     (same middle-name-inclusion mismatch already handled for FIGHT matching
     in market_matcher_mma.py, just not reused here originally). Uses the
-    same token-subset fuzzy matcher for consistency."""
+    same token-subset fuzzy matcher for consistency.
+
+    Now delegates to resolve_fight_side so that side-resolution here is the SAME
+    comparison the fight matcher used. It was strictly weaker before, and that
+    gap was visible in the payload: markets on the UFC 329/330 cards linked to
+    the right fight and still came back model=None on whichever fighter the
+    platform spelled differently ("Yadier Delvalle", "Giovanna Canuto"), so half
+    of each fight priced and half didn't."""
     if fight is None or market.team is None:
         return None
-    if fighter_names_match(market.team, fight.fighter_a_name):
+    side = resolve_fight_side(market.team, fight.fighter_a_name, fight.fighter_b_name)
+    if side == "a":
         fighter_id, opponent_id = fight.fighter_a_id, fight.fighter_b_id
-    elif fighter_names_match(market.team, fight.fighter_b_name):
+    elif side == "b":
         fighter_id, opponent_id = fight.fighter_b_id, fight.fighter_a_id
     else:
-        return None  # shouldn't happen (market.team is always one of the fight's two real names), don't guess
+        return None  # name doesn't pick out exactly one side -- don't guess
     p = elo_service_mma.get_fight_win_prob(fighter_id, opponent_id)
     return round(p, 4) if p is not None else None
 

@@ -12,7 +12,11 @@ from app.clients import kalshi_mma_client, polymarket_mma_client
 from app.db.database import SessionLocal
 from app.db.models import MmaFight
 from app.ingestion import market_catalog_mma, ufc_data
-from app.ingestion.market_matcher_mma import match_fight_by_names_only
+from app.ingestion.market_matcher_mma import (
+    date_from_fight_suffix,
+    date_from_polymarket_slug,
+    match_fight_by_names_only,
+)
 from app.ingestion.poller_lock import db_write_lock
 from app.models import distance_service_mma, method_service_mma, rounds_service_mma
 from app.models.baseline import elo_service_mma
@@ -142,7 +146,11 @@ def refresh_kalshi_mma_markets():
     fight_id_by_suffix: dict[str, str | None] = {}
     for suffix, names in names_by_suffix.items():
         if len(names) == 2:
-            fight = match_fight_by_names_only(names[0], names[1], all_fights)
+            # The suffix leads with the card date, which narrows the matcher's
+            # loose fallback to that one card (see market_matcher_mma).
+            fight = match_fight_by_names_only(
+                names[0], names[1], all_fights, date_from_fight_suffix(suffix)
+            )
             fight_id_by_suffix[suffix] = fight["id"] if fight else None
         else:
             fight_id_by_suffix[suffix] = None
@@ -215,7 +223,11 @@ def refresh_polymarket_mma_markets():
     fight_id_by_slug: dict[str, str | None] = {}
     for slug, names in names_by_slug.items():
         if len(names) == 2:
-            fight = match_fight_by_names_only(names[0], names[1], all_fights)
+            # Polymarket's slug ends in the card date -- same narrowing as the
+            # Kalshi path above.
+            fight = match_fight_by_names_only(
+                names[0], names[1], all_fights, date_from_polymarket_slug(slug)
+            )
             fight_id_by_slug[slug] = fight["id"] if fight else None
         else:
             fight_id_by_slug[slug] = None

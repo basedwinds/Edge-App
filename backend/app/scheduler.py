@@ -92,10 +92,18 @@ def run_cache_warm():
     import httpx
 
     from app.api.response_cache import REFRESH_HEADER
+    from app.shutdown import is_shutting_down
 
     try:
         with httpx.Client(timeout=90.0) as client:
             for path in _WARM_PATHS:
+                # Stop issuing self-requests the moment shutdown starts -- the
+                # server we are calling is the one going away, so every
+                # remaining path would block for the full 90s and hold the
+                # interpreter open. See app/shutdown.py for the full autopsy.
+                if is_shutting_down():
+                    log.info("cache warm: stopping early, shutdown in progress")
+                    return
                 try:
                     client.get(f"http://127.0.0.1:8756{path}", headers={REFRESH_HEADER: "1"})
                 except Exception:

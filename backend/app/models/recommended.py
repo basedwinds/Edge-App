@@ -321,9 +321,13 @@ def compute_recommended(settings: dict, snapshot: dict | None = None) -> list[_R
             rows = [_Row(sport, d) for d in snapshot.get(sport, [])]
             out.extend(_builder_for(sport)(rows, settings.get(pool_key) or 0.0))
     else:
+        from app.shutdown import is_shutting_down
+
         with httpx.Client(timeout=90.0) as client:
             rd = _fetch_readiness(client)
             for sport, ep, pool_key in _SPORTS:
+                if is_shutting_down():  # see app/shutdown.py -- unkillable worker
+                    break
                 rows = [_Row(sport, d) for d in _fetch(client, ep)]
                 out.extend(_builder_for(sport)(rows, settings.get(pool_key) or 0.0))
     out = [r for r in out if not _not_ready(r, rd)]  # readiness runs at display, after budget cap
