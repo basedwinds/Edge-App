@@ -527,20 +527,101 @@ def _game_insight_valorant(match: ValorantMatch, market_type: str, model_prob: f
     if stages is not None and abs(stages["p_final"] - stages["p_elo_only"]) >= 0.05:
         a, b = match.team_a, match.team_b
         moved_to = a if stages["p_final"] > stages["p_elo_only"] else b
+        # Attribute the move to the stages that ACTUALLY caused it, by sign of
+        # each stage's own delta. Listing a stage just because it exists gets
+        # this wrong: on Joblife GC vs Karmine Corp GC the text credited a 0-1
+        # head-to-head record for pulling the number TOWARD Joblife, when 0-1
+        # pushes the other way and the real mover was the rest/fatigue blend --
+        # which was not mentioned at all.
+        toward_a = stages["p_final"] > stages["p_elo_only"]
+        d_h2h = stages["p_after_h2h"] - stages["p_elo_only"]
+        d_rest = stages["p_after_rest"] - stages["p_after_h2h"]
+        d_player = stages["p_final"] - stages["p_after_rest"]
+
+        def _helped(delta: float) -> bool:
+            return abs(delta) > 0.005 and (delta > 0) == toward_a
+
         drivers = []
-        if stages["h2h_total"]:
+        if stages["h2h_total"] and _helped(d_h2h):
             w, t = stages["h2h_wins_a"], stages["h2h_total"]
             wins, losses = (w, t - w) if moved_to == a else (t - w, w)
-            drivers.append(f"their {wins}-{losses} head-to-head record in {t} prior meeting{'s' if t != 1 else ''}")
+            # Name the team rather than say "their": the sentence's subject is
+            # team_a (whose probability the figures describe) while this record
+            # is oriented to whichever side the move favoured, so a pronoun here
+            # points at the wrong team half the time.
+            # "their" only when the sentence subject (team_a) IS the side the
+            # move favours -- otherwise name the team, or the pronoun points at
+            # the wrong one.
+            whose = "their" if moved_to == a else f"{moved_to}'s"
+            drivers.append(
+                f"{whose} {wins}-{losses} head-to-head record in {t} prior meeting{'s' if t != 1 else ''}"
+            )
+        if _helped(d_rest):
+            drivers.append(f"a rest/schedule advantage to {moved_to}")
         pa, pb = stages["player_strength_a"], stages["player_strength_b"]
-        if pa is not None and pb is not None and (pa - pb > 0) == (moved_to == a):
-            hi, lo = (pa, pb) if moved_to == a else (pb, pa)
-            drivers.append(f"a player-level rating edge ({hi:.0f} to {lo:.0f}) that team Elo hasn't caught up with")
+        if pa is not None and pb is not None and _helped(d_player):
+            # The player blend can pull toward a side WITHOUT that side's players
+            # rating higher -- it moves the number whenever the player model is
+            # less lopsided than the team ratings, which on a big Elo gap is most
+            # of the time. Calling that "a rating edge to LOUD (1591 to 1615)"
+            # printed the favoured team's LOWER number first and read as a
+            # contradiction. Only claim an edge when there actually is one.
+            moved_strength, other_strength = (pa, pb) if moved_to == a else (pb, pa)
+            if moved_strength > other_strength:
+                drivers.append(
+                    f"a player-level rating edge to {moved_to} "
+                    f"({moved_strength:.0f} to {other_strength:.0f}) that team Elo hasn't caught up with"
+                )
+            else:
+                drivers.append(
+                    f"a player-level read that is far closer to even than the team ratings "
+                    f"({match.team_a} {pa:.0f}, {match.team_b} {pb:.0f})"
+                )
         if drivers:
+            # Wording corrected 2026-08-07. This used to close on "both smaller,
+            # LESS-VALIDATED inputs than the team rating", which was unfair to
+            # the model: both blends are validated on walk-forward Brier and both
+            # sit exactly on their grid optimum (h2h prior_weight 10:
+            # 0.22506 -> 0.22430; player w=0.4: 0.23064 -> 0.22742, i.e. the
+            # player blend helps ~4x MORE than h2h, not less). Binning 19,144
+            # predictions by how far the blend moved the price also showed they
+            # help MORE on big moves, not less -- the opposite of what the old
+            # sentence implied. What is genuinely unestablished is whether they
+            # beat the MARKET, which is a narrower claim and the one now made.
+            # The confidence claim is SIZE-AWARE, because the evidence is. Binned
+            # by how far the blend moved the price, the 2-20pp bands each beat
+            # pure Elo with a bootstrap CI entirely below zero; the 20pp+ band is
+            # directionally the strongest of all but has only 56 observations and
+            # a CI that crosses zero. Saying "measured" for a 30pp move would be
+            # claiming something this app has not shown.
+            move = abs(stages["p_final"] - stages["p_elo_only"])
+            many = len(drivers) > 1
+            verb = "they" if many else "it"
+            if move < 0.20:
+                strength = (
+                    f"and on moves this size {verb} measurably beat{'' if many else 's'} team Elo alone in "
+                    "backtest (19,144 walk-forward matches)"
+                )
+            else:
+                strength = (
+                    "and blends of this size point the right way in backtest, though on a thin sample "
+                    "(56 matches) -- treat a swing this large as the least-established part of the number"
+                )
+            # Phrased as the DIRECTION of the shift, not as a pick. The earlier
+            # wording said "the model still lands on {moved_to}", which was
+            # simply false whenever the blends moved the number without flipping
+            # it: on G2 Esports vs LOUD it read "the model still lands on LOUD"
+            # while the figures quoted (84% -> 69%) are G2's probability and the
+            # model still favoured G2. p_elo_only/p_final are always team_a's
+            # probability, so team_a has to be the stated subject.
+            subject = "them" if moved_to == a else match.team_a
             sentences.append(
-                f"The model still lands on {moved_to} though, moving from {stages['p_elo_only'] * 100:.0f}% to "
-                f"{stages['p_final'] * 100:.0f}% on {' and '.join(drivers)} -- both smaller, less-validated "
-                f"inputs than the team rating, so the disagreement rests on them rather than on the Elo."
+                f"The blends pull toward {moved_to}, taking {subject} from "
+                f"{stages['p_elo_only'] * 100:.0f}% to {stages['p_final'] * 100:.0f}% on "
+                f"{' and '.join(drivers)}. {'Both carry' if many else 'That carries'} less weight than the team "
+                f"rating, {strength}. What hasn't been shown is whether {'they beat' if many else 'it beats'} the MARKET "
+                f"-- so read this as the disagreement resting on {'them' if many else 'it'} rather than on the Elo, "
+                f"not as a reason to discount it."
             )
     sentences.append(_edge_sentence(model_prob, market_prob))
     return " ".join(sentences)
