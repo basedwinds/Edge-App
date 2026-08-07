@@ -41,6 +41,14 @@ SERIES_MAP = {
     "KXF1": ("f1", "drivers_champion", None),
     "KXF1CONSTRUCTORS": ("f1", "constructors_champion", None),
     "KXNASCARRACE": ("nascar", "race_winner", None),  # NASCAR race winner (headline market)
+    # NASCAR qualifying. Added 2026-08-07: pole was ingested for F1 (KXF1POLE)
+    # and IndyCar but not NASCAR, leaving it the only series in the app with no
+    # qualifying market at all. Pure coverage -- same per-driver shape as the
+    # other two (one market per driver, yes_sub_title = driver name), the
+    # quali-Elo model already prices it, and it is settleable: ESPN's
+    # nascar-premier feed populates "pole" (verified on all 5 stored NASCAR
+    # results) and _grade_racing_pole already exists.
+    "KXNASCARPOLE": ("nascar", "pole", None),
     "KXNASCARTOP3": ("nascar", "top_n", 3),
     "KXNASCARTOP5": ("nascar", "top_n", 5),
     "KXNASCARTOP10": ("nascar", "top_n", 10),
@@ -61,6 +69,24 @@ SERIES_MAP = {
 #   KXNASCARFASTLAP (73), KXNASCARTOPTEAM (33): no model for either.
 #   KXMOTOGPTEAMS (11): MotoGP is a whole sport we don't cover.
 #   KXF1ACTION / KXF1CHINA / KXF1NEXTTEAM / KXF1RETIRE: novelty markets.
+#   KXF1H2H / KXNASCARH2H: the h2h MODEL exists and is already ingested from
+#     Polymarket, so this looks like a one-line coverage add. It is not, and the
+#     reason is worth recording. Both the pricer (_h2h_model_prob) and the
+#     grader (_grade_racing_h2h) read the pairing out of a single `team` string
+#     shaped "Driver A vs Driver B" -- Polymarket's client builds that from the
+#     event's two OUTCOMES. This module sets driver = yes_sub_title, which for a
+#     h2h market is ONE driver, so a SERIES_MAP entry would produce rows that
+#     nothing can price or settle. Needs a small dedicated parse, and both series
+#     had 0 open markets on 2026-08-07 (F1 summer break), so the real ticker
+#     shape could not be inspected to write it. Do it when a race weekend has
+#     them listed rather than guessing the format.
+#   KXF1RACESPRINT / KXF1SPRINTPOLE / KXF1SPRINTTOP5 / KXF1SPRINTTOP10 /
+#     KXF1SPRINTTOPCONSTRUCTOR: sprint weekends (~6 a season) are genuinely
+#     uncovered. Held back deliberately: settlement needs a sprint-specific
+#     results source (ESPN's race result is the Sunday grand prix), and the main
+#     race Elo must NOT be assumed to transfer -- a sprint is a third the
+#     distance with no mandatory stop and a different overtaking profile. That
+#     is a model question, not coverage.
 
 
 def _to_float(v):
