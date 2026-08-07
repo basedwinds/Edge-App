@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_session
 from app.db.models import CatalogEntry
+import datetime
+
 from app.ingestion.catalog_classify import classify, is_auto_priceable
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -118,8 +120,32 @@ def dismiss_entry(entry_id: int, body: DismissIn = DismissIn(), session: Session
     if row is not None:
         row.dismissed = 1
         row.disposition = body.disposition
+        # ALWAYS leave a trace, even on a one-click dismissal. DismissIn's own
+        # docstring says a reason is "worth writing for BOTH dispositions ... so
+        # a later scan re-surfacing the same series does not restart the
+        # analysis from nothing" -- and then makes it optional, so 1,469 of the
+        # 1,530 not_relevant entries carry no reason at all (measured
+        # 2026-08-07).
+        #
+        # Boxing is the case that proved the cost. KXBOXING/KXBOXINGDISTANCE/
+        # KXBOXINGMOV were dismissed as not_relevant with no note, so months
+        # later there was no way to tell "evaluated and rejected on the merits"
+        # from "swept away in a bulk triage" -- and the whole analysis had to be
+        # redone from scratch (supply re-probed, ESPN checked for a boxing feed,
+        # BoxRec found Cloudflare-gated) only to land somewhere the original
+        # dismissal may well have already reached.
+        #
+        # A synthesised stamp is worth far less than a real reason, but it is
+        # not nothing: it records WHEN the call was made and that no reason was
+        # given, which distinguishes a deliberate silent dismissal from an entry
+        # nobody has looked at. Never overwrites a real note.
         if body.note:
             row.note = body.note
+        elif not (row.note or "").strip():
+            stamp = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+            row.note = (f"Dismissed {stamp} as {body.disposition} with no reason recorded. "
+                        f"Series was live enough to be surfaced by the scan at the time "
+                        f"(first seen {str(row.first_seen)[:10]}).")
         session.commit()
     return {"status": "ok"}
 
