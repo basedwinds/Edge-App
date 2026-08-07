@@ -209,14 +209,34 @@ def refresh_racing_results():
             return
         scoreboards: dict = {}
         results: dict = {}
+        from app.clients.espn_racing_results import NASCAR_RESULT_SERIES
+
         for rid, series, season, edate in want:
-            key = (series, season)
-            if key not in scoreboards:
-                scoreboards[key] = _event_ids_for_season(series, season)
-            eid = _match_espn_event(scoreboards[key], edate)
-            if not eid:
+            # A NASCAR RaceEvent cannot say WHICH series it is -- Kalshi files
+            # Cup, Xfinity and Truck under one ticker, so they all store
+            # series="nascar". Search all three calendars and require exactly
+            # ONE to have a race on this date. Cup, Xfinity and Truck run on
+            # different days of the same weekend, so a unique match is the
+            # normal case; an ambiguous one is left unsettled rather than
+            # guessed, because settling a bet against the WRONG race's finishing
+            # order is far worse than settling it late.
+            candidates = NASCAR_RESULT_SERIES if series == "nascar" else (series,)
+            hits = []
+            for cand in candidates:
+                key = (cand, season)
+                if key not in scoreboards:
+                    scoreboards[key] = _event_ids_for_season(cand, season)
+                eid = _match_espn_event(scoreboards[key], edate)
+                if eid:
+                    hits.append((cand, eid))
+            if len(hits) != 1:
+                if hits:
+                    log.info("racing results: %d calendars claim a race on %s -- leaving event %s "
+                             "unsettled rather than guessing (%s)", len(hits), edate, rid,
+                             ", ".join(c for c, _ in hits))
                 continue
-            r = fetch_race_result(series, eid)
+            cand, eid = hits[0]
+            r = fetch_race_result(cand, eid)
             if r:
                 results[rid] = r
         if not results:

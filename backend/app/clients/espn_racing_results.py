@@ -14,7 +14,22 @@ from app.clients.base import get_json
 
 log = logging.getLogger("espn_racing_results")
 
-_SLUG = {"f1": "f1", "nascar": "nascar-premier", "irl": "irl"}
+_SLUG = {
+    "f1": "f1",
+    "nascar": "nascar-premier",
+    "irl": "irl",
+    # Lower NASCAR series, added 2026-08-07 alongside their rating pools. Without
+    # these an Xfinity or Truck race could be PRICED but never SETTLED: every
+    # NASCAR RaceEvent stores series="nascar" (Kalshi files all three under one
+    # ticker), so the settler would only ever search the Cup calendar and would
+    # silently find nothing for a lower-series race.
+    "nascar_xfinity": "nascar-secondary",
+    "nascar_truck": "nascar-truck",
+}
+# Calendars to search for a NASCAR result. The stored series cannot say which of
+# the three a race belongs to, so the settler tries all of them and requires a
+# UNIQUE date match -- see poller_racing.refresh_racing_results.
+NASCAR_RESULT_SERIES = ("nascar", "nascar_xfinity", "nascar_truck")
 _SITE = "https://site.api.espn.com/apis/site/v2/sports/racing/{slug}"
 _CORE = "https://sports.core.api.espn.com/v2/sports/racing/leagues/{slug}"
 

@@ -30,11 +30,25 @@ SEASON_REGRESSION = 1.0 / 3.0
 K_DRIVER = 24.0
 K_CON = 24.0
 
-SERIES = ("f1", "irl", "nascar")
+SERIES = ("f1", "irl", "nascar", "nascar_xfinity", "nascar_truck")
 PARAMS = {
     "f1": {"grid_pts": 130.0, "con_w": 0.6},
     "irl": {"grid_pts": 60.0, "con_w": 0.0},
     "nascar": {"grid_pts": 90.0, "con_w": 0.5},
+    # NASCAR's lower national series, added 2026-08-07. These INHERIT Cup's
+    # fitted constants rather than carrying their own -- stated plainly because
+    # it is an assumption, not a measurement. The three series run the same car
+    # formula on the same ovals and road courses under the same rules package
+    # family, so Cup's grid weight and constructor weight are a far better prior
+    # than F1's or IndyCar's, but nobody has fitted grid_pts against Xfinity or
+    # Truck results.
+    #
+    # Refit before treating lower-series edges as real. Truck especially: it has
+    # shorter races and heavier attrition than Cup, which is exactly what
+    # grid_pts encodes, so its true value is likely lower (a bad grid slot
+    # matters less when the race is short and chaotic).
+    "nascar_xfinity": {"grid_pts": 90.0, "con_w": 0.5},
+    "nascar_truck": {"grid_pts": 90.0, "con_w": 0.5},
 }
 
 _DATA_DIR = Path(__file__).resolve().parents[4] / "data"

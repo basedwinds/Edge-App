@@ -20,6 +20,32 @@ _ESPN = {
     "f1": "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard",
     "nascar": "https://site.api.espn.com/apis/site/v2/sports/racing/nascar-premier/scoreboard",
     "irl": "https://site.api.espn.com/apis/site/v2/sports/racing/irl/scoreboard",
+    # Lower NASCAR series, added 2026-08-07 so their calendars are available to
+    # fetch_race_dates (racing_championship also consumes this map).
+    #
+    # THESE DO NOT FIX LOWER-SERIES DATES, and I expected them to. The gap is
+    # real -- Kalshi had the HyVee Perks 250 at 2026-08-23 for a race ESPN dates
+    # 2026-08-08 -- but the cause is NAME SHAPE, not a missing calendar, and
+    # adding the calendars does not address it. Measured directly:
+    #
+    #   "HyVee Perks 250"        tokens {hyvee, perks}            -> no match, any calendar
+    #   "Pennzoil 250 presented" tokens {pennzoil, take, oil, ..} -> no match, any calendar
+    #   "TSport 200 presented"   tokens {tsport, warn, ..}        -> no match, any calendar
+    #   "Iowa Corn 350"          tokens {iowa, corn, ethanol}     -> Cup 08-09 (right)
+    #
+    # ESPN labels races by VENUE ("... at Iowa"); Kalshi names them by SPONSOR.
+    # Sponsor-named races share no significant token with any venue label, so
+    # they resolve to nothing whichever calendar is searched.
+    #
+    # resolve_race_date is therefore deliberately NOT extended to search across
+    # the three NASCAR calendars: doing so would make Cup dates WORSE, not
+    # better. "Iowa Corn 350" matches the Xfinity calendar as well as the Cup
+    # one -- and at 08-09, the wrong day for the Xfinity race -- so a
+    # cross-series search would let a lower-series entry outrank the correct
+    # Cup one on a tie. Fixing lower-series dates needs a venue alias table or a
+    # join on the ESPN event id resolved in espn_racing_results, not this.
+    "nascar_xfinity": "https://site.api.espn.com/apis/site/v2/sports/racing/nascar-secondary/scoreboard",
+    "nascar_truck": "https://site.api.espn.com/apis/site/v2/sports/racing/nascar-truck/scoreboard",
 }
 # Sponsor / filler words stripped before token-matching a race name, so
 # "AWS Hungarian Grand Prix" and "Hungarian Grand Prix Winner" both key on

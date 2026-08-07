@@ -48,6 +48,21 @@ CHAMPIONSHIP_MARKET_TYPES = ("drivers_champion", "constructors_champion")
 # case (NASCAR Xfinity/Truck arriving under the Cup series ticker) and why a
 # coverage floor beats hard-coding which series exist.
 MIN_FIELD_COVERAGE = 0.80
+# The three NASCAR rating pools a sport="nascar" event may belong to. Order is
+# irrelevant -- the winner is chosen by coverage, not by position.
+NASCAR_RATING_SERIES = ("nascar", "nascar_xfinity", "nascar_truck")
+# How far ahead of the runner-up pool the winner must be. See
+# _resolve_rating_series for why a floor alone is not enough.
+MIN_SERIES_MARGIN = 0.05
+# Human labels for the resolved pool, surfaced in the reasoning drawer so it is
+# never a mystery which series a price was built from.
+RATING_SERIES_LABEL = {
+    "nascar": "NASCAR Cup Series",
+    "nascar_xfinity": "NASCAR Xfinity Series",
+    "nascar_truck": "NASCAR Truck Series",
+    "f1": "Formula 1",
+    "irl": "IndyCar",
+}
 TRACKING_NOTE = (
     "Priced by the grid+constructor racing model (race finish) / qualifying Elo "
     "(pole). Pre-qualifying prices use driver+constructor (no grid yet); they "
@@ -104,21 +119,21 @@ def _load_grid_cache() -> dict:
         return {}
 
 
-def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, float | None],
-                 race_start_by_event: dict | None = None,
-                 grid_by_event: dict | None = None) -> list[RacingMarketOut]:
+def _build_field(series: str, markets: list[Market],
+                 grid_by_event: dict | None) -> tuple[dict[str, float], set[str], float]:
+    """(rated field, entrant names, coverage) for ONE rating-series key.
+
+    Split out of _price_event so the same field build can be run against several
+    candidate series and the best one chosen -- see _resolve_rating_series.
+    """
     st = racing_ratings._series_state(series)
     cc = st.get("current_constructor", {})
-
-    def did(name: str):
-        return racing_ratings.resolve_driver_id(series, name)
-
     race_field: dict[str, float] = {}
     entrants: set[str] = set()
     for m in markets:
         if m.market_type in ("race_winner", "top_n"):
             entrants.add((m.team or "").strip().lower())
-            d = did(m.team or "")
+            d = racing_ratings.resolve_driver_id(series, m.team or "")
             if d and d not in race_field:
                 # Grid was hardcoded None here, so every race priced in
                 # pre-qualifying mode FOREVER and never sharpened once the grid
@@ -131,6 +146,89 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
                 s = racing_ratings.strength(series, d, cc.get(d), g.get(d))
                 if s is not None:
                     race_field[d] = s
+    coverage = (len(race_field) / len(entrants)) if entrants else 1.0
+    return race_field, entrants, coverage
+
+
+def _resolve_rating_series(series: str, markets: list[Market],
+                           grid_by_event: dict | None) -> tuple[str, dict[str, float], set[str], float]:
+    """Which rating pool does this race belong to? Decided by the ENTRANT LIST.
+
+    Kalshi files NASCAR Cup, Xfinity ("O'Reilly Auto Parts") and Truck under one
+    series ticker, KXNASCARRACE, with no field saying which is which, so all
+    three arrive as sport="nascar". Every other sport maps 1:1 and short-circuits.
+
+    Scoring the field against each pool and taking the best is used INSTEAD of
+    the two signals that look easier and are not, both checked live 2026-08-07:
+
+      * Kalshi's title. Cup says "NASCAR Cup Series ..." and Xfinity says
+        "NASCAR O'Reilly Auto Parts Series ...", but "Pennzoil 250" (Xfinity)
+        and "TSport 200" (Truck) name no series at all.
+      * ESPN's calendar. ESPN names races by VENUE, Kalshi by SPONSOR, Cup and
+        Xfinity race at the same venue on adjacent days, and Kalshi's own date
+        is unreliable (it had the HyVee Perks 250 on Aug 23 for an Aug 8 race).
+
+    TWO CONDITIONS, not one. The winner must clear MIN_FIELD_COVERAGE *and* beat
+    the runner-up by MIN_SERIES_MARGIN. The margin is the part that matters and
+    it is not obvious: on 139 held-out races (scripts/check_nascar_series_
+    separation.py) the Xfinity pool explained 85.6% of a typical CUP field --
+    above the floor by itself -- because it is the larger pool (187 drivers vs
+    103) and full of Cup regulars moonlighting. So the floor alone cannot catch
+    a Cup-to-Xfinity misroute; only the margin can. The tightest real gap was
+    4pp (Talladega: cup 92%, xfinity 88%), which under this rule goes unpriced
+    rather than being guessed.
+
+    That test misrouted 0 of 139, so the classifier itself is sound; this is
+    about the failure mode it does not cover. Returns the ORIGINAL series with
+    its own field when nothing qualifies, which reproduces the previous
+    behaviour: the caller's coverage gate then leaves the race unpriced.
+    """
+    candidates = NASCAR_RATING_SERIES if series == "nascar" else (series,)
+    if len(candidates) == 1:
+        field, entrants, cov = _build_field(series, markets, grid_by_event)
+        return series, field, entrants, cov
+
+    # No race_winner/top_n rows means no entrant list to classify on -- a
+    # championship-only event, which is priced from standings and never touches
+    # the race field. Short-circuit BEFORE the margin test: every pool trivially
+    # scores 1.0 on an empty field, so the margin is 0 and the "could not
+    # identify the series" path would fire on every title event and log that it
+    # was being left unpriced, which was false.
+    if not any(m.market_type in ("race_winner", "top_n") for m in markets):
+        field, entrants, cov = _build_field(series, markets, grid_by_event)
+        return series, field, entrants, cov
+
+    scored = []
+    for cand in candidates:
+        field, entrants, cov = _build_field(cand, markets, grid_by_event)
+        scored.append((cov, cand, field, entrants))
+    scored.sort(key=lambda x: -x[0])
+    best_cov, best, best_field, best_entrants = scored[0]
+    runner_up = scored[1][0] if len(scored) > 1 else 0.0
+
+    if best_cov >= MIN_FIELD_COVERAGE and (best_cov - runner_up) >= MIN_SERIES_MARGIN:
+        if best != series:
+            log.info("racing: routed a %s event to the %s pool (%.0f%% vs %.0f%% runner-up)",
+                     series, best, best_cov * 100, runner_up * 100)
+        return best, best_field, best_entrants, best_cov
+
+    log.info("racing: could not identify the NASCAR series for this event -- best %s at %.0f%%, "
+             "runner-up %.0f%% (need %.0f%% and a %.0fpp margin); leaving it unpriced",
+             best, best_cov * 100, runner_up * 100, MIN_FIELD_COVERAGE * 100, MIN_SERIES_MARGIN * 100)
+    field, entrants, cov = _build_field(series, markets, grid_by_event)
+    return series, field, entrants, min(cov, MIN_FIELD_COVERAGE - 0.01) if entrants else cov
+
+
+def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, float | None],
+                 race_start_by_event: dict | None = None,
+                 grid_by_event: dict | None = None) -> list[RacingMarketOut]:
+    rating_series, race_field, entrants, coverage = _resolve_rating_series(series, markets, grid_by_event)
+    st = racing_ratings._series_state(rating_series)
+    cc = st.get("current_constructor", {})
+
+    def did(name: str):
+        return racing_ratings.resolve_driver_id(rating_series, name)
+
     # FIELD COVERAGE GATE. racing_sim normalises win probability across the
     # drivers it was GIVEN, so an under-covered field does not merely lose the
     # missing drivers -- it hands their share to the ones we did rate, inflating
@@ -150,11 +248,15 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
     # on ANY race we cannot rate (a new series, a one-off exhibition, an
     # unresolved-name spike), rather than hard-coding which NASCAR series exist.
     # 0.80 separates the real cases cleanly -- Cup 94%, F1/IndyCar effectively
-    # 100%, Xfinity 35%.
-    coverage = (len(race_field) / len(entrants)) if entrants else 1.0
+    # 100%, and (before the lower-series pools existed) Xfinity 35%.
+    #
+    # This gate is STILL the backstop after _resolve_rating_series: it fires on
+    # any race no pool can rate -- a new series, a one-off exhibition, an
+    # unresolved-name spike -- and on Truck races, which average only 79.5% own
+    # coverage, so roughly 44% of them stay unpriced by design.
     if entrants and coverage < MIN_FIELD_COVERAGE:
         log.info("racing: skipping %s field pricing -- only %d of %d entrants rated (%.0f%%)",
-                 series, len(race_field), len(entrants), coverage * 100)
+                 rating_series, len(race_field), len(entrants), coverage * 100)
         sim = {}
     else:
         sim = racing_sim.simulate(race_field, trials=20000) if len(race_field) >= 2 else {}
@@ -167,7 +269,7 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
     pole_field: dict[str, float] = {}
     if any(m.market_type in ("pole", "constructor_pole") for m in markets):
         for dr in cc:
-            q = racing_ratings.quali_strength(series, dr)
+            q = racing_ratings.quali_strength(rating_series, dr)
             if q is not None:
                 pole_field[dr] = q
     pole_p: dict[str, float] = {}
@@ -193,12 +295,18 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         if m.market_type == "drivers_champion":
             # Season title -> standings-aware championship sim (not racing_sim),
             # matched by driver NAME (m.team) rather than the race-field id.
+            # Championships stay on the BASE series, not the resolved pool:
+            # racing_championship.PRICED_SERIES is (f1, irl, nascar) only, and
+            # Kalshi's NASCAR title market IS the Cup title. A championship-only
+            # event also has no race_winner/top_n rows, so it has no entrants to
+            # classify on and _resolve_rating_series returns the base series
+            # anyway -- this is belt and braces.
             mp = racing_championship.driver_championship_prob(series, m.team or "")
         elif m.market_type == "constructors_champion":
             mp = racing_championship.constructor_championship_prob(series, m.team or "")
         elif m.market_type == "h2h":
             # "A vs B" -> P(A finishes ahead of B), closed-form from race strength.
-            mp = _h2h_model_prob(series, m.team or "", cc)
+            mp = _h2h_model_prob(rating_series, m.team or "", cc)
         elif m.market_type == "constructor_pole":
             mp = constructor_pole_p.get(_norm_con(m.team or ""))
         elif d:
@@ -212,6 +320,11 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         edge = round(mp - imp, 4) if (mp is not None and imp is not None) else None
         is_champ = m.market_type in CHAMPIONSHIP_MARKET_TYPES
         note = CHAMP_NOTE if is_champ else TRACKING_NOTE
+        # Say WHICH pool built this price when it isn't the obvious one. Kalshi
+        # shows Cup, Xfinity and Truck under one ticker, so without this a
+        # lower-series price is indistinguishable from a Cup price in the UI.
+        if not is_champ and rating_series != series:
+            note = f"{note} Rated against the {RATING_SERIES_LABEL.get(rating_series, rating_series)} pool."
         out.append(RacingMarketOut(
             id=m.id, series=series, source=m.source, race_event_id=m.race_event_id, event=m.source_event_id, market_type=m.market_type,
             line=int(m.line) if m.line is not None else None, driver=m.team or "",
