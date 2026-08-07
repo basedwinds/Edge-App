@@ -551,12 +551,34 @@ def _game_insight_lol(match: LolMatch, model_prob: float | None, market_prob: fl
         if drivers:
             many = len(drivers) > 1
             subject = "them" if moved_to == a else match.team_a
+            # Size-aware, and LoL's evidence is NOT Valorant's -- measured
+            # 2026-08-07 over 5,104 walk-forward predictions
+            # (scripts/check_lol_blend_by_move_size.py):
+            #   5-10pp   n=418  Brier 0.22742 -> 0.22046  CI entirely below 0
+            #   10-20pp  n=141  Brier 0.15632 -> 0.16238  CI spans 0, and the
+            #                   point estimate is the WRONG WAY
+            # Valorant's blends improved monotonically with move size; LoL's do
+            # not, and its largest measured band is directionally negative on
+            # matches the model already predicts well (note the much lower Brier
+            # there). So a big LoL move gets a warning, not the reassurance the
+            # Valorant text gives.
+            move = abs(stages["p_final"] - stages["p_elo_only"])
+            if move < 0.10:
+                strength = (
+                    "and on moves this size they measurably beat team Elo alone in backtest "
+                    "(5,104 walk-forward predictions)"
+                )
+            else:
+                strength = (
+                    "and a swing this large is NOT supported by backtest here -- in the 10-20pp band the blends "
+                    "came out slightly WORSE than team Elo alone (n=141, not statistically distinguishable from "
+                    "no effect), so treat this one with more caution than the size of the gap suggests"
+                )
             sentences.append(
                 f"The blends pull toward {moved_to}, taking {subject} from "
                 f"{stages['p_elo_only'] * 100:.0f}% to {stages['p_final'] * 100:.0f}% on "
                 f"{' and '.join(drivers)}. {'These carry' if many else 'That carries'} less weight than the team "
-                f"rating, and {'they have' if many else 'it has'} not been shown to beat the MARKET -- so read "
-                f"this as the disagreement resting on {'them' if many else 'it'} rather than on the Elo."
+                f"rating, {strength}. Whether they beat the MARKET has not been shown either way."
             )
     sentences.append(_edge_sentence(model_prob, market_prob))
     return " ".join(sentences)
