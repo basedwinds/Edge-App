@@ -144,14 +144,20 @@ def refresh_kalshi_mma_markets():
     for row in moneyline_rows:
         names_by_suffix.setdefault(row["fight_suffix"], []).append(row["fighter_name"])
 
-    # Kalshi retires a fight's MONEYLINE event before its other series -- live
-    # 2026-08-06: 26AUG08JOHROS (Miles Johns vs Jessie Rosas) was gone from all
-    # 22 open moneyline suffixes while still trading in distance, method of
-    # finish, rounds AND round of victory. Resolving names from the moneyline
-    # alone therefore loses a fight that is still fully listed, and (before
-    # market_catalog_mma._set_fight_id) actively NULLed its 14 existing links.
-    # Those series carry both fighters in their event title, so fall back to it
-    # for any suffix the moneyline didn't name.
+    # A suffix can be missing from the MONEYLINE series while its other series
+    # are still listed -- live 2026-08-06: 26AUG08JOHROS (Miles Johns vs Jessie
+    # Rosas) was gone from all 22 open moneyline suffixes while still trading in
+    # distance, method of finish, rounds AND round of victory. Resolving names
+    # from the moneyline alone therefore loses a fight that is still listed, and
+    # (before market_catalog_mma._set_fight_id) actively NULLed its 14 existing
+    # links. Those series carry both fighters in their event title, so fall back
+    # to it for any suffix the moneyline didn't name.
+    #
+    # The cause turned out to be an opponent REPLACEMENT (Johns vs Vazquez
+    # replaced Johns vs Rosas the next day), not a retirement ordering -- see
+    # market_catalog_mma._set_fight_id for the correction. Worth knowing here
+    # because it means a suffix recovered this way may belong to a matchup that
+    # is being wound down: Kalshi does close those markets, but not instantly.
     for row in (*distance_rows, *mov_rows, *mof_rows, *rounds_rows, *round_of_victory_rows):
         suffix = row.get("fight_suffix")
         if not suffix or suffix in names_by_suffix:

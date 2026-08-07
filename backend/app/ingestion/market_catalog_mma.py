@@ -49,13 +49,23 @@ def _set_fight_id(market: Market, mma_fight_id: str | None) -> None:
 
     REAL REGRESSION this fixes (caught 2026-08-06 by a link-count monitor, not
     by anyone looking): poller_mma resolves fight ids from the MONEYLINE series
-    only and reuses that mapping for every other series. Kalshi retires a
-    fight's moneyline event before its distance/method/rounds/round-of-victory
-    events -- confirmed live: 22 open moneyline suffixes, and 26AUG08JOHROS
-    (Miles Johns vs Jessie Rosas) absent from all of them while still present in
-    all four other series. So the resolver returned None for that suffix and
-    this assignment overwrote 14 perfectly good links with NULL, un-pricing and
-    un-settleable-ing the whole fight.
+    only and reuses that mapping for every other series. When a suffix stops
+    appearing in the moneyline series while its distance/method/rounds/
+    round-of-victory events are still listed, the resolver returns None and this
+    assignment used to overwrite perfectly good links with NULL -- 14 of them at
+    once for 26AUG08JOHROS, un-pricing and un-settling the whole fight.
+
+    CORRECTION to the first diagnosis, which is worth keeping because the wrong
+    version is the plausible one: this was originally written up as "Kalshi
+    retires the moneyline before the other series", as if it were a routine
+    ordering. It is not. The next day 26AUG08JOHVAZ appeared -- Miles Johns vs
+    Gianni VAZQUEZ. The Rosas bout had been REPLACED, Kalshi pulled its
+    moneyline when the matchup died, and the other JOHROS series lingered a
+    while as stale leftovers before being closed too (all 23 are now inactive).
+    So the trigger is an opponent change, not a retirement schedule. The guard
+    below is right either way -- a failed lookup is not evidence the old answer
+    was wrong -- but do not go looking for a moneyline-retires-first rule,
+    because there isn't one.
 
     A failed lookup is not evidence that the old answer was wrong. The poller
     now also recovers names from the other series' event titles (see
