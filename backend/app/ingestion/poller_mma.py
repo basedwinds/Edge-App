@@ -16,6 +16,7 @@ from app.ingestion.market_matcher_mma import (
     date_from_fight_suffix,
     date_from_polymarket_slug,
     match_fight_by_names_only,
+    names_from_event_title,
 )
 from app.ingestion.poller_lock import db_write_lock
 from app.models import distance_service_mma, method_service_mma, rounds_service_mma
@@ -142,6 +143,22 @@ def refresh_kalshi_mma_markets():
     names_by_suffix: dict[str, list[str]] = {}
     for row in moneyline_rows:
         names_by_suffix.setdefault(row["fight_suffix"], []).append(row["fighter_name"])
+
+    # Kalshi retires a fight's MONEYLINE event before its other series -- live
+    # 2026-08-06: 26AUG08JOHROS (Miles Johns vs Jessie Rosas) was gone from all
+    # 22 open moneyline suffixes while still trading in distance, method of
+    # finish, rounds AND round of victory. Resolving names from the moneyline
+    # alone therefore loses a fight that is still fully listed, and (before
+    # market_catalog_mma._set_fight_id) actively NULLed its 14 existing links.
+    # Those series carry both fighters in their event title, so fall back to it
+    # for any suffix the moneyline didn't name.
+    for row in (*distance_rows, *mov_rows, *mof_rows, *rounds_rows, *round_of_victory_rows):
+        suffix = row.get("fight_suffix")
+        if not suffix or suffix in names_by_suffix:
+            continue
+        pair = names_from_event_title(row.get("event_title", ""))
+        if pair:
+            names_by_suffix[suffix] = list(pair)
 
     fight_id_by_suffix: dict[str, str | None] = {}
     for suffix, names in names_by_suffix.items():

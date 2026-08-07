@@ -160,6 +160,32 @@ def date_from_fight_suffix(suffix: str) -> str | None:
     return f"20{m.group(1)}-{_MONTHS[m.group(2)]:02d}-{int(m.group(3)):02d}"
 
 
+# "<A> vs[.] <B>: <market type>" -- the title shape Kalshi's NON-moneyline UFC
+# series use ("Miles Johns vs. Jessie Rosas: Round of Victory"). Neither name may
+# contain a colon, which is what makes this safe to run over every title: the
+# moneyline series' own titles are CARD titles ("Fight Night: Canuto vs Foro
+# Antunes") and are rejected outright, so a card headline can never be mistaken
+# for a fighter pair.
+_TITLE_PAIR_RE = re.compile(r"^([^:]+?)\s+vs\.?\s+([^:]+?):\s+\S")
+
+
+def names_from_event_title(title: str) -> tuple[str, str] | None:
+    """Both fighters' real names out of a per-fight event title, or None.
+
+    Needed because poller_mma resolves fight ids from the MONEYLINE series
+    alone, and Kalshi retires a fight's moneyline event while its other series
+    are still trading -- so a fight can be fully listed under
+    distance/method/rounds/round-of-victory with no moneyline anywhere to name
+    its fighters. Those series carry both names in their event title, which is
+    the only remaining place to read them.
+    """
+    m = _TITLE_PAIR_RE.match((title or "").strip())
+    if not m:
+        return None
+    a, b = m.group(1).strip(), m.group(2).strip()
+    return (a, b) if a and b else None
+
+
 def _iso_day(value) -> str | None:
     """Normalise an event_date to "YYYY-MM-DD" whether it arrives as a
     datetime.date, a datetime, or an ISO-ish string. MmaFight-shaped dicts are

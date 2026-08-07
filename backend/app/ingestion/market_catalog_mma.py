@@ -44,6 +44,28 @@ def upsert_mma_fights(session: Session, fights: list[dict]) -> int:
     return count
 
 
+def _set_fight_id(market: Market, mma_fight_id: str | None) -> None:
+    """Set the fight link, but NEVER downgrade a known link back to None.
+
+    REAL REGRESSION this fixes (caught 2026-08-06 by a link-count monitor, not
+    by anyone looking): poller_mma resolves fight ids from the MONEYLINE series
+    only and reuses that mapping for every other series. Kalshi retires a
+    fight's moneyline event before its distance/method/rounds/round-of-victory
+    events -- confirmed live: 22 open moneyline suffixes, and 26AUG08JOHROS
+    (Miles Johns vs Jessie Rosas) absent from all of them while still present in
+    all four other series. So the resolver returned None for that suffix and
+    this assignment overwrote 14 perfectly good links with NULL, un-pricing and
+    un-settleable-ing the whole fight.
+
+    A failed lookup is not evidence that the old answer was wrong. The poller
+    now also recovers names from the other series' event titles (see
+    poller_mma), so this is the belt to that braces -- and it is the reason the
+    link count kept oscillating (48 -> 0 -> 14) across polls.
+    """
+    if mma_fight_id is not None or market.mma_fight_id is None:
+        market.mma_fight_id = mma_fight_id
+
+
 def upsert_kalshi_mma_moneyline_market(session: Session, row: dict, mma_fight_id: str | None) -> Market:
     market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
     if market is None:
@@ -52,7 +74,7 @@ def upsert_kalshi_mma_moneyline_market(session: Session, row: dict, mma_fight_id
             market_type="moneyline", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     market.team = row["fighter_name"]
     market.status = row.get("status") or "active"
     session.flush()
@@ -73,7 +95,7 @@ def upsert_polymarket_mma_moneyline_row(session: Session, row: dict, mma_fight_i
             market_type="moneyline", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     market.team = row["fighter_name"]
     market.status = row.get("status") or "active"
     session.flush()
@@ -93,7 +115,7 @@ def upsert_kalshi_mma_distance_market(session: Session, row: dict, mma_fight_id:
             market_type="distance", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     market.team = None
     market.side = "yes"  # single binary market, "Yes" = goes the distance
     market.status = row.get("status") or "active"
@@ -115,7 +137,7 @@ def upsert_polymarket_mma_distance_row(session: Session, row: dict, mma_fight_id
             market_type="distance", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     market.team = None
     market.side = "yes"
     market.status = row.get("status") or "active"
@@ -147,7 +169,7 @@ def upsert_kalshi_mma_mov_market(session: Session, row: dict, mma_fight_id: str 
             market_type="method_of_victory", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     if row.get("is_draw_outcome"):
         market.team = None
         market.side = "draw"
@@ -188,7 +210,7 @@ def upsert_kalshi_mma_mof_market(session: Session, row: dict, mma_fight_id: str 
             market_type="method_of_finish", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     market.team = None
     sub_lower = row.get("yes_sub_title", "").lower()
     if "decision" in sub_lower:
@@ -228,7 +250,7 @@ def upsert_polymarket_mma_method_row(session: Session, row: dict, mma_fight_id: 
             market_type=market_type, sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     if kind == "fighter_kotko":
         market.team = row["fighter_name"]
         market.side = "kotko"
@@ -262,7 +284,7 @@ def upsert_kalshi_mma_rounds_market(session: Session, row: dict, mma_fight_id: s
             market_type="rounds", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     market.team = None
     market.line = float(row["before_round"])
     market.side = "under"  # "ends BEFORE round N" == fight duration under N
@@ -285,7 +307,7 @@ def upsert_polymarket_mma_rounds_row(session: Session, row: dict, mma_fight_id: 
             market_type="rounds", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     market.team = None
     market.line = row["line"]
     market.side = "over"
@@ -315,7 +337,7 @@ def upsert_kalshi_mma_round_of_victory_market(session: Session, row: dict, mma_f
             market_type="round_of_victory", sport="mma",
         )
         session.add(market)
-    market.mma_fight_id = mma_fight_id
+    _set_fight_id(market, mma_fight_id)
     if row.get("is_other_outcome"):
         market.team = None
         market.side = "other"
