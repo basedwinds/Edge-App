@@ -75,10 +75,74 @@ def refresh_racing_markets():
                 upsert_racing_market(session, r, event_ids[et])
             session.commit()
             log.info("racing poll: %d markets across %d events", len(rows), len(event_ids))
+            reconcile_canonical_race_dates(session)
         except Exception:
             log.exception("racing market persist failed -- skipping this cycle")
         finally:
             session.close()
+
+
+def reconcile_canonical_race_dates(session) -> int:
+    """Give every event in a canonical race group the EARLIEST start_time in it.
+
+    WHY THIS IS SOUND, not just a heuristic: the two sources fail in opposite
+    directions. Kalshi's close_time is a settlement DEADLINE, so it can only sit
+    at or after the race -- never before it -- while Polymarket's event carries
+    the race date itself (its slug even spells it out:
+    "nascar-xfinity-hyvee-perks-250-winner-2026-08-08"). So within a group of
+    events that are the same real race, the minimum is the one that isn't a
+    deadline. This module's own docstring already records the Brickyard 400
+    close_time sitting a month after the race.
+
+    THE BUG THIS FIXES, and it is not cosmetic. resolve_race_date matches ESPN's
+    calendar on name tokens, but ESPN labels races by VENUE and Kalshi names
+    them by SPONSOR, so every sponsor-named race falls through to close_time.
+    Measured 2026-08-07: the HyVee Perks 250 was stored at 2026-08-23 for a race
+    ESPN dates 2026-08-08 -- 15 days out -- while its Polymarket twin, already
+    grouped with it by canonical_race_event_ids, had 2026-08-08 21:00 all along.
+
+    That wrong date does two things. It shows the wrong day on every bet for the
+    race, and -- worse -- refresh_racing_results matches a RaceEvent to an ESPN
+    race BY DATE within _ESPN_DATE_SLOP_DAYS. Fifteen days out is far outside
+    that window, so the race would never have settled at all and its bets would
+    have hung pending forever. The Xfinity pricing shipped hours earlier would
+    have produced bets nothing could ever grade.
+
+    Runs after each poll and is idempotent: groups already agreeing are skipped.
+    """
+    from app.db.models import RaceEvent
+    from app.models.duplicate_fixtures import canonical_race_event_ids
+
+    try:
+        canon = canonical_race_event_ids(session)
+    except Exception:
+        log.exception("racing dates: canonical grouping failed -- leaving dates as ingested")
+        return 0
+    if not canon:
+        return 0
+
+    groups: dict[int, list[int]] = {}
+    for eid, gid in canon.items():
+        groups.setdefault(gid, []).append(eid)
+
+    fixed = 0
+    for gid, ids in groups.items():
+        if len(ids) < 2:
+            continue
+        evs = [e for e in (session.get(RaceEvent, i) for i in ids) if e is not None and e.start_time]
+        if len(evs) < 2:
+            continue
+        earliest = min(e.start_time for e in evs)
+        for e in evs:
+            if e.start_time != earliest:
+                log.info("racing dates: %s %s -> %s (canonical group %s)",
+                         e.event_ticker, e.start_time, earliest, gid)
+                e.start_time = earliest
+                fixed += 1
+    if fixed:
+        session.commit()
+        log.info("racing dates: corrected %d event start times from canonical groups", fixed)
+    return fixed
 
 
 # How far our RaceEvent date may sit from ESPN's event date and still be the
@@ -113,6 +177,27 @@ def _match_espn_event(scoreboard: list, edate: str) -> "str | None":
         target = datetime.date.fromisoformat(edate)
     except ValueError:
         return None
+    best, best_delta = _match_espn_event_with_delta(scoreboard, edate)
+    return best
+
+
+def _match_espn_event_with_delta(scoreboard: list, edate: str) -> "tuple[str | None, int | None]":
+    """As _match_espn_event, but also returns how many days off the match was.
+
+    The delta is what lets the NASCAR settler choose between calendars. That
+    function's own note used to reason that "races in all three series are >= 7
+    days apart, so a 4-day window cannot reach the neighbouring round" -- true
+    while Cup was the only NASCAR pool, and false the moment Xfinity and Truck
+    got their own. Cup and Xfinity race the SAME VENUE on ADJACENT DAYS (Iowa:
+    Xfinity 08-08, Cup 08-09), so a +/-4 day window reaches straight across the
+    series boundary and both calendars claim the race. Comparing deltas breaks
+    the tie on the only evidence that distinguishes them: 0 days beats 1.
+    """
+    import datetime
+    try:
+        target = datetime.date.fromisoformat(edate)
+    except ValueError:
+        return None, None
     best, best_delta = None, None
     for eid, _name, d in scoreboard:
         try:
@@ -121,7 +206,7 @@ def _match_espn_event(scoreboard: list, edate: str) -> "str | None":
             continue
         if delta <= _ESPN_DATE_SLOP_DAYS and (best_delta is None or delta < best_delta):
             best, best_delta = eid, delta
-    return best
+    return best, best_delta
 
 
 
@@ -226,16 +311,23 @@ def refresh_racing_results():
                 key = (cand, season)
                 if key not in scoreboards:
                     scoreboards[key] = _event_ids_for_season(cand, season)
-                eid = _match_espn_event(scoreboards[key], edate)
+                eid, delta = _match_espn_event_with_delta(scoreboards[key], edate)
                 if eid:
-                    hits.append((cand, eid))
-            if len(hits) != 1:
-                if hits:
-                    log.info("racing results: %d calendars claim a race on %s -- leaving event %s "
-                             "unsettled rather than guessing (%s)", len(hits), edate, rid,
-                             ", ".join(c for c, _ in hits))
+                    hits.append((delta, cand, eid))
+            if not hits:
                 continue
-            cand, eid = hits[0]
+            # Nearest date wins ACROSS calendars, not just within one. Cup and
+            # Xfinity run the same venue on adjacent days, so at +/-4 days both
+            # claim the race and a plain "is it unique?" test would reject every
+            # such weekend -- which is most of them. Verified on the Iowa
+            # weekend: Xfinity matches at 0 days, Cup at 1.
+            hits.sort()
+            if len(hits) > 1 and hits[0][0] == hits[1][0]:
+                log.info("racing results: %s and %s both match %s by %d days -- leaving event %s "
+                         "unsettled rather than grading against the wrong race",
+                         hits[0][1], hits[1][1], edate, hits[0][0], rid)
+                continue
+            _delta, cand, eid = hits[0]
             r = fetch_race_result(cand, eid)
             if r:
                 results[rid] = r
