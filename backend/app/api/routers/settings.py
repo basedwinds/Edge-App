@@ -7,6 +7,10 @@ from app.db.models import Setting
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
+import logging
+
+log = logging.getLogger("settings")
+
 BANKROLL_KEY = "bankroll_dollars"
 DEFAULT_BANKROLL = 1000.0
 
@@ -142,6 +146,11 @@ DEFAULT_LOL_FUTURES_SUBPOOL_PCT = 0.15
 FRACTIONAL_KELLY_KEY = "fractional_kelly"
 MAX_STAKE_FRACTION_KEY = "max_stake_fraction"
 MIN_EDGE_TO_BET_KEY = "min_edge_to_bet"
+# Bankroll exposure caps -- the share of bankroll that may be OUTSTANDING in
+# real (hand-placed, still-pending) bets on each side. See models/exposure.py
+# for why the rule is on outstanding exposure rather than on a pool.
+FUTURES_EXPOSURE_CAP_PCT_KEY = "futures_exposure_cap_pct"
+GAME_EXPOSURE_CAP_PCT_KEY = "game_exposure_cap_pct"
 
 # Flat/scaled unit staking (2026-07-23). "flat" sizes each qualifying bet by
 # unit tier (see staking.py::size_stake_dollars) instead of Kelly*pool -- the
@@ -735,8 +744,28 @@ def get_unit_dollars(session: Session) -> float:
 
 def get_staking_params(session: Session) -> tuple[float, float, float]:
     """Returns (fractional_kelly, max_stake_fraction, min_edge_to_bet) --
-    user-editable overrides of staking.py's module constants."""
+    user-editable overrides of staking.py's module constants.
+
+    ALSO refreshes the bankroll exposure snapshot, deliberately. Every one of
+    the 12 routers that sizes a bet calls this first, so hooking the refresh
+    here means the game/futures caps apply everywhere without threading an
+    argument through all 22 size_stake_dollars call sites -- and without the
+    "every caller except the one somebody forgot" bug this codebase has hit
+    repeatedly. See app/models/exposure.py.
+    """
     from app.models.staking import FRACTIONAL_KELLY, MAX_STAKE_FRACTION, MIN_EDGE_TO_BET
+
+    try:
+        from app.models import exposure
+
+        exposure.refresh_snapshot(
+            session,
+            _get_float(session, BANKROLL_KEY, DEFAULT_BANKROLL),
+            _get_float(session, FUTURES_EXPOSURE_CAP_PCT_KEY, exposure.DEFAULT_FUTURES_EXPOSURE_CAP_PCT),
+            _get_float(session, GAME_EXPOSURE_CAP_PCT_KEY, exposure.DEFAULT_GAME_EXPOSURE_CAP_PCT),
+        )
+    except Exception:  # a cap must never be able to break pricing
+        log.exception("exposure snapshot refresh failed; sizing continues uncapped")
 
     return (
         _get_float(session, FRACTIONAL_KELLY_KEY, FRACTIONAL_KELLY),

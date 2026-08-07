@@ -434,6 +434,7 @@ def size_stake_dollars(
     flat_full_edge: float = FLAT_FULL_UNIT_EDGE,
     unit_scale: float = 1.0,
     min_market_price: float = 0.0,
+    remaining_capacity: float | None = None,
 ) -> float | None:
     """The single sizing dispatch every router calls. `kelly_frac is None`
     means the bet didn't qualify (min-edge/has-traded/CLV gate) -> no bet in
@@ -448,10 +449,26 @@ def size_stake_dollars(
     putting the rule in the one function every gate already feeds into means the
     view cannot drift out of step with it, and the per-sport Futures pages still
     show the row (unsized) for calibration tracking.
+
+    `remaining_capacity` -- dollars still available on this bet's SIDE (game or
+    futures) under the bankroll exposure caps, from models/exposure.py. None
+    means uncapped, which is the safe default for any caller that hasn't been
+    taught about caps yet. 0 or less means the side is full and the bet is shown
+    unsized rather than stacked on top; a stake larger than what's left is
+    trimmed to fit rather than refused outright, so the last slot in a side is
+    usable instead of being wasted.
     """
     if kelly_frac is None:
         return None
     if min_market_price > 0.0 and (market_price is None or market_price < min_market_price):
+        return None
+    if remaining_capacity is None:
+        # Not passed -> read the snapshot the settings choke point refreshed.
+        # This is what makes the cap un-forgettable: no router has to opt in.
+        from app.models.exposure import remaining_for_unit_scale
+
+        remaining_capacity = remaining_for_unit_scale(unit_scale)
+    if remaining_capacity is not None and remaining_capacity <= 0:
         return None
     if mode == "flat":
         if unit_dollars is None or unit_dollars <= 0:
@@ -459,5 +476,11 @@ def size_stake_dollars(
         units = flat_stake_units(model_prob, market_price, flat_marginal_edge, flat_full_edge)
         # unit_scale is FUTURES_UNIT_SCALE for season-long markets -- see its
         # docstring for why an unscaled unit blocked them entirely.
-        return round(units * unit_dollars * unit_scale, 2) if units else None
-    return suggested_stake_dollars(kelly_frac, pool)
+        stake = round(units * unit_dollars * unit_scale, 2) if units else None
+    else:
+        stake = suggested_stake_dollars(kelly_frac, pool)
+    if stake is not None and remaining_capacity is not None:
+        stake = round(min(stake, remaining_capacity), 2)
+        if stake <= 0:
+            return None
+    return stake
