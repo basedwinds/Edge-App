@@ -228,6 +228,66 @@ TEAM_ALIASES: dict[str, str] = {
     # Left unresolved and visible (they price as "no baseline") until either
     # Polymarket lists the league, or these clubs appear in a football-data
     # season we can align against.
+    #
+    # ---- E1 + P1, 2026-08-07 (second pass) -----------------------------------
+    # Adding Polymarket coverage for these two leagues made the cross-platform
+    # fixture alignment available for them, which it was NOT a few hours earlier
+    # -- the exact evidence source the P1 block above says was missing. Re-ran
+    # scripts/derive_soccer_team_aliases.py and it pinned 58 name observations.
+    #
+    # Three of these could not have been guessed safely from the strings alone:
+    #   vitoria sc  -> guimaraes  (Vitoria SC is Vitoria de Guimaraes)
+    #   sc braga    -> sp braga
+    #   cs maritimo -> madeira    (the alignment OVERRULED a token match to the
+    #                              "maritimo" key -- and this is what the thin
+    #                              34-match "madeira" key flagged yesterday
+    #                              actually is)
+    "sport lisboa e benfica": "benfica",
+    "cf estrela da amadora": "estrela",
+    "cs maritimo": "madeira",
+    "sc braga": "sp braga",
+    "vitoria sc": "guimaraes",
+    "cd nacional": "nacional",
+    "cd santa clara": "santa clara",
+    "casa pia ac": "casa pia",
+    "estoril praia": "estoril",
+    "fc alverca": "alverca",
+    "fc arouca": "arouca",
+    "fc famalicao": "famalicao",
+    "fc porto": "porto",
+    "gil vicente fc": "gil vicente",
+    "moreirense fc": "moreirense",
+    "rio ave fc": "rio ave",
+    # E1: Polymarket suffixes every club with FC/AFC.
+    "blackburn rovers fc": "blackburn",
+    "bristol city fc": "bristol city",
+    "burnley fc": "burnley",
+    "middlesbrough fc": "middlesbrough",
+    "millwall fc": "millwall",
+    "portsmouth fc": "portsmouth",
+    "sheffield united fc": "sheffield united",
+    "southampton fc": "southampton",
+    "watford fc": "watford",
+    "west bromwich albion fc": "west bromwich albion",
+    "west ham united fc": "west ham united",
+    "wolverhampton wanderers fc": "wolverhampton wanderers",
+    "wrexham afc": "wrexham",
+    # These nine came back on SUBSET evidence only, which the script holds back
+    # by default because that is the tier that once proposed
+    # "rcd espanyol de barcelona" -> "barcelona". Accepted here after checking
+    # the specific failure mode does not apply: every one is the single English
+    # pattern "<Name> City/County/North End" -> "<Name>", each has exactly one
+    # candidate key, and crucially NONE of them contains another club's whole
+    # name the way Espanyol's contains Barcelona's.
+    "birmingham city fc": "birmingham",
+    "bolton wanderers fc": "bolton",
+    "cardiff city fc": "cardiff",
+    "charlton athletic fc": "charlton",
+    "derby county fc": "derby",
+    "norwich city fc": "norwich",
+    "preston north end fc": "preston",
+    "stoke city fc": "stoke",
+    "swansea city afc": "swansea",
 }
 
 
