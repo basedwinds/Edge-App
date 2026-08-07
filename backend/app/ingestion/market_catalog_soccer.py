@@ -319,6 +319,27 @@ def upsert_kalshi_soccer_league_winner_market(session: Session, row: dict) -> Ma
     return market
 
 
+def upsert_kalshi_mls_playoff_market(session: Session, row: dict) -> Market:
+    """MLS Cup / Eastern / Western conference bracket futures. Same season-long,
+    no-soccer_match_id shape as league_winner above; the only difference is that
+    market_type comes from the ROW rather than being fixed, because one fetch
+    covers two market types (mls_cup_winner and mls_conference_winner) and the
+    conference is carried in group_label."""
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type=row["market_type"], sport="soccer",
+        )
+        session.add(market)
+    market.team = row["team"]
+    market.group_label = row["group_label"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                      yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
 # ---------------------------------------------------------------------------
 # Second batch (added 2026-07-19): First Half / Second Half / First Team To
 # Score / Correct Score / Team Total -- see kalshi_soccer_client.py/

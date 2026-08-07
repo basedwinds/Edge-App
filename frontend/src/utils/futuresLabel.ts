@@ -34,6 +34,8 @@ const MARKET_NAME: Record<string, string> = {
   stage_of_elimination: "Stage of Elimination",
   h2h_wins: "Head-to-Head Wins",
   relegation: "Relegation",
+  mls_cup_winner: "MLS Cup Winner",
+  mls_conference_winner: "Conference Winner",
   top2: "Top 2",
   top4: "Top 4",
   top6: "Top 6",

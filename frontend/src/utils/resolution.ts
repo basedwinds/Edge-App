@@ -26,6 +26,12 @@ const NFL_WEEK1 = "2026-09-10T00:00:00Z"; // week 1
 const MLB_REG_END = "2026-09-28T00:00:00Z"; // end of the regular season
 const MLB_POST = "2026-11-01T00:00:00Z"; // World Series
 const SOCCER_END = "2027-05-24T00:00:00Z"; // final matchday of the European leagues
+// MLS runs Feb->Dec, so its futures resolve FIVE MONTHS before the European
+// leagues' do -- reusing SOCCER_END here would overstate the capital lockup on
+// every MLS Cup position by about half a year. Taken from Kalshi's own
+// expected_expiration_time on KXMLSCUP/KXMLSEAST/KXMLSWEST (all three agree),
+// not estimated from the calendar.
+const MLS_CUP = "2026-12-25T00:00:00Z";
 
 // market_type -> resolution anchor, per sport. Covers the futures types the app
 // actually prices; anything unmapped falls through to a generic estimate.
@@ -44,6 +50,7 @@ const FUTURES: Record<string, Record<string, string>> = {
   soccer: {
     league_winner: SOCCER_END, relegation: SOCCER_END, top4: SOCCER_END,
     top2: SOCCER_END, top6: SOCCER_END, top_half: SOCCER_END,
+    mls_cup_winner: MLS_CUP, mls_conference_winner: MLS_CUP,
   },
 };
 

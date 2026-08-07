@@ -61,6 +61,7 @@ from app.models.ladder_sanity import (
     looks_already_live_by_trading,
 )
 from app.models.news_adjustment.schema import NewsAdjustment
+from app.models import playoff_sim_service_mls
 from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season
 from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
@@ -604,7 +605,18 @@ _MARKET_TYPE_LABEL_TO_DIVISION.update({
     for division in kalshi_soccer_client.TEAM_POINTS_SERIES
 })
 
-_FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points"]
+# MLS Cup / conference bracket futures. Deliberately absent from
+# _MARKET_TYPE_LABEL_TO_DIVISION above, which is what keeps _futures_division()
+# returning None for them -- that is load-bearing, not an oversight. That dict
+# feeds the per-league loop that runs simulate_season(), the ROUND-ROBIN model,
+# and running it for MLS is precisely the thing season_sim_soccer's docstring
+# says is wrong (unbalanced conference schedule). Mapping these to "MLS" to make
+# them look tidy would silently route them into the wrong model. They are priced
+# from playoff_sim_service_mls instead, below.
+_MLS_PLAYOFF_MARKET_TYPES = ("mls_cup_winner", "mls_conference_winner")
+
+_FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",
+                         *_MLS_PLAYOFF_MARKET_TYPES]
 
 _SIM_PROB_FIELD_BY_MARKET_TYPE = {
     "relegation": "relegation_prob",
@@ -659,12 +671,27 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             state, canonical_teams, division, n_simulations=3000, second_tier_state=second_tier_state,
         )
 
+    # One cached simulation prices every MLS Cup and conference-bracket row (see
+    # _MLS_PLAYOFF_MARKET_TYPES). Cached rather than run here because assembling
+    # its inputs costs ~10 live ESPN calls -- unlike the European sim above,
+    # whose inputs are already in memory.
+    mls_playoff = playoff_sim_service_mls.get_result()
+
     out = []
     for m in markets:
         division = _futures_division(m)
         sim_result = sim_by_league.get(division) if division else None
         model_prob = None
-        if sim_result is not None and m.team:
+        if m.market_type in _MLS_PLAYOFF_MARKET_TYPES:
+            if mls_playoff is not None and m.team:
+                probs = (mls_playoff.cup_champion_prob if m.market_type == "mls_cup_winner"
+                         else mls_playoff.conference_champion_prob)
+                raw = probs.get(canonical_team_key(m.team))
+                # None (not 0.0) for a team the sim doesn't carry: on a 30-team
+                # bracket 0.0 reads as a confident "cannot win", which is a
+                # fabricated price, same reasoning as the team_points rungs.
+                model_prob = round(raw, 4) if raw is not None else None
+        elif sim_result is not None and m.team:
             if m.market_type == "team_points":
                 # Not a rank question -- read the simulated season-points
                 # distribution at this rung's threshold. Left unpriced (None) when
@@ -690,6 +717,10 @@ def list_soccer_futures(session: Session = Depends(get_session)):
                 source=m.source,
                 team=m.team,
                 group_label=m.group_label,
+                # Division code; paper_logger maps it to a readable name. The MLS
+                # bracket markets have no division (by design -- see
+                # _MLS_PLAYOFF_MARKET_TYPES), so name the competition directly.
+                league="MLS" if m.market_type in _MLS_PLAYOFF_MARKET_TYPES else division,
                 # Points threshold on team_points rungs, null on every other
                 # futures type. Was hardcoded None, which would have rendered
                 # "Arsenal" with no number -- the same unactionable-bet bug the
@@ -727,6 +758,14 @@ _NESTED_POSITION_FAMILIES: dict[str, str] = {
     "top6": "finish_top",
     "relegation": "finish_bottom",
     "bottom3": "finish_bottom",
+    # Winning the MLS Cup REQUIRES winning your conference bracket first -- the
+    # sim literally produces the cup winner by playing the two conference
+    # winners against each other. So backing a club in both is one opinion at
+    # two prices, exactly the case this collapse exists for. Note these are the
+    # same nested family despite being different market_type strings, which is
+    # the same shape that let Manchester City reach 27% of the book.
+    "mls_cup_winner": "mls_playoff",
+    "mls_conference_winner": "mls_playoff",
 }
 NESTED_POSITION_NOTE = (
     "Not staked: a wider threshold on the same club is already staked, and these are nested "

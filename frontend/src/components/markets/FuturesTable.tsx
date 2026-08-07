@@ -72,6 +72,11 @@ export const MARKET_TYPE_LABELS: Record<string, string> = {
   top_half: "Top Half",
   top4: "Top 4",
   top2: "Top 2",
+  // MLS Cup playoffs (added 2026-08-07). "Conference Winner" rather than
+  // "Conference Champion" of the regular-season table: these resolve on the
+  // BRACKET, and group_label already says which conference.
+  mls_cup_winner: "MLS Cup Winner",
+  mls_conference_winner: "Conference Winner",
   stage_of_elimination: "Stage of Elimination",
 };
 

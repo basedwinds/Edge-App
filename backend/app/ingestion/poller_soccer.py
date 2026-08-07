@@ -11,6 +11,7 @@ from app.db.models import Market, SoccerMatch
 from app.ingestion import market_catalog_soccer
 from app.ingestion.poller_lock import db_write_lock
 from app.ingestion.market_matcher_soccer import canonical_team_key, kalshi_match_suffix, team_names_match
+from app.models import playoff_sim_service_mls
 from app.models.baseline import elo_service_soccer
 from app.models.news_adjustment.injury_rules_soccer import compute_injury_adjustment
 from app.models.news_adjustment.motivation_rules_soccer import compute_motivation_adjustment
@@ -461,6 +462,7 @@ def refresh_kalshi_soccer_futures():
     relegation_rows = kalshi_soccer_client.get_relegation_markets()
     top_n_rows = kalshi_soccer_client.get_top_n_markets()
     team_points_rows = kalshi_soccer_client.get_team_points_markets()
+    mls_playoff_rows = kalshi_soccer_client.get_mls_playoff_markets()
 
     with db_write_lock():
         session = SessionLocal()
@@ -473,14 +475,18 @@ def refresh_kalshi_soccer_futures():
                 market_catalog_soccer.upsert_kalshi_soccer_top_n_market(session, row)
             for row in team_points_rows:
                 market_catalog_soccer.upsert_kalshi_soccer_team_points_market(session, row)
+            for row in mls_playoff_rows:
+                market_catalog_soccer.upsert_kalshi_mls_playoff_market(session, row)
             session.commit()
             log.info(
                 "kalshi soccer futures: %d league_winner rows across %d leagues, %d relegation rows across %d leagues, "
-                "%d top-N rows (top_half/top4/top2, EPL only), %d team-points rows across %d leagues",
+                "%d top-N rows (top_half/top4/top2, EPL only), %d team-points rows across %d leagues, "
+                "%d MLS playoff rows",
                 len(rows), len({r["division"] for r in rows}),
                 len(relegation_rows), len({r["division"] for r in relegation_rows}),
                 len(top_n_rows),
                 len(team_points_rows), len({r["division"] for r in team_points_rows}),
+                len(mls_playoff_rows),
             )
         finally:
             session.close()
@@ -503,8 +509,18 @@ def settle_soccer_placed_bets():
             session.close()
 
 
+def refresh_mls_playoff_sim():
+    """Re-runs the MLS Cup bracket Monte Carlo. Ordered AFTER
+    refresh_soccer_ratings in the full refresh below on purpose: it reads the
+    MLS rating state, and on a cold process that state is empty until the
+    ratings job has run -- a sim built on an unwarmed pool would see every team
+    as unrated and refuse to price (or worse, price off nothing)."""
+    playoff_sim_service_mls.refresh()
+
+
 def run_full_refresh_soccer():
     refresh_soccer_ratings()
+    refresh_mls_playoff_sim()
     refresh_kalshi_soccer_markets()
     refresh_polymarket_soccer_markets()
     refresh_kalshi_soccer_futures()

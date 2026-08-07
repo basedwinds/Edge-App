@@ -92,8 +92,10 @@ LEAGUE_WINNER_SERIES = {
 # under a DIFFERENT series, "KXEPLTOP", found during a later 2026-07-19
 # catalog_scan.py audit -- this empty per-league series was a real dead end,
 # not the same market re-discovered). MLS has no league_winner-shaped market
-# either -- KXMLSCUP is a single-elimination PLAYOFF, not a table finish, a
-# genuinely different real structure this module doesn't model.
+# either -- KXMLSCUP is a PLAYOFF bracket, not a table finish, a genuinely
+# different real structure the round-robin season model doesn't cover. That is
+# still why MLS is absent from LEAGUE_WINNER_SERIES above; it is now modelled
+# separately by playoff_sim_mls.py and ingested via MLS_PLAYOFF_SERIES below.
 
 TOTAL_SERIES = {
     "E0": "KXEPLTOTAL",
@@ -496,6 +498,66 @@ def get_league_winner_markets() -> list[dict]:
                 rows.append({
                     "event_ticker": ev["event_ticker"],
                     "division": division,
+                    "group_label": group_label,
+                    "ticker": m["ticker"],
+                    "team": team,
+                    "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                    "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                    "last_price": _to_float(m.get("last_price_dollars")),
+                    "volume": _to_float(m.get("volume_fp")),
+                    "status": m.get("status"),
+                })
+    return rows
+
+
+# MLS Cup Playoffs (added 2026-08-07). Priced by playoff_sim_mls.py, NOT by the
+# round-robin season model that handles the European league_winner markets --
+# see that module's docstring for why MLS needs its own.
+#
+# ONE simulation prices all three of these series, which is why they are grouped
+# in a single dict: KXMLSEAST/KXMLSWEST resolve on winning the CONFERENCE
+# BRACKET, not on topping the regular-season conference table. That was checked
+# against Kalshi's own rules_primary rather than inferred from the series name
+# -- KXMLSEAST-26-TOR reads "...is the 2026 MLS Eastern Conference champion",
+# and the East/West bracket winners are exactly the two teams the sim already
+# has to produce on the way to an MLS Cup winner. Pricing them off the
+# regular-season table instead would answer a different question (Vancouver
+# leading the West in August is not the same proposition as Vancouver winning
+# the Western bracket in December).
+#
+# Live inventory confirmed 2026-08-07: KXMLSCUP 30 open, KXMLSEAST 15,
+# KXMLSWEST 15 -- one market per team, the same one-event-per-series shape as
+# LEAGUE_WINNER_SERIES, so no title parsing.
+#
+# NOT included: KXMLSLEADER (17 open). That is the golden boot ("Will <player>
+# lead MLS in goals"), a PLAYER season-stat market -- the family this app
+# already measured and put in PLAYER_STAT_TRACKING_ONLY. Different question,
+# different model, deliberately out of scope here.
+MLS_PLAYOFF_SERIES = {
+    "KXMLSCUP": ("mls_cup_winner", "MLS Cup"),
+    "KXMLSEAST": ("mls_conference_winner", "MLS Eastern Conference"),
+    "KXMLSWEST": ("mls_conference_winner", "MLS Western Conference"),
+}
+
+
+def get_mls_playoff_markets() -> list[dict]:
+    """One row per (series, team). Same per-team shape as
+    get_league_winner_markets -- yes_sub_title is the full team name."""
+    rows = []
+    for series_ticker, (market_type, group_label) in MLS_PLAYOFF_SERIES.items():
+        for ev in get_open_events(series_ticker):
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                team = m.get("yes_sub_title", "")
+                if not team:
+                    continue
+                rows.append({
+                    "event_ticker": ev["event_ticker"],
+                    "division": "MLS",
+                    "market_type": market_type,
                     "group_label": group_label,
                     "ticker": m["ticker"],
                     "team": team,

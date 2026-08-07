@@ -71,11 +71,19 @@ TEAM_ALIASES: dict[str, str] = {
     "atlanta": "atlanta united fc",
     "austin": "austin fc",
     "charlotte": "charlotte fc",
+    # "chicago"/"dc"/"san diego" (city-only, no club word) are the exact labels
+    # Kalshi uses on the MLS Cup / conference futures, found unmatched in a
+    # 2026-08-07 sweep of all 30 against the ESPN conference table. Each is
+    # unambiguous league-wide -- MLS has exactly one club in each of those
+    # cities -- unlike the Los Angeles pair below, which is why that one needs
+    # Kalshi's trailing F/G disambiguator and these do not.
+    "chicago": "chicago fire fc",
     "chicago fire": "chicago fire fc",
     "cincinnati": "fc cincinnati",
     "colorado": "colorado rapids",
     "colorado rapids sc": "colorado rapids",
     "columbus": "columbus crew",
+    "dc": "dc united",
     "dc united sc": "dc united",
     "dallas": "fc dallas",
     "houston": "houston dynamo fc",
@@ -98,6 +106,8 @@ TEAM_ALIASES: dict[str, str] = {
     "portland": "portland timbers",
     "saint louis": "st louis city sc",
     "salt lake": "real salt lake",
+    # San Diego FC joined MLS in 2025, after this block was first written.
+    "san diego": "san diego fc",
     "san jose": "san jose earthquakes",
     "seattle": "seattle sounders fc",
     # The FULLER renderings, found unrated in a 2026-08-07 sweep of every live

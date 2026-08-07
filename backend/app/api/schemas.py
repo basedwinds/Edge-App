@@ -75,6 +75,14 @@ class FuturesMarketOut(BaseModel):
     source: str
     team: str | None  # None for the league-wide undefeated_season/wins_any markets
     group_label: str | None
+    # The COMPETITION, for the tracker's league column -- paper_logger reads
+    # row["league"] and, for soccer, maps the division code to a readable name
+    # (E0 -> "EPL"). This field did not exist, so every soccer FUTURES paper bet
+    # logged a null league and the tracker fell back to the bare sport, the same
+    # gap that showed match names in the league column for esports. Optional and
+    # defaulted, so the other sports' futures routes (where the sport IS the
+    # league, and _league_for_row deliberately returns None) are unaffected.
+    league: str | None = None
     line: float | None  # win-total ladder markets only (win_total/exact_win_total/wins_any); None otherwise
     side: str | None  # win_total/wins_any: always "over"; exact_win_total/other futures: None
     implied_prob: float | None
