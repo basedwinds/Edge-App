@@ -257,6 +257,10 @@ class PortfolioSportOut(BaseModel):
     pushes: int
     voids: int
     pending: int
+    # Settled rows that were LOGGED but never staked -- observations kept for
+    # forward CLV, not bets. Excluded from wins/losses so the record means
+    # what it says. See placed_bets._is_tracked_only.
+    tracked: int = 0
     at_risk_dollars: float      # stake still live in pending bets
     avg_clv_pp: float | None
     clv_sample: int
@@ -273,6 +277,10 @@ class PortfolioSourceOut(BaseModel):
     pushes: int
     voids: int
     pending: int
+    # Settled rows that were LOGGED but never staked -- observations kept for
+    # forward CLV, not bets. Excluded from wins/losses so the record means
+    # what it says. See placed_bets._is_tracked_only.
+    tracked: int = 0
     at_risk_dollars: float
     avg_clv_pp: float | None
     clv_sample: int
@@ -298,6 +306,10 @@ class FuturesSummaryOut(BaseModel):
     pushes: int
     voids: int
     pending: int
+    # Settled rows that were LOGGED but never staked -- observations kept for
+    # forward CLV, not bets. Excluded from wins/losses so the record means
+    # what it says. See placed_bets._is_tracked_only.
+    tracked: int = 0
     at_risk_dollars: float
     by_sport: list[PortfolioSportOut]
 
@@ -314,6 +326,10 @@ class PortfolioOut(BaseModel):
     pushes: int
     voids: int
     pending: int
+    # Settled rows that were LOGGED but never staked -- observations kept for
+    # forward CLV, not bets. Excluded from wins/losses so the record means
+    # what it says. See placed_bets._is_tracked_only.
+    tracked: int = 0
     at_risk_dollars: float
     avg_clv_pp: float | None
     clv_sample: int
@@ -635,7 +651,35 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
 
     def _blank() -> dict:
         return {"staked": 0.0, "net": 0.0, "net_units": 0.0, "wins": 0, "losses": 0,
-                "pushes": 0, "voids": 0, "pending": 0, "at_risk": 0.0, "clv": []}
+                "pushes": 0, "voids": 0, "pending": 0, "at_risk": 0.0, "clv": [],
+                "tracked": 0}
+
+    def _is_tracked_only(r) -> bool:
+        """A logged OBSERVATION rather than a bet: no stake was ever sized.
+
+        paper_logger._qualifies has two doors. The first admits rows the app
+        actually staked. The second deliberately admits rows with a real edge and
+        a real price that were NOT staked, so unvalidated markets still accrue
+        forward CLV. That is the design, not a defect, and it should continue.
+
+        A GUARD, NOT A BUG FIX -- stated plainly because it was nearly shipped as
+        the latter. 16,161 zero-stake rows exist and 8,096 are settled, and
+        counting them in the record would move it from 897-1378 (39.4% win rate)
+        to 4612-5759 (44.5%) -- a five-point flattering by bets that risked
+        nothing. But this aggregate never saw them: it queries `paper == False`,
+        and ALL 16,161 are paper (verified 2026-08-07: zero real zero-stake bets
+        exist). So `tracked` reads 0 here today.
+
+        It is kept because the filter and the guard protect different things. If
+        any future aggregate includes paper rows -- a paper-vs-real comparison is
+        an obvious thing to want -- the record would silently absorb 8,096
+        non-bets. ROI would survive that (a zero stake adds zero to numerator and
+        denominator alike); the counts would not.
+
+        Rows classified here still reach the CLV block below, which is the entire
+        reason they are logged.
+        """
+        return not (r.stake_dollars or 0.0) > 0.0
 
     overall = _blank()
     per_sport: dict[str, dict] = {}
@@ -661,6 +705,13 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
             for agg in buckets:
                 agg["pending"] += 1
                 agg["at_risk"] += r.stake_dollars or 0.0
+        elif _is_tracked_only(r):
+            # Counted separately, never in the record. See _is_tracked_only.
+            # Deliberately BEFORE the win/loss branch and deliberately not
+            # `continue` -- these rows must still reach the CLV block at the
+            # bottom, which is the entire reason they are logged.
+            for agg in buckets:
+                agg["tracked"] += 1
         else:
             if r.status == "won":
                 for agg in buckets:
@@ -710,7 +761,7 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
             net_profit_dollars=round(agg["net"], 2),
             roi=_roi(agg),
             net_units=round(agg["net_units"], 2),
-            wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"],
+            wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"], tracked=agg["tracked"],
             pending=agg["pending"], at_risk_dollars=round(agg["at_risk"], 2),
             avg_clv_pp=_avg_clv(agg), clv_sample=len(agg["clv"]),
         )
@@ -724,7 +775,7 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
             net_profit_dollars=round(agg["net"], 2),
             roi=_roi(agg),
             net_units=round(agg["net_units"], 2),
-            wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"],
+            wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"], tracked=agg["tracked"],
             pending=agg["pending"], at_risk_dollars=round(agg["at_risk"], 2),
             avg_clv_pp=_avg_clv(agg), clv_sample=len(agg["clv"]),
         )
@@ -746,7 +797,7 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
             net_profit_dollars=round(agg["net"], 2),
             roi=_roi(agg),
             net_units=round(agg["net_units"], 2),
-            wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"],
+            wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"], tracked=agg["tracked"],
             pending=agg["pending"], at_risk_dollars=round(agg["at_risk"], 2),
             avg_clv_pp=None, clv_sample=0,   # futures have no meaningful CLV
         )
@@ -757,7 +808,7 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
         net_profit_dollars=round(fut_overall["net"], 2),
         roi=_roi(fut_overall),
         net_units=round(fut_overall["net_units"], 2),
-        wins=fut_overall["wins"], losses=fut_overall["losses"],
+        wins=fut_overall["wins"], losses=fut_overall["losses"], tracked=fut_overall["tracked"],
         pushes=fut_overall["pushes"], voids=fut_overall["voids"],
         pending=fut_overall["pending"], at_risk_dollars=round(fut_overall["at_risk"], 2),
         by_sport=fut_by_sport,
@@ -768,7 +819,7 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
         net_profit_dollars=round(overall["net"], 2),
         roi=_roi(overall),
         net_units=round(overall["net_units"], 2),
-        wins=overall["wins"], losses=overall["losses"], pushes=overall["pushes"], voids=overall["voids"],
+        wins=overall["wins"], losses=overall["losses"], pushes=overall["pushes"], voids=overall["voids"], tracked=overall["tracked"],
         pending=overall["pending"], at_risk_dollars=round(overall["at_risk"], 2),
         avg_clv_pp=_avg_clv(overall), clv_sample=len(overall["clv"]),
         by_sport=by_sport, by_source=by_source, equity_curve=curve,
