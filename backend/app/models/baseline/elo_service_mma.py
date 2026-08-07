@@ -82,9 +82,37 @@ def get_fight_win_prob(fighter_a_id: str, fighter_b_id: str) -> float | None:
     normal "no baseline yet" path, which is the honest answer.
 
     Fighters with 1-2 prior fights are deliberately still priced: their rating
-    is noisy but it is at least DERIVED FROM RESULTS. Where to put a minimum-
-    fights threshold is a calibration question and should be measured, not
-    guessed at here.
+    is noisy but it is at least DERIVED FROM RESULTS. That was a hypothesis when
+    written; it has since been MEASURED and a minimum-fights floor was REJECTED
+    (scripts/check_mma_min_fights_threshold.py, 8,624 walk-forward fights):
+
+        min prior fights   n      Brier (vs .25 uninformed)   accuracy
+        1-2                2215   0.2374  [0.2326, 0.2420]    60.2%  [58.2, 62.3]
+        3-5                1681   0.2365  [0.2307, 0.2425]    59.4%
+        6-10               1329   0.2330  [0.2270, 0.2391]    60.0%
+
+    The 1-2 bucket is among the BEST buckets on accuracy, and its Brier CI sits
+    entirely below the uninformed 0.25. Blocking it would throw away real signal.
+
+    The 0-prior guard above is separately confirmed by the same run. Splitting
+    that bucket in two:
+
+        both unrated (0 v 0)        347   0.2463  [0.2385, 0.2539]   52.9%  [47.7, 58.2]
+        one unrated, other 10+      146   0.2485  [0.2272, 0.2701]   53.4%  [45.9, 61.6]
+
+    Both CIs touch 0.25 and both accuracy CIs span 50% -- no measurable skill,
+    which is exactly what a 1500 stand-in should produce. The second row is the
+    case flagged above as the WORSE one, and the data agrees: the bigger the
+    experience gap, the more confident the number and the less it knows.
+
+    Honest limit: those are skill-vs-uninformed comparisons, not edge-vs-market.
+    ufcstats carries no odds and no free structured historical MMA odds source
+    exists, so the house rule of validating against the market cannot be met
+    here yet -- the app's own tracker held 35 settled MMA moneylines across 3
+    days when this was run. That is also why "one unrated vs a rated opponent"
+    is NOT unblocked despite showing aggregate skill (n=1290, 58.9%): beating a
+    coin flip is not grounds to stake, and the high-gap half of that same group
+    shows nothing at all.
     """
     state = _cache.get("state")
     if state is None:
