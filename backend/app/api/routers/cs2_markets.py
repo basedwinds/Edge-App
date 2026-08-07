@@ -540,9 +540,9 @@ def get_cs2_market_reasoning(
         a_rating = elo_service_cs2.get_team_rating(match.team_a)
         b_rating = elo_service_cs2.get_team_rating(match.team_b)
         if a_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f}"))
+            factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f} ({elo_service_cs2.get_team_games(match.team_a)} maps tracked)"))
         if b_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f}"))
+            factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f} ({elo_service_cs2.get_team_games(match.team_b)} maps tracked)"))
         insight = _game_insight_cs2(match, model_prob, market_prob)
 
     elif m.market_type == "tournament_winner":

@@ -580,9 +580,9 @@ def get_valorant_market_reasoning(
         a_rating = elo_service_valorant.get_team_rating(match.team_a)
         b_rating = elo_service_valorant.get_team_rating(match.team_b)
         if a_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f}"))
+            factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f} ({elo_service_valorant.get_team_games(match.team_a)} maps tracked)"))
         if b_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f}"))
+            factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f} ({elo_service_valorant.get_team_games(match.team_b)} maps tracked)"))
         # The two inputs that can override the team rating; listed always, so a
         # bet that leans on them is auditable rather than looking like it
         # contradicts the Elo line directly above.

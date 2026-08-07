@@ -219,7 +219,30 @@ def get_team_rating(team: str) -> float | None:
     state = _cache.get("state")
     if state is None:
         return None
-    return state.get(resolve_team_name(team))
+    resolved = resolve_team_name(team)
+    if resolved not in state.ratings:
+        # Not "average" -- never seen. Returning BASE_RATING here made those two
+        # indistinguishable in the drawer; see get_team_games.
+        return None
+    return state.get(resolved)
+
+
+def get_team_games(team: str) -> int:
+    """Real observations behind this team's rating, resolved onto the spelling
+    that owns the history (same as get_team_rating).
+
+    Exists so a displayed rating can be read honestly. BASE_RATING is 1500 and
+    the median rated team sits near it, so "1500" is genuinely ambiguous on its
+    own: it can mean "never seen" or "seen plenty and rates average". A user has
+    now asked which it was TWICE -- once for Ground Zero (it was the name-
+    resolution miss recorded above) and once for UNiTY esports, where 1500.35
+    turned out to be a real rating off 36 games at the 67th percentile. Showing
+    the count next to the number ends the ambiguity instead of answering it
+    case by case."""
+    state = _cache.get("state")
+    if state is None:
+        return 0
+    return state.games_played(resolve_team_name(team))
 
 
 MIN_GAMES = 3  # both teams need this many real settled series before a rating counts as trustworthy -- see get_series_distribution's own docstring for the real Brier-by-games-bucket data behind the number
