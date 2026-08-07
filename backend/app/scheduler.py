@@ -182,6 +182,17 @@ def run_catalog_scan():
         scan_catalog(session)
     except Exception:
         log.exception("catalog scan failed")
+    try:
+        # Close flagged entries whose build has since shipped. Runs with the
+        # scan because that is when the catalog picture is freshest, and it is
+        # DB-only (no self-HTTP -- see app/shutdown.py). Without it the backlog
+        # rots: 8 of 48 entries were describing finished work by 2026-08-07.
+        from app.models.catalog_resolution import auto_resolve_flagged
+        summary = auto_resolve_flagged(session)
+        if summary["resolved"]:
+            log.info("catalog auto-resolve closed: %s", "; ".join(summary["resolved"]))
+    except Exception:
+        log.exception("catalog auto-resolve failed")
     finally:
         session.close()
 

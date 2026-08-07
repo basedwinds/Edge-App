@@ -43,18 +43,27 @@ class CatalogEntryOut(BaseModel):
     # concluded and what would unblock it. See CatalogEntry.note.
     note: str | None = None
     disposition: str | None = None
+    # WHAT this entry is waiting on, derived from `note` -- "volume",
+    # "needs-model", "measured-too-weak", "ready", etc. Lets the backlog be read
+    # by blocker instead of as 40 paragraphs: 26 of the current 40 are the same
+    # "waiting on volume" story and collapse into one line. See
+    # catalog_resolution.classify_blocker.
+    blocker: str | None = None
 
     class Config:
         from_attributes = True
 
 
 def _to_out(r: CatalogEntry) -> CatalogEntryOut:
+    from app.models.catalog_resolution import classify_blocker
+
     category, note = classify(r.identifier, r.title, r.sport)
     return CatalogEntryOut(
         id=r.id, platform=r.platform, identifier=r.identifier, title=r.title,
         sport=r.sport, first_seen=r.first_seen.isoformat(),
         category=category, category_note=note, auto_priceable=is_auto_priceable(category),
         note=r.note, disposition=r.disposition,
+        blocker=classify_blocker(r.note),
     )
 
 
