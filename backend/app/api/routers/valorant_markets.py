@@ -519,6 +519,29 @@ def _game_insight_valorant(match: ValorantMatch, market_type: str, model_prob: f
                 f"The ratings favor {stronger} here, sitting above {weaker} ({s_r:.0f} to {w_r:.0f}).",
                 f"Team Elo gives {stronger} the edge, ahead of {weaker} ({s_r:.0f} to {w_r:.0f}).",
             ]))
+    # Say WHY the priced number left the pure team-Elo view, when it did. Without
+    # this the drawer could name the stronger team on Elo and then quote a model
+    # number favouring the other one, with nothing in between -- which is exactly
+    # what a user challenged on Team Secret vs DetonatioN FocusMe.
+    stages = elo_service_valorant.explain_series(match.team_a, match.team_b, match.best_of or 3)
+    if stages is not None and abs(stages["p_final"] - stages["p_elo_only"]) >= 0.05:
+        a, b = match.team_a, match.team_b
+        moved_to = a if stages["p_final"] > stages["p_elo_only"] else b
+        drivers = []
+        if stages["h2h_total"]:
+            w, t = stages["h2h_wins_a"], stages["h2h_total"]
+            wins, losses = (w, t - w) if moved_to == a else (t - w, w)
+            drivers.append(f"their {wins}-{losses} head-to-head record in {t} prior meeting{'s' if t != 1 else ''}")
+        pa, pb = stages["player_strength_a"], stages["player_strength_b"]
+        if pa is not None and pb is not None and (pa - pb > 0) == (moved_to == a):
+            hi, lo = (pa, pb) if moved_to == a else (pb, pa)
+            drivers.append(f"a player-level rating edge ({hi:.0f} to {lo:.0f}) that team Elo hasn't caught up with")
+        if drivers:
+            sentences.append(
+                f"The model still lands on {moved_to} though, moving from {stages['p_elo_only'] * 100:.0f}% to "
+                f"{stages['p_final'] * 100:.0f}% on {' and '.join(drivers)} -- both smaller, less-validated "
+                f"inputs than the team rating, so the disagreement rests on them rather than on the Elo."
+            )
     sentences.append(_edge_sentence(model_prob, market_prob))
     return " ".join(sentences)
 
@@ -560,6 +583,26 @@ def get_valorant_market_reasoning(
             factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f}"))
         if b_rating is not None:
             factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f}"))
+        # The two inputs that can override the team rating; listed always, so a
+        # bet that leans on them is auditable rather than looking like it
+        # contradicts the Elo line directly above.
+        stages = elo_service_valorant.explain_series(match.team_a, match.team_b, match.best_of or 3)
+        if stages is not None:
+            if stages["h2h_total"]:
+                factors.append(ReasoningFactorOut(
+                    label="Head-to-head",
+                    detail=f"{match.team_a} {stages['h2h_wins_a']}-{stages['h2h_total'] - stages['h2h_wins_a']} {match.team_b}",
+                ))
+            if stages["player_strength_a"] is not None and stages["player_strength_b"] is not None:
+                factors.append(ReasoningFactorOut(
+                    label="Player-model rating",
+                    detail=f"{match.team_a} {stages['player_strength_a']:.0f}, {match.team_b} {stages['player_strength_b']:.0f}",
+                ))
+            factors.append(ReasoningFactorOut(
+                label="Series prob: team Elo -> final",
+                detail=(f"{match.team_a} {stages['p_elo_only'] * 100:.0f}% on team Elo alone, "
+                        f"{stages['p_final'] * 100:.0f}% after head-to-head and the player blend"),
+            ))
         insight = _game_insight_valorant(match, m.market_type, model_prob, market_prob)
 
     elif m.market_type == "tournament_winner":

@@ -332,10 +332,57 @@ def get_series_distribution(team_a: str, team_b: str, best_of: int, match_date: 
     # market spelling, so a team whose history lives under another spelling still
     # failed MIN_GAMES and the whole match stayed unpriced -- the redirect had no
     # effect on the one code path that decides whether a market can be priced.
+    stages = _series_stages(team_a, team_b, best_of, match_date)
+    return stages["dist"] if stages else None
+
+
+def _series_stages(team_a: str, team_b: str, best_of: int, match_date: str | None = None) -> dict | None:
+    """The stage-by-stage build of the series number, so the reasoning drawer
+    can report the SAME components the price was actually made of.
+
+    Exists because the drawer used to recite only the two team Elo ratings while
+    the price came from those PLUS head-to-head and the player blend. On
+    Team Secret vs DetonatioN FocusMe that read as a contradiction and a user
+    rightly challenged it: team Elo says Secret is 114 points worse, and the
+    drawer said so, yet the model showed Secret at 51% -- because h2h (Secret
+    3-1) and the player model (Secret's five rated 1566 vs 1483) together moved
+    it +24pp, and neither was mentioned anywhere. Anything the price depends on
+    has to be visible, or the number can't be audited.
+
+    Returning the stages from the pricing function itself is deliberate: a
+    second, parallel re-derivation in the router is exactly how the reasoning
+    and pricing paths drift apart, which this codebase has now been bitten by
+    several times.
+    """
+    state = _cache.get("state")
+    if state is None or not best_of:
+        return None
     team_a = resolve_team_name(team_a)
     team_b = resolve_team_name(team_b)
     if state.games_played(team_a) < MIN_GAMES or state.games_played(team_b) < MIN_GAMES:
         return None
-    dist = _blend_h2h(state, team_a, team_b, predict_series(state, team_a, team_b, best_of))
-    dist = _blend_rest(team_a, team_b, dist, match_date)
-    return _blend_player(state, dist, team_a, team_b)
+    base = predict_series(state, team_a, team_b, best_of)
+    after_h2h = _blend_h2h(state, team_a, team_b, base)
+    after_rest = _blend_rest(team_a, team_b, after_h2h, match_date)
+    final = _blend_player(state, after_rest, team_a, team_b)
+
+    resolver = _cache.get("lineup_resolver")
+    a_players = state.player_strength(resolver.latest_for_team(team_a)) if resolver else None
+    b_players = state.player_strength(resolver.latest_for_team(team_b)) if resolver else None
+    h2h_wins, h2h_total = state.h2h_record(team_a, team_b)
+    return {
+        "dist": final,
+        "p_elo_only": base.prob_series_win_a(),
+        "p_after_h2h": after_h2h.prob_series_win_a(),
+        "p_after_rest": after_rest.prob_series_win_a(),
+        "p_final": final.prob_series_win_a(),
+        "h2h_wins_a": h2h_wins,
+        "h2h_total": h2h_total,
+        "player_strength_a": a_players,
+        "player_strength_b": b_players,
+    }
+
+
+def explain_series(team_a: str, team_b: str, best_of: int, match_date: str | None = None) -> dict | None:
+    """Public accessor for _series_stages -- see its docstring."""
+    return _series_stages(team_a, team_b, best_of, match_date)
