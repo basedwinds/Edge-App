@@ -101,9 +101,25 @@ def get_team_match_count(league: str, team: str) -> int:
     return state.get_count(canonical_team_key(team))
 
 
+def _either_unrated(league: str, home_team: str, away_team: str) -> bool:
+    return (
+        get_team_match_count(league, home_team) == 0
+        or get_team_match_count(league, away_team) == 0
+    )
+
+
 def get_match_distribution(league: str, home_team: str, away_team: str) -> MatchGoalDistribution | None:
     """Home/away goal distribution off CURRENT ratings -- does NOT update
-    anything (live scoring, not training)."""
+    anything (live scoring, not training). None if either team has no prior
+    matches in this league's training data.
+
+    The gate was previously in soccer_markets.py's LIST endpoint only, so the
+    REASONING endpoint would happily build "Model expected goals" text and a
+    narrative insight for a team the model has never seen -- two paths, two
+    different answers for the same fixture. Enforcing it in the service makes
+    that impossible to get wrong from any caller."""
+    if _either_unrated(league, home_team, away_team):
+        return None
     state = _cache["states_by_league"].get(league)
     if state is None:
         return None
@@ -114,7 +130,10 @@ def get_half_distribution(league: str, home_team: str, away_team: str, half: int
     """Same real CURRENT-ratings source as get_match_distribution, derated
     to one half via elo_soccer.py::predict_half (added 2026-07-19 for the
     First Half/Second Half market family -- see that function's own
-    docstring for the real first-half-goal-share constant behind this)."""
+    docstring for the real first-half-goal-share constant behind this).
+    Same unrated-team gate as get_match_distribution."""
+    if _either_unrated(league, home_team, away_team):
+        return None
     state = _cache["states_by_league"].get(league)
     if state is None:
         return None

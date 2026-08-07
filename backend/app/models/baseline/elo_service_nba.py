@@ -46,11 +46,21 @@ def refresh_ratings():
     log.info("nba elo ratings refreshed: %d teams rated", len(state.ratings))
 
 
+def is_rated(team: str) -> bool:
+    """Whether this team string exists in the rating history at all -- see
+    elo_service.py::is_rated for why a 1500 fallback is a fabrication at
+    scoring time rather than a neutral prior."""
+    state = _cache.get("state")
+    return bool(state) and team in state.ratings
+
+
 def get_home_win_prob(
     home_team: str, away_team: str, location: str | None = None, home_rest: int | None = None, away_rest: int | None = None
 ) -> float | None:
     state = _cache.get("state")
     if state is None:
+        return None
+    if not (is_rated(home_team) and is_rated(away_team)):
         return None
     home_r = state.get(home_team)
     away_r = state.get(away_team)
@@ -62,7 +72,7 @@ def get_team_rating(team: str) -> float | None:
     """Raw rating, no home-court term -- distinct from get_home_win_prob's
     matchup function. Mirrors elo_service.py's NFL equivalent."""
     state = _cache.get("state")
-    if state is None:
+    if state is None or not is_rated(team):
         return None
     return state.get(team)
 
@@ -73,6 +83,8 @@ def get_elo_diff(home_team: str, away_team: str, location: str | None = None, ho
     internally)."""
     state = _cache.get("state")
     if state is None:
+        return None
+    if not (is_rated(home_team) and is_rated(away_team)):
         return None
     home_r = state.get(home_team)
     away_r = state.get(away_team)

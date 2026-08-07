@@ -67,9 +67,14 @@ def get_elo_diff(
     quantity game_lines_mlb.py's margin model needs (same quantity
     win_prob's `diff` computes internally) -- mirrors elo_service_nba.py's
     identical helper. 0.0 pitcher adjustment when either starter's stats
-    aren't available yet, same graceful degrade as get_home_win_prob."""
+    aren't available yet, same graceful degrade as get_home_win_prob.
+
+    None if either team is unrated -- guarding here also covers
+    get_home_win_prob, which computes its probability from this diff."""
     state = _cache.get("state")
     if state is None:
+        return None
+    if not (is_rated(home_team) and is_rated(away_team)):
         return None
     home_r = state.get(home_team)
     away_r = state.get(away_team)
@@ -105,8 +110,16 @@ def get_combined_era(season: int, home_pitcher_id=None, away_pitcher_id=None) ->
     return _pitcher_cache.get_combined_era(season, _season_start(season), home_pitcher_id, away_pitcher_id)
 
 
+def is_rated(team: str) -> bool:
+    """Whether this team string exists in the rating history at all -- see
+    elo_service.py::is_rated for why a 1500 fallback is a fabrication at
+    scoring time rather than a neutral prior."""
+    state = _cache.get("state")
+    return bool(state) and team in state.ratings
+
+
 def get_team_rating(team: str) -> float | None:
     state = _cache.get("state")
-    if state is None:
+    if state is None or not is_rated(team):
         return None
     return state.get(team)

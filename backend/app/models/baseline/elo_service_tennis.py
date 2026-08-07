@@ -33,8 +33,8 @@ def refresh_ratings():
 
 def get_player_rating(player_key: str, surface: str | None = None) -> float | None:
     state = _cache.get("state")
-    if state is None:
-        return None
+    if state is None or state.overall_counts.get(player_key, 0) == 0:
+        return None  # pure BASE_RATING, not an estimate -- see get_player_match_count
     return state.blended_rating(player_key, surface)
 
 
@@ -63,9 +63,22 @@ def get_player_match_count(player_key: str) -> int:
 
 def get_match_win_prob(player_a_key: str, player_b_key: str, surface: str | None = None) -> float | None:
     """Player_a's win probability off CURRENT ratings -- does NOT update
-    anything (live scoring, not training)."""
+    anything (live scoring, not training). None if EITHER player has zero
+    prior matches.
+
+    The 0-match cutoff is the validated one documented on
+    get_player_match_count (Brier gap vs market 0.073 at 0 priors, 0.046 at
+    1-2, 0.014 at 50+) -- what is new here is enforcing it INSIDE the service
+    instead of relying on every caller to remember. tennis_markets.py did
+    remember (_either_player_unrated), but bracket_sim_tennis.py called
+    straight through, and its own `if p_a is None: p_a = 0.5` fallback was
+    dead code because this function never returned None once warmed. The
+    identical caller-must-remember split is what let MMA ship a coin-flip
+    price on two debut fighters."""
     state = _cache.get("state")
     if state is None:
+        return None
+    if state.overall_counts.get(player_a_key, 0) == 0 or state.overall_counts.get(player_b_key, 0) == 0:
         return None
     a_r = state.blended_rating(player_a_key, surface)
     b_r = state.blended_rating(player_b_key, surface)

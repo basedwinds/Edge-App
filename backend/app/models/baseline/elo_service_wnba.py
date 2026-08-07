@@ -40,9 +40,19 @@ def refresh_ratings():
     log.info("wnba elo ratings refreshed: %d teams rated", len(state.ratings))
 
 
+def is_rated(team: str) -> bool:
+    """Whether this team string exists in the rating history at all -- see
+    elo_service.py::is_rated for why a 1500 fallback is a fabrication at
+    scoring time rather than a neutral prior."""
+    state = _cache.get("state")
+    return bool(state) and team in state.ratings
+
+
 def get_home_win_prob(home_team: str, away_team: str, location: str | None = None) -> float | None:
     state = _cache.get("state")
     if state is None:
+        return None
+    if not (is_rated(home_team) and is_rated(away_team)):
         return None
     adv = effective_home_court_adv(home_team, location)
     return win_prob(state.get(home_team), state.get(away_team), adv)
@@ -50,6 +60,6 @@ def get_home_win_prob(home_team: str, away_team: str, location: str | None = Non
 
 def get_team_rating(team: str) -> float | None:
     state = _cache.get("state")
-    if state is None:
+    if state is None or not is_rated(team):
         return None
     return state.get(team)

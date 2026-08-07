@@ -160,6 +160,17 @@ def date_from_fight_suffix(suffix: str) -> str | None:
     return f"20{m.group(1)}-{_MONTHS[m.group(2)]:02d}-{int(m.group(3)):02d}"
 
 
+def _iso_day(value) -> str | None:
+    """Normalise an event_date to "YYYY-MM-DD" whether it arrives as a
+    datetime.date, a datetime, or an ISO-ish string. MmaFight-shaped dicts are
+    built by two different callers with two different conventions (poller_mma's
+    _load_fights keeps the raw column object; test/inspection code tends to
+    str() it), so nothing may assume either one."""
+    if value is None:
+        return None
+    return str(value)[:10] or None
+
+
 def date_from_polymarket_slug(slug: str) -> str | None:
     """"ufc-hdasil-lou2-2026-08-08" -> "2026-08-08". Polymarket's UFC event
     slugs end in the card date. Same purpose and same "advisory only" status as
@@ -248,7 +259,15 @@ def match_fight_by_names_only(
             window |= {(base + dt.timedelta(days=d)).isoformat() for d in (-1, 1)}
         except ValueError:
             pass
-        pool = [f for f in all_fights if f.get("event_date") in window]
+        # _iso_day, not a bare ==: poller_mma.py::_load_fights passes event_date
+        # through as a datetime.date OBJECT, which never compares equal to an ISO
+        # string. Comparing directly made the pool come back empty for every
+        # fight, and `if not pool: return None` then turned that into "no match"
+        # -- silently disabling this whole second pass in production while the
+        # unit tests (which built their dicts with str()) kept passing. The
+        # CANFOR fight relinked by hand and then quietly unlinked again on the
+        # next poll, which is the only reason it was caught.
+        pool = [f for f in all_fights if _iso_day(f.get("event_date")) in window]
         if not pool:  # card not in the table at all -> nothing to match against
             return None
     loose = [
