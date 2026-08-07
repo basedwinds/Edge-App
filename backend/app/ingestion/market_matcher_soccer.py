@@ -154,6 +154,55 @@ TEAM_ALIASES: dict[str, str] = {
     # Saint-Germain (aliased above), Kalshi's bare "Paris" is the OTHER real
     # club by elimination, not a duplicate or a guess.
     "paris": "paris fc",
+    # ---- La Liga (SP1), 2026-08-06 -------------------------------------------
+    # DERIVED FROM REAL LISTINGS, not typed from football knowledge -- see
+    # scripts/derive_soccer_team_aliases.py, which is kept so this can be re-run
+    # for any league as new clubs appear.
+    #
+    # The gap these close: Polymarket lists La Liga under full official names
+    # ("RC Celta de Vigo"), Kalshi under football-data.co.uk-style short names
+    # ("Celta Vigo"), and the RATINGS are keyed on football-data's shortest form
+    # ("celta"). With none of it bridged, 8 of 12 SP1 fixtures carrying active
+    # markets had BOTH teams reading as unrated -- the league was effectively
+    # unpriced -- and three fixtures had been ingested TWICE, once per platform's
+    # spelling, because the same failure defeats match_upcoming_soccer_match.
+    #
+    # The evidence: both platforms list the SAME fixtures, so pairing them on
+    # (division, date) via the side that already matches yields the other side's
+    # two names as an OBSERVED pair. "Real Racing Club" is learned to be Kalshi's
+    # "Santander" because its opponent Villarreal CF/Villarreal pins the fixture.
+    #
+    # Why that mattered more than it sounds: a plain token rule proposed
+    # "rcd espanyol de barcelona" -> "barcelona" -- one candidate, unique, and
+    # the WRONG CLUB, because Espanyol's official name contains its city and that
+    # city is a rival club. Fixture alignment overruled it. Uniqueness alone is
+    # not safety when the name contains another club's name.
+    "atletico": "ath madrid",                    # Kalshi's bare "Atletico" -- ambiguous
+                                                 # on its own (Madrid or Bilbao?), pinned by
+                                                 # its Polymarket twin below
+    "club atletico de madrid": "ath madrid",
+    "ca osasuna": "osasuna",
+    "deportivo alaves": "alaves",
+    "elche cf": "elche",
+    "getafe cf": "getafe",
+    "levante ud": "levante",
+    "malaga cf": "malaga",
+    "rayo vallecano de madrid": "vallecano",
+    "rc celta de vigo": "celta",
+    "rc deportivo a coruna": "la coruna",
+    "rcd espanyol de barcelona": "espanol",
+    "real racing club": "santander",
+    "sevilla fc": "sevilla",
+    "villarreal cf": "villarreal",
+    # The one entry NOT from cross-platform alignment: Real Betis is currently
+    # listed by Kalshi only, so it has no twin to learn from. Accepted on four
+    # independent checks instead: team_names_match("Real Betis", "Betis") ALREADY
+    # returns True in shipped code (so this only makes canonical_team_key agree
+    # with a judgement the module was already making), "betis" is the sole rated
+    # SP1 key that is a strict token-subset of {real, betis}, it is in the
+    # 2025-26 club set with 1,061 rated matches, and no other rated key contains
+    # the token "betis".
+    "real betis": "betis",
 }
 
 
