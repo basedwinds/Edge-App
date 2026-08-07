@@ -61,6 +61,26 @@ LEAGUE_WINNER_SERIES = {
     "I1": ("KXSERIEA", "Serie A Champion"),
     "D1": ("KXBUNDESLIGA", "Bundesliga Champion"),
     "F1": ("KXLIGUE1", "Ligue 1 Champion"),
+    # Added 2026-08-07. Both leagues gained GAME markets earlier the same day and
+    # had no futures at all, which made them the two largest leagues in the app
+    # with zero season-long coverage (P1 1,225 game markets, E1 735).
+    #
+    # INERT UNTIL KALSHI OPENS THE EVENTS: both series exist in the catalogue
+    # (KXEFLCHAMPIONSHIP "EFL Championship League Winner", KXLIGAPORTUGAL "Liga
+    # Portugal Winner") but returned 0 open events when this was wired, while
+    # KXPREMIERLEAGUE already had its 2027 event open. Wired now anyway because
+    # the change is one dict entry and the alternative is noticing weeks late --
+    # same posture as the CFB spread ingestion, which sat inert by design until
+    # Kalshi listed it.
+    #
+    # No new model needed: simulate_season is league-agnostic (it builds its own
+    # double round-robin rather than reading a fixture list) and takes its team
+    # list from the ingested markets themselves, so both price the moment rows
+    # exist. The group_label below is OURS, not Kalshi's title -- the router's
+    # _MARKET_TYPE_LABEL_TO_DIVISION is derived from this same dict, so the two
+    # cannot disagree.
+    "E1": ("KXEFLCHAMPIONSHIP", "EFL Championship Winner"),
+    "P1": ("KXLIGAPORTUGAL", "Liga Portugal Champion"),
 }
 # A dedicated "KXEPLTOP4"-style series per league (KXEPLTOP4, KXLALIGATOP4,
 # etc) exists but had ZERO open events on Kalshi as of 2026-07-19 --
