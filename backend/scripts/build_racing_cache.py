@@ -22,7 +22,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx  # noqa: E402
 
-SLUG = {"f1": "f1", "irl": "irl", "nascar": "nascar-premier"}
+# NASCAR's lower national series, added 2026-08-07. Kalshi files Cup, Xfinity
+# and Truck under ONE ticker (KXNASCARRACE) while our ratings were Cup-only, so
+# MIN_FIELD_COVERAGE correctly refused to price ~148 markets every Xfinity
+# weekend. ESPN serves both through the exact traversal Cup already uses -- same
+# scoreboard, same core event, same competitor fields. Verified live before
+# wiring: nascar-secondary is "NASCAR O'Reilly Auto Parts Series" (Xfinity, 33
+# races in 2025) and nascar-truck is "NASCAR Truck Series" (25), and both carry
+# `order` AND `startOrder` for the full field (38/38 on a sampled Xfinity race).
+# `vehicle.manufacturer` is sparse (~6 of 38), which does not matter: NASCAR has
+# only 3 constructors in the Cup data and strength() already handles a missing
+# one.
+SLUG = {
+    "f1": "f1",
+    "irl": "irl",
+    "nascar": "nascar-premier",
+    "nascar_xfinity": "nascar-secondary",
+    "nascar_truck": "nascar-truck",
+}
 UA = {"User-Agent": "Mozilla/5.0"}
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 SEASONS = range(2021, 2027)
