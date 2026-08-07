@@ -116,6 +116,10 @@ class MmaMarketOut(BaseModel):
     side: str | None  # method_of_victory/method_of_finish: "decision"|"kotko"|"submission"|"draw"; rounds: "under"|"over"
     line: float | None  # rounds: the round-count threshold; round_of_victory: the round number
     fight_label: str | None
+    # The CARD this fight is on ("UFC 299: O'Malley vs. Vera 2"). It is MMA's
+    # analogue of a league and the tracker's league column had nothing else to
+    # show, so every MMA row read just "MMA".
+    event_name: str | None = None
     mma_fight_id: str | None
     event_date: str | None
     estimated_start_time: str | None  # full ISO UTC instant, Kalshi's own per-fight estimate -- see poller_mma.py::_infer_start_time_from_kalshi

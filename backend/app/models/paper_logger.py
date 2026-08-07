@@ -130,6 +130,61 @@ MAX_QUOTED_SPREAD = 0.50
 # wrong in either direction. Recommend narrowly; measure broadly.
 PAPER_MIN_EDGE = 0.03
 
+_SOCCER_LEAGUE_LABEL = {
+    "E0": "EPL", "SP1": "La Liga", "I1": "Serie A", "D1": "Bundesliga", "F1": "Ligue 1",
+    "P1": "Liga Portugal", "N1": "Eredivisie", "E1": "EFL Championship",
+    "SP2": "La Liga 2", "I2": "Serie B", "D2": "2. Bundesliga", "F2": "Ligue 2", "MLS": "MLS",
+}
+
+
+def _league_for_row(row: dict, m) -> "str | None":
+    """The competition a paper bet belongs to, for the tracker's league column.
+
+    PlacedBet.league was NEVER SET here, which is why 16,324 of 19,692 bets --
+    every paper bet ever logged -- carry a null league and the tracker falls back
+    to the bare sport. The manual mark-placed path does supply it, so the gap was
+    invisible unless you looked at the paper rows, which are most of them.
+
+    Read off the API row the recommendation already came from, so this costs no
+    extra queries: each sport router already returns the field that identifies
+    the competition. "League" means different things per sport, and the right
+    answer is whatever a human would name:
+
+      soccer   division code -> readable name (E0 -> "EPL")
+      mma      the CARD ("UFC 320"), which is MMA's unit of competition
+      esports  the tournament/event name, NOT the matchup (group_label is often
+               the matchup, which is exactly how match names ended up in the
+               league column)
+      racing   the resolved series ("NASCAR Xfinity Series") -- the only thing
+               distinguishing Cup from Xfinity from Truck, since all three
+               arrive as sport="nascar"
+      tennis   tour + tier ("ATP Challenger"), since a Tour match and an ITF
+               match are otherwise indistinguishable
+
+    Team sports (nfl/nba/mlb/wnba/cfb) return None on purpose: the sport IS the
+    league there, and repeating it in both columns is noise.
+    """
+    sport = (m.sport or "").lower()
+    if sport == "soccer":
+        lg = row.get("league")
+        return _SOCCER_LEAGUE_LABEL.get(lg, lg) if lg else None
+    if sport in ("mma", "cs2", "valorant", "lol"):
+        return row.get("event_name")
+    if sport in ("f1", "irl", "nascar"):
+        return row.get("series_label")
+    if sport == "tennis":
+        tour, tier = (row.get("tour") or "").lower(), row.get("tier")
+        women = tour == "wta"
+        if tier == "itf":
+            return "ITF Women" if women else "ITF Men"
+        if tier == "challenger":
+            return "WTA 125" if women else "ATP Challenger"
+        if tier == "tour":
+            return "WTA Tour" if women else "ATP Tour"
+        return tour.upper() or None
+    return None
+
+
 def _qualifies(row: dict, min_edge: float) -> bool:
     """Log a row if the app would bet it. Two ways in: it already has a sized
     stake (the staked sports' recommend gate), OR it's a tracking-only market
@@ -405,6 +460,7 @@ def run_paper_log():
                     line=m.line,
                     side=m.side,
                     label=m.group_label or f"{m.sport} {m.market_type}",
+                    league=_league_for_row(row, m),
                     stake_pool=row.get("stake_pool") or "weekly",
                     stake_dollars=row.get("suggested_stake_dollars") or 0.0,
                     stake_units=row.get("suggested_stake_units"),

@@ -40,6 +40,8 @@ export interface MmaMarketRow {
   side: "decision" | "kotko" | "submission" | "draw" | "under" | "over" | "other" | null;
   line: number | null; // rounds: round-count threshold; round_of_victory: the round number
   fight_label: string | null;
+  /** The card this fight is on ("UFC 320"). MMA's analogue of a league. */
+  event_name?: string | null;
   mma_fight_id: string | null;
   event_date: string | null; // ISO date
   estimated_start_time: string | null; // full ISO UTC instant, Kalshi's own per-fight occurrence_datetime estimate -- see api/markets.ts::RecommendedBetRow.estimatedStartTime

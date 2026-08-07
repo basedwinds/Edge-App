@@ -324,6 +324,7 @@ def list_mma_markets(session: Session = Depends(get_session)):
                 side=m.side,
                 line=m.line,
                 fight_label=f"{fight.fighter_a_name} vs {fight.fighter_b_name}" if fight else None,
+                event_name=fight.event_name if fight else None,
                 mma_fight_id=m.mma_fight_id,
                 event_date=fight.event_date if fight else None,
                 estimated_start_time=fight.estimated_start_time if fight else None,

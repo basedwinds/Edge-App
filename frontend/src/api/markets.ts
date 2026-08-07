@@ -1694,6 +1694,9 @@ export function buildMmaRecommendedBets(
     candidates.push({
       key: `market-${m.id}`,
       marketId: m.id,
+      // The CARD ("UFC 320") is MMA's league. Without it the tracker showed
+      // only the sport, so every MMA row read "MMA".
+      league: m.event_name ?? null,
       label,
       marketType: m.market_type,
       team: m.team,
