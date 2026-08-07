@@ -123,6 +123,10 @@ export async function fetchCs2Futures(): Promise<FuturesMarketRow[]> {
 export interface RacingMarketRow {
   id: number;
   series: "f1" | "irl" | "nascar";
+  // Human series name. "series" is "nascar" for Cup, Xfinity AND Truck
+  // (Kalshi files all three under one ticker), so this is the only field
+  // that says which one a row is actually from.
+  series_label?: string | null;
   source: "kalshi" | "polymarket";
   race_event_id: number | null;
   event: string | null;
@@ -502,6 +506,16 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "E1": "EFL Championship", "SP2": "La Liga 2", "I2": "Serie B",
   "D2": "2. Bundesliga", "F2": "Ligue 2",
   "MLS": "MLS",
+};
+
+// Fallback series names for racing. Only used when the backend hasn't supplied
+// series_label -- which it does whenever the entrant-list router has resolved a
+// pool, and which is the only way to tell Cup from Xfinity from Truck since all
+// three arrive as series "nascar".
+const RACING_SERIES_LABEL: Record<string, string> = {
+  f1: "Formula 1",
+  irl: "IndyCar",
+  nascar: "NASCAR",
 };
 
 /** ATP/WTA + tier -> one readable label. Tier is what actually matters for
@@ -2060,7 +2074,10 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
       marketId: m.id,
       // Esports rows are unreadable without this: "VALORANT" alone could be a
       // VCT international or a regional Challengers match.
-      league: m.event_name ?? m.group_label ?? null,
+      // group_label was the old fallback and is frequently the MATCH label,
+      // which is why esports rows showed a match name where a league belongs.
+      // Fall back to the title instead -- less specific, never wrong.
+      league: m.event_name ?? null,
       label,
       marketType: m.market_type,
       team: m.team,
@@ -2286,6 +2303,7 @@ export function buildRacingRecommendedBets(
   // same order, which is what keeps alerts identical to this list.
   const ranked: RecommendedBetRow[] = deduped.map((m) => ({
     key: `racing-${m.id}`, marketId: m.id,
+    league: m.series_label ?? RACING_SERIES_LABEL[m.series] ?? null,
     label: `${m.driver} — ${RACING_MT_LABEL[m.market_type] ?? m.market_type}`,
     marketType: m.market_type, team: m.driver, line: m.line, side: null,
     gameday: m.close_time ? m.close_time.slice(0, 10) : null, gametime: null,

@@ -326,7 +326,9 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         if not is_champ and rating_series != series:
             note = f"{note} Rated against the {RATING_SERIES_LABEL.get(rating_series, rating_series)} pool."
         out.append(RacingMarketOut(
-            id=m.id, series=series, source=m.source, race_event_id=m.race_event_id, event=m.source_event_id, market_type=m.market_type,
+            id=m.id, series=series,
+            series_label=RATING_SERIES_LABEL.get(rating_series if not is_champ else series),
+            source=m.source, race_event_id=m.race_event_id, event=m.source_event_id, market_type=m.market_type,
             line=int(m.line) if m.line is not None else None, driver=m.team or "",
             implied_prob=imp, model_prob=mp, model_validated=False, edge=edge,
             volume=None,

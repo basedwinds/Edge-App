@@ -425,6 +425,9 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
                 </td>
                 <td className={`px-3 py-2 text-right font-mono tabular-nums ${b.profit_dollars != null ? pnlClass(b.profit_dollars) : "text-[var(--color-text-dim)]"}`}>
                   {b.profit_dollars != null ? money(b.profit_dollars) : "—"}
+                  {b.profit_dollars != null && b.profit_units != null && (
+                    <span className="ml-1 text-[var(--color-text-muted)]">({units(b.profit_units)})</span>
+                  )}
                 </td>
                 <td className={`px-3 py-2 text-right font-mono tabular-nums ${b.clv_status === "closed" && b.clv_pp != null ? pnlClass(b.clv_pp) : "text-[var(--color-text-dim)]"}`}>
                   {b.clv_status === "closed" && b.clv_pp != null ? `${b.clv_pp >= 0 ? "+" : ""}${b.clv_pp.toFixed(1)}pp` : "—"}
@@ -918,7 +921,7 @@ export function Tracker() {
                     {data.by_source.map((s) => (
                       <tr key={s.source} className="hover:bg-[var(--color-surface)]">
                         <td className="px-3 py-2 font-medium">{SOURCE_LABEL[s.source] ?? s.source}</td>
-                        <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}</td>
+                        <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}<span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span></td>
                         <td className={`px-3 py-2 text-right font-mono tabular-nums ${s.roi !== null ? pnlClass(s.roi) : "text-[var(--color-text-dim)]"}`}>
                           {s.roi !== null ? `${(s.roi * 100).toFixed(1)}%` : "—"}
                         </td>
@@ -981,7 +984,7 @@ export function Tracker() {
                       {data.futures.by_sport.map((s) => (
                         <tr key={s.sport} className="hover:bg-[var(--color-surface)]">
                           <td className="px-3 py-2 font-medium">{SPORT_LABEL[s.sport] ?? s.sport}</td>
-                          <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}</td>
+                          <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}<span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span></td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">{s.wins}–{s.losses}</td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">${s.staked_dollars.toLocaleString()}</td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">{s.pending > 0 ? `${s.pending} · $${s.at_risk_dollars.toLocaleString()}` : "—"}</td>
@@ -1026,6 +1029,7 @@ export function Tracker() {
                     <td className="px-3 py-2 font-medium">{SPORT_LABEL[s.sport] ?? s.sport}</td>
                     <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>
                       {money(s.net_profit_dollars)}
+                      <span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span>
                     </td>
                     <td className={`px-3 py-2 text-right font-mono tabular-nums ${s.roi !== null ? pnlClass(s.roi) : "text-[var(--color-text-dim)]"}`}>
                       {s.roi !== null ? `${(s.roi * 100).toFixed(1)}%` : "—"}

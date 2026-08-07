@@ -42,6 +42,12 @@ class RacingMarketOut(BaseModel):
 
     id: int                # Market row id (for paper-logging / CLV tracking)
     series: str            # f1 | irl | nascar
+    # Human name of the series this row actually belongs to. Needed because
+    # `series` is "nascar" for Cup, Xfinity AND Truck -- Kalshi files all three
+    # under one ticker -- so the UI had nothing to show but the sport, and a
+    # lower-series bet was indistinguishable from a Cup one. Set from the pool
+    # the entrant-list router resolved (racing_markets._resolve_rating_series).
+    series_label: str | None = None
     source: str            # kalshi | polymarket
     race_event_id: int | None = None  # links a placed bet to its RaceEvent (start-time + CLV)
     event: str | None      # Kalshi event ticker (one race)
