@@ -248,14 +248,46 @@ def refresh_racing_grids():
             return
         scoreboards: dict = {}
         grids: dict[str, dict] = {}
+        from app.clients.espn_racing_results import NASCAR_RESULT_SERIES
+
         for rid, series, season, edate in want:
-            key = (series, season)
-            if key not in scoreboards:
-                scoreboards[key] = _event_ids_for_season(series, season)
-            eid = _match_espn_event(scoreboards[key], edate)
-            if not eid:
+            # SAME multi-calendar search the settler uses, and for a sharper
+            # reason. Every NASCAR RaceEvent stores series="nascar", so this
+            # loop used to search only the CUP calendar. For an Xfinity race
+            # that does not merely fail -- it MIS-MATCHES: Cup and Xfinity run
+            # the same venue on adjacent days (Iowa: Xfinity 08-08, Cup 08-09),
+            # well inside the +/-4 day window, so it would fetch the CUP grid
+            # and cache it against the XFINITY event.
+            #
+            # That is worse than finding nothing. The pre-qualifying staking
+            # gate in racing_markets only asks whether a grid EXISTS for the
+            # event, so a wrong-but-present grid would LIFT the gate while
+            # strength() still saw grid=None for every actual entrant (the Cup
+            # driver ids do not appear in an Xfinity field). The race would go
+            # back to being staked on the flat pre-qualifying model -- exactly
+            # what the gate exists to prevent, and silently.
+            #
+            # Nearest date wins across calendars; a genuine tie is skipped
+            # rather than guessed.
+            candidates = NASCAR_RESULT_SERIES if series == "nascar" else (series,)
+            hits = []
+            for cand in candidates:
+                key = (cand, season)
+                if key not in scoreboards:
+                    scoreboards[key] = _event_ids_for_season(cand, season)
+                eid, delta = _match_espn_event_with_delta(scoreboards[key], edate)
+                if eid:
+                    hits.append((delta, cand, eid))
+            if not hits:
                 continue
-            g = fetch_race_grid(series, eid)
+            hits.sort()
+            if len(hits) > 1 and hits[0][0] == hits[1][0]:
+                log.info("racing grids: %s and %s both match %s by %d days -- skipping event %s "
+                         "rather than caching the wrong grid",
+                         hits[0][1], hits[1][1], edate, hits[0][0], rid)
+                continue
+            _delta, cand, eid = hits[0]
+            g = fetch_race_grid(cand, eid)
             if g:
                 grids[str(rid)] = g
         path = Path(settings.data_dir) / RACING_GRID_CACHE
