@@ -31,24 +31,61 @@ K_DRIVER = 24.0
 K_CON = 24.0
 
 SERIES = ("f1", "irl", "nascar", "nascar_xfinity", "nascar_truck")
+# REFIT PER SERIES 2026-08-07 -- scripts/fit_racing_params_per_series.py, a
+# walk-forward over each series' own race history (Cup 157 races, Xfinity 151,
+# Truck 108, IndyCar 73) mirroring production's update rules exactly.
+#
+# grid_pts dropped from 90 to 30 for all three NASCAR series and from 60 to 30
+# for IndyCar. This began as a check on whether Cup's constants suited the newly
+# added lower series; the answer was that 90 did not suit CUP either.
+#
+#     series    grid=0   30(new)   60      90(old)     <- Brier, lower better
+#     cup       .02574   .02510   .02618  .02764
+#     xfinity   .02509   .02387   .02461  .02596
+#     truck     .02695   .02517   .02547  .02643
+#     irl       .03486   .03186   .03199  .03334
+#
+# FOUR INDEPENDENT SERIES land on the same interior optimum -- both flatter (0)
+# and sharper (60/90) score worse in every one. That agreement is the
+# cross-validation a single 24-combination grid search could not provide.
+#
+# CHOSEN ON CALIBRATION, NOT ON WINNER-HIT, and the two disagree for Cup and
+# Truck (Cup ranks winners better at 90: 17.6% vs 14.8%). Calibration governs
+# because this model never has to pick one driver -- it bets wherever model_prob
+# beats the market price, so profit depends on the PROBABILITY being right, and
+# winner-hit is a ranking diagnostic. grid_pts=90 ranked better precisely
+# BECAUSE it was overconfident, and an overconfident model overstates its own
+# favourites, manufacturing fake edges on the drivers it likes most. That is the
+# same failure that flat-staked ~$3,790 across ~200 player-stat futures on
+# implausible +50-60pp edges.
+#
+# The change also moves toward LESS confidence, so the cost of being wrong is
+# fewer and smaller edges rather than more bad bets.
+#
+# F1 IS DELIBERATELY UNCHANGED at 130, but NOT for the reason first given. I
+# justified it as "~24 races, the gap is noise" -- F1 actually has 124 races,
+# comparable to the others, so the sample argument was simply wrong. The real
+# reason is the gap itself: its optimum is 120 at Brier .02806, and 150 scores
+# .02820, so 130 sits between two values a shade apart. Moving it would be
+# chasing a difference smaller than the grid's own resolution.
+#
+# F1 wanting the HIGHEST grid weight while NASCAR and IndyCar want the lowest is
+# a good sign the fit tracks real physics rather than noise: F1 is the series
+# where track position is hardest to overcome.
+#
+# con_w IS DELIBERATELY UNCHANGED everywhere. Across NASCAR the differences sit
+# in the 4th-5th decimal -- three constructors cannot carry much signal -- so
+# refitting it would be chasing noise.
+#
+# The grid is COARSE (steps of 30). The claim is that 90 was too high and 30 is
+# the best of the values tested, not that 30 is optimal to the point. Worth a
+# finer sweep when more races exist; not at this sample size.
 PARAMS = {
     "f1": {"grid_pts": 130.0, "con_w": 0.6},
-    "irl": {"grid_pts": 60.0, "con_w": 0.0},
-    "nascar": {"grid_pts": 90.0, "con_w": 0.5},
-    # NASCAR's lower national series, added 2026-08-07. These INHERIT Cup's
-    # fitted constants rather than carrying their own -- stated plainly because
-    # it is an assumption, not a measurement. The three series run the same car
-    # formula on the same ovals and road courses under the same rules package
-    # family, so Cup's grid weight and constructor weight are a far better prior
-    # than F1's or IndyCar's, but nobody has fitted grid_pts against Xfinity or
-    # Truck results.
-    #
-    # Refit before treating lower-series edges as real. Truck especially: it has
-    # shorter races and heavier attrition than Cup, which is exactly what
-    # grid_pts encodes, so its true value is likely lower (a bad grid slot
-    # matters less when the race is short and chaotic).
-    "nascar_xfinity": {"grid_pts": 90.0, "con_w": 0.5},
-    "nascar_truck": {"grid_pts": 90.0, "con_w": 0.5},
+    "irl": {"grid_pts": 30.0, "con_w": 0.0},
+    "nascar": {"grid_pts": 30.0, "con_w": 0.5},
+    "nascar_xfinity": {"grid_pts": 30.0, "con_w": 0.5},
+    "nascar_truck": {"grid_pts": 30.0, "con_w": 0.5},
 }
 
 _DATA_DIR = Path(__file__).resolve().parents[4] / "data"
