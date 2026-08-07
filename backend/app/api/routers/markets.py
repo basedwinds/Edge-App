@@ -857,7 +857,7 @@ def list_markets(session: Session = Depends(get_session)):
         # Same conditional as _uscale: the price floor is a FUTURES rule, and
         # this one function serves both pools. See FUTURES_MIN_MARKET_PRICE.
         _minpx = FUTURES_MIN_MARKET_PRICE if pool is futures_pool else 0.0
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, min_market_price=_minpx)
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, min_market_price=_minpx, sport="nfl")
         out.append(
             MarketOut(
                 id=m.id,
@@ -1201,7 +1201,7 @@ def list_futures(session: Session = Depends(get_session)):
         # Same conditional as _uscale: the price floor is a FUTURES rule, and
         # this one function serves both pools. See FUTURES_MIN_MARKET_PRICE.
         _minpx = FUTURES_MIN_MARKET_PRICE if pool is futures_pool else 0.0
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, min_market_price=_minpx)
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, min_market_price=_minpx, sport="nfl")
         # Player stat-projection futures: show the model_prob/edge but never
         # stake (see PLAYER_STAT_TRACKING_ONLY). Zero out the stake AFTER it's
         # computed so the edge/model number still surfaces for tracking.

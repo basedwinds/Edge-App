@@ -299,7 +299,7 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         pool = futures_pool if m.market_type in FUTURES_MARKET_TYPES else weekly_pool
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied,
-                                           unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)
+                                           unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, sport="cfb")
 
         out.append(CfbMarketOut(
             id=m.id,
@@ -461,7 +461,7 @@ def list_cfb_futures(session: Session = Depends(get_session)):
         )
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full,
-                                           unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE)
+                                           unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, sport="cfb")
         # A team whose rating was built almost entirely outside the FBS pool is
         # priced on a scale the rest of this market is not on. Shown with its
         # model number so it can be tracked, never staked -- same posture as the

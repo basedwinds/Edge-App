@@ -198,9 +198,14 @@ const columns = [
 ];
 
 export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarketRow[]; onMarkPlaced?: (row: FuturesMarketRow) => void; sport?: SportKey }) {
+  // Sorted by EDGE, best first. This used to lead on market_type then
+  // implied_prob, i.e. "most likely to happen" -- which put the market's own
+  // favourites on top and buried the rows the model actually disagrees with.
+  // Futures capacity is rationed by hand (you mark bets placed), so whatever is
+  // at the top of this table is what gets funded; leading on implied_prob meant
+  // the ordering worked against the point of the page.
   const [sorting, setSorting] = useState<SortingState>([
-    { id: "market_type", desc: false },
-    { id: "implied_prob", desc: true },
+    { id: "edge", desc: true },
   ]);
   const [reasoningRow, setReasoningRow] = useState<FuturesMarketRow | null>(null);
   const [trendRow, setTrendRow] = useState<FuturesMarketRow | null>(null);

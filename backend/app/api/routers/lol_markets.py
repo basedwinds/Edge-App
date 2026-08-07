@@ -222,7 +222,7 @@ def list_lol_futures(session: Session = Depends(get_session)):
             _clv, "lol", m.market_type,
         )
         _stake = size_stake_dollars(_mode, _kelly, _futures_pool, model_prob, implied, _unit, _fm, _ff,
-                                    unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE)
+                                    unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, sport="lol")
         # A decided group is shown for the record, never sized. The prior
         # behaviour dropped these rows entirely, which is why a settled
         # future appeared to vanish rather than read as finished.
@@ -440,7 +440,7 @@ def list_lol_markets(session: Session = Depends(get_session)):
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "lol", m.market_type)
         pool = futures_pool if m.market_type == "tournament_winner" else weekly_pool
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale)
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, sport="lol")
         # Zeroed AFTER sizing so the model number and edge still surface for
         # tracking (see MAP_MARKET_NOTE).
         _map_only = m.market_type == "map_winner"
