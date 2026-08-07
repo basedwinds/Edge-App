@@ -27,13 +27,21 @@ from app.db.database import get_session
 from app.db.models import Market, RaceEvent
 from app.models import racing_sim
 from app.models.baseline import racing_ratings, racing_championship
-from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
+from app.models.staking import (
+    FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, size_stake_dollars,
+)
 
 router = APIRouter(prefix="/racing", tags=["racing"])
 
 log = logging.getLogger("racing_markets")
 
 RACING_SPORTS = ("f1", "irl", "nascar")
+
+# Season-long titles. Everything else racing prices (race_winner, top_n, pole,
+# h2h) settles on the day, so only these two belong to the futures side. Named
+# once here because the same test is made in three places (sizing, the note
+# chosen in _price_event, and the reasoning drawer).
+CHAMPIONSHIP_MARKET_TYPES = ("drivers_champion", "constructors_champion")
 
 # Minimum share of a race's entrants that must carry a rating before the field
 # simulation is trusted to price it. See the gate in _price_event for the real
@@ -202,7 +210,7 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
                 mp = pole_p.get(d)
         imp = implied_by_id.get(m.id)
         edge = round(mp - imp, 4) if (mp is not None and imp is not None) else None
-        is_champ = m.market_type in ("drivers_champion", "constructors_champion")
+        is_champ = m.market_type in CHAMPIONSHIP_MARKET_TYPES
         note = CHAMP_NOTE if is_champ else TRACKING_NOTE
         out.append(RacingMarketOut(
             id=m.id, series=series, source=m.source, race_event_id=m.race_event_id, event=m.source_event_id, market_type=m.market_type,
@@ -258,11 +266,31 @@ def list_racing_markets(session: Session = Depends(get_session)):
             snap = snaps.get(row.id)
             has_traded = has_real_trading(src_by_id.get(row.id), snap.volume if snap else None, snap.last_price if snap else None)
             kelly = kelly_fraction(row.model_prob, row.implied_prob, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None)
-            stake = size_stake_dollars(staking_mode, kelly, pool, row.model_prob, row.implied_prob, unit_dollars, flat_marginal, flat_full)
+            # A season title is a FUTURES position and has to be sized like one.
+            # This whole block used to size every racing row identically and
+            # then hardcode stake_pool="weekly", so a drivers'/constructors'
+            # champion bet -- capital locked for an entire season -- was sized
+            # at the full $10 unit instead of $2.50, skipped
+            # FUTURES_MIN_MARKET_PRICE (so a 2% longshot title could be staked),
+            # counted against the GAME cap, and was invisible to the futures cap
+            # and its per-sport ceiling. Latent rather than live when found on
+            # 2026-08-07 (no championship edge was clearing the gate), but it
+            # would have booked silently the first time one did.
+            _is_champ = row.market_type in CHAMPIONSHIP_MARKET_TYPES
+            stake = size_stake_dollars(
+                staking_mode, kelly, pool, row.model_prob, row.implied_prob,
+                unit_dollars, flat_marginal, flat_full,
+                unit_scale=FUTURES_UNIT_SCALE if _is_champ else 1.0,
+                min_market_price=FUTURES_MIN_MARKET_PRICE if _is_champ else 0.0,
+                sport=series if _is_champ else None,
+                # The "team" for racing is the DRIVER (or constructor on a
+                # constructors' title), which is what row.driver holds.
+                team=row.driver if _is_champ else None,
+            )
             row.kelly_fraction = kelly
             row.suggested_stake_dollars = stake
             row.suggested_stake_units = round(stake / unit_dollars, 2) if (stake is not None and unit_dollars) else None
-            row.stake_pool = "weekly" if stake is not None else None
+            row.stake_pool = (("futures" if _is_champ else "weekly") if stake is not None else None)
             out.append(row)
     out.sort(key=lambda r: (r.series, r.event or "", r.market_type, -(r.model_prob or -1)))
     return out
@@ -291,7 +319,7 @@ def get_racing_market_reasoning(
     label = f"{driver} — {mt_label}"
     edge = round(model_prob - market_prob, 4) if (model_prob is not None and market_prob is not None) else None
 
-    is_champ = m.market_type in ("drivers_champion", "constructors_champion")
+    is_champ = m.market_type in CHAMPIONSHIP_MARKET_TYPES
     factors: list[ReasoningFactorOut] = []
     did = racing_ratings.resolve_driver_id(series, driver)
     st = racing_ratings._series_state(series)

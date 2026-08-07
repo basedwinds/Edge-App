@@ -436,6 +436,7 @@ def size_stake_dollars(
     min_market_price: float = 0.0,
     remaining_capacity: float | None = None,
     sport: str | None = None,
+    team: str | None = None,
 ) -> float | None:
     """The single sizing dispatch every router calls. `kelly_frac is None`
     means the bet didn't qualify (min-edge/has-traded/CLV gate) -> no bet in
@@ -459,6 +460,10 @@ def size_stake_dollars(
     trimmed to fit rather than refused outright, so the last slot in a side is
     usable instead of being wasted.
 
+    `team` -- applies the PER-TEAM futures ceiling too (a backstop against one
+    club/franchise dominating the futures book across several market types).
+    Same optional-by-design contract as `sport`.
+
     `sport` -- applies the PER-SPORT futures ceiling as well as the global one
     (exposure.DEFAULT_FUTURES_PER_SPORT_CAP_FRACTION). Ignored on the game side.
     Optional on purpose: a futures caller that omits it still gets the global
@@ -475,7 +480,7 @@ def size_stake_dollars(
         # This is what makes the cap un-forgettable: no router has to opt in.
         from app.models.exposure import remaining_for_unit_scale
 
-        remaining_capacity = remaining_for_unit_scale(unit_scale, sport)
+        remaining_capacity = remaining_for_unit_scale(unit_scale, sport, team)
     if remaining_capacity is not None and remaining_capacity <= 0:
         return None
     if mode == "flat":

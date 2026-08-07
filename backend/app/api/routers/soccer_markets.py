@@ -681,7 +681,7 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         implied = _implied_prob(snap)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "soccer", m.market_type)
-        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, sport="soccer")
+        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, sport="soccer", team=m.team)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         out.append(
             FuturesMarketOut(
@@ -712,8 +712,77 @@ def list_soccer_futures(session: Session = Depends(get_session)):
                 line_move_pp=None,
             )
         )
+    _collapse_nested_position_futures(out)
     out.sort(key=lambda m: (m.group_label or "", -(m.implied_prob or 0)))
     return out
+
+
+# Finishing-position families whose members are STRICTLY NESTED: winning the
+# league implies top 2, which implies top 4, which implies top 6. Same at the
+# bottom of the table for relegation/bottom-3.
+_NESTED_POSITION_FAMILIES: dict[str, str] = {
+    "league_winner": "finish_top",
+    "top2": "finish_top",
+    "top4": "finish_top",
+    "top6": "finish_top",
+    "relegation": "finish_bottom",
+    "bottom3": "finish_bottom",
+}
+NESTED_POSITION_NOTE = (
+    "Not staked: a wider threshold on the same club is already staked, and these are nested "
+    "(winning the league implies top 2 implies top 4). Backing several is one opinion at three "
+    "prices, not three bets -- if the model is wrong about this club they all lose together."
+)
+
+
+def _collapse_nested_position_futures(rows: list[FuturesMarketOut]) -> None:
+    """Keep ONE staked rung per (source, club, nested family); zero the rest.
+
+    Found on the live board 2026-08-07: Manchester City was 27.3% of the entire
+    soccer futures book across league_winner + top2 + top4 -- one view of City
+    staked three times at three thresholds. This is the same thing
+    LADDER_MARKET_TYPES already collapses for win-total rungs, but it slipped
+    through because these are three different market_type strings rather than
+    three lines of one type.
+
+    DONE HERE, IN THE BACKEND, on purpose. The obvious home looked like
+    frontend markets.ts::ladderCollapseKey, where the other ladder collapses
+    live -- but buildSoccerRecommendedBets keeps its OWN local ladder set and
+    never calls that helper, and it takes only a weekly pool, so soccer futures
+    never pass through it at all. They reach the user solely via the Futures
+    page, which applies no collapse. A rule added there would have been dead
+    code for the exact case it was written for. `suggested_stake_dollars` is the
+    field every view already filters on, so zeroing it here is the one place
+    that cannot be bypassed.
+
+    Rows are kept and priced, only unstaked -- the same "zeroed AFTER sizing so
+    the model number and edge still surface for tracking" posture used for map
+    markets and the CFB weak-pool badge.
+
+    Deliberately NOT applied across market types that merely correlate:
+    division_winner vs conference_champion are genuinely different outcomes
+    (winning one does not imply the other). Those are bounded by the per-team
+    dollar ceiling in models/exposure.py instead.
+    """
+    best: dict[tuple, FuturesMarketOut] = {}
+    for row in rows:
+        family = _NESTED_POSITION_FAMILIES.get(row.market_type)
+        if family is None or row.suggested_stake_dollars is None or not row.team:
+            continue
+        key = (family, row.source, row.team)
+        held = best.get(key)
+        if held is None or (row.edge or 0) > (held.edge or 0):
+            if held is not None:
+                held.suggested_stake_dollars = None
+                held.suggested_stake_units = None
+                held.stake_pool = None
+                held.model_note = NESTED_POSITION_NOTE
+            best[key] = row
+        else:
+            row.suggested_stake_dollars = None
+            row.suggested_stake_units = None
+            row.stake_pool = None
+            row.model_note = NESTED_POSITION_NOTE
 
 
 @router.get("/markets/{market_id}/reasoning", response_model=ReasoningOut)

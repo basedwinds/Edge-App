@@ -75,12 +75,32 @@ DEFAULT_GAME_EXPOSURE_CAP_PCT = 0.40
 # only ever holds what it actually earns, this just bounds the top.
 DEFAULT_FUTURES_PER_SPORT_CAP_FRACTION = 0.25
 
+# No single TEAM may hold more than this share of the futures side. A BACKSTOP,
+# deliberately loose: 0.075 is $30 at the current bankroll, which is 12 futures
+# bets at the flat $2.50 rung, so it bites only on genuine runaway
+# concentration and not on ordinary multi-market exposure to a team.
+#
+# It is a backstop because it is the WRONG instrument for the more common
+# problem. Measured on the live board 2026-08-07: Milwaukee was 35.3% of the
+# MLB futures book across best_record / conference_champion x2 /
+# division_winner x2 / win_total, and Manchester City 27.3% of soccer's across
+# league_winner + top2 + top4. Those two cases are not the same. Milwaukee's
+# six are genuinely different outcomes that happen to share one team-strength
+# input -- real, if correlated, diversification, and a dollar ceiling is the
+# right tool. City's three are STRICTLY NESTED (league_winner implies top2
+# implies top4): one view staked three times at different thresholds, which no
+# dollar cap makes sensible. That case is fixed where it belongs, in the
+# recommended-bet ladder collapse, by treating nested threshold families as the
+# ladders they are.
+DEFAULT_FUTURES_PER_TEAM_CAP_FRACTION = 0.075
+
 FUTURES_POOL = "futures"
 GAME_POOL = "weekly"  # the stored enum value for per-game bets; see staking.py
 # Snapshot key holding the per-sport futures ceiling itself, so a sport with NO
 # outstanding futures (which therefore has no "futures:<sport>" row of its own)
 # still resolves to the ceiling rather than to "uncapped".
 FUTURES_PER_SPORT_CEILING_KEY = "futures:_ceiling"
+FUTURES_PER_TEAM_CEILING_KEY = "futures:_team_ceiling"
 
 
 def outstanding_real_exposure(session: Session) -> dict[str, float]:
@@ -143,6 +163,24 @@ def outstanding_futures_by_sport(session: Session) -> dict[str, float]:
     return {(sport or "unknown"): float(total or 0.0) for sport, total in rows}
 
 
+def outstanding_futures_by_team(session: Session) -> dict[tuple[str, str], float]:
+    """{(sport, team): dollars} of REAL, still-pending placed FUTURES bets.
+
+    Keyed by (sport, team) rather than team alone because team codes collide
+    across sports -- "ATL" is both the Braves and the Falcons, and both are on
+    the live board.
+    """
+    rows = (
+        session.query(PlacedBet.sport, PlacedBet.team,
+                      func.coalesce(func.sum(PlacedBet.stake_dollars), 0.0))
+        .filter(PlacedBet.paper == False, PlacedBet.status == "pending",  # noqa: E712
+                PlacedBet.stake_pool == FUTURES_POOL, PlacedBet.team.isnot(None))
+        .group_by(PlacedBet.sport, PlacedBet.team)
+        .all()
+    )
+    return {((sport or "unknown"), team): float(total or 0.0) for sport, team, total in rows}
+
+
 def capacity(session: Session, bankroll: float, futures_pct: float, game_pct: float) -> dict[str, float]:
     """{pool: dollars still available} -- never negative.
 
@@ -164,6 +202,13 @@ def capacity(session: Session, bankroll: float, futures_pct: float, game_pct: fl
     caps[FUTURES_PER_SPORT_CEILING_KEY] = per_sport_ceiling
     for sport, spent in outstanding_futures_by_sport(session).items():
         caps[f"{FUTURES_POOL}:{sport}"] = max(0.0, per_sport_ceiling - spent)
+    # Per-TEAM headroom, keyed "futures:<sport>:<team>". Scoped by sport as well
+    # as team so two different sports' "ATL" (the Braves and the Falcons, both
+    # live on the board right now) do not share one ceiling.
+    per_team_ceiling = bankroll * futures_pct * DEFAULT_FUTURES_PER_TEAM_CAP_FRACTION
+    caps[FUTURES_PER_TEAM_CEILING_KEY] = per_team_ceiling
+    for (sport, team), spent in outstanding_futures_by_team(session).items():
+        caps[f"{FUTURES_POOL}:{sport}:{team}"] = max(0.0, per_team_ceiling - spent)
     return caps
 
 
@@ -196,7 +241,8 @@ def refresh_snapshot(session: Session, bankroll: float, futures_pct: float, game
     return caps
 
 
-def remaining_for_unit_scale(unit_scale: float, sport: str | None = None) -> float | None:
+def remaining_for_unit_scale(unit_scale: float, sport: str | None = None,
+                             team: str | None = None) -> float | None:
     """Capacity for the side this bet belongs to, or None if no snapshot has
     been taken yet (= uncapped, the safe default).
 
@@ -222,11 +268,19 @@ def remaining_for_unit_scale(unit_scale: float, sport: str | None = None) -> flo
         overall = _snapshot.get(FUTURES_POOL)
         if sport is None:
             return overall
-        ceiling = _snapshot.get(FUTURES_PER_SPORT_CEILING_KEY)
-        per_sport = _snapshot.get(f"{FUTURES_POOL}:{sport}", ceiling)
-        if per_sport is None:
-            return overall
-        return per_sport if overall is None else min(overall, per_sport)
+        # Tightest of the three ceilings binds: global futures, this sport's
+        # share, and this team's share. Each is skipped when its key is absent
+        # so a partially-populated snapshot never reads as "no room".
+        limits = [x for x in (overall,) if x is not None]
+        per_sport = _snapshot.get(f"{FUTURES_POOL}:{sport}", _snapshot.get(FUTURES_PER_SPORT_CEILING_KEY))
+        if per_sport is not None:
+            limits.append(per_sport)
+        if team:
+            per_team = _snapshot.get(f"{FUTURES_POOL}:{sport}:{team}",
+                                     _snapshot.get(FUTURES_PER_TEAM_CEILING_KEY))
+            if per_team is not None:
+                limits.append(per_team)
+        return min(limits) if limits else None
 
 
 CAP_REACHED_REASON = (
