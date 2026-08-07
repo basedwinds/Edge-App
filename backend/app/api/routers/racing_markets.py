@@ -91,11 +91,11 @@ def _h2h_model_prob(series: str, label: str, cc: dict) -> "float | None":
     """'A vs B' -> P(A finishes ahead of B) from race (driver+constructor)
     strength, closed-form Bradley-Terry. Surname-only labels resolve via
     resolve_driver_loose; an unknown driver leaves it unpriced."""
-    parts = re.split(r"\s+vs\.?\s+", label, flags=re.IGNORECASE)
-    if len(parts) != 2:
+    pair = racing_ratings.split_h2h_label(label)
+    if pair is None:
         return None
-    a = racing_ratings.resolve_driver_loose(series, parts[0].strip())
-    b = racing_ratings.resolve_driver_loose(series, parts[1].strip())
+    a = racing_ratings.resolve_driver_loose(series, pair[0])
+    b = racing_ratings.resolve_driver_loose(series, pair[1])
     if not a or not b:
         return None
     sa = racing_ratings.strength(series, a, cc.get(a), None)

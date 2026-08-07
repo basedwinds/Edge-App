@@ -690,11 +690,13 @@ def _grade_racing_h2h(bet: PlacedBet, event) -> "str | None":
     r = _race_result(event)
     if not r or not r.get("order"):
         return None
-    parts = re.split(r"\s+vs\.?\s+", bet.team or "", flags=re.IGNORECASE)
-    if len(parts) != 2:
+    from app.models.baseline import racing_ratings as _rr
+
+    pair = _rr.split_h2h_label(bet.team or "")
+    if pair is None:
         return None
-    a = _race_did(bet.sport, parts[0].strip())
-    b = _race_did(bet.sport, parts[1].strip())
+    a = _race_did(bet.sport, pair[0])
+    b = _race_did(bet.sport, pair[1])
     order = r["order"]
     if not a or not b or a not in order or b not in order:
         return None

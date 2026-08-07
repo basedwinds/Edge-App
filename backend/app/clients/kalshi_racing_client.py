@@ -53,6 +53,24 @@ SERIES_MAP = {
     "KXNASCARTOP5": ("nascar", "top_n", 5),
     "KXNASCARTOP10": ("nascar", "top_n", 10),
     "KXNASCARTOP20": ("nascar", "top_n", 20),
+    # HEAD-TO-HEAD, added 2026-08-07. The h2h MODEL already existed and already
+    # priced Polymarket's version (_h2h_model_prob, closed-form Bradley-Terry
+    # over driver+constructor strength); only Kalshi's side was missing.
+    #
+    # The note below used to say this needed "a small dedicated parse" because
+    # "driver = yes_sub_title, which for a h2h market is ONE driver". That was
+    # an ASSUMPTION made while both series had 0 open markets and the shape
+    # could not be inspected -- and it is wrong. Checked against 60 settled
+    # KXNASCARH2H markets: yes_sub_title carries the FULL pairing ("Todd
+    # Gilliland beats Ryan Blaney"), which is exactly the label the pricer and
+    # grader want. No dedicated parse; only the word "beats" had to join " vs "
+    # in racing_ratings.split_h2h_label.
+    #
+    # Kalshi lists BOTH directions as separate markets (…-TOGI and …-RYBL under
+    # one event), which is correct and wanted: they are two distinct bets, and
+    # the first name in the label is always the side being backed.
+    "KXF1H2H": ("f1", "h2h", None),
+    "KXNASCARH2H": ("nascar", "h2h", None),
 }
 
 # DELIBERATELY NOT POLLED, and why -- so this list isn't "rediscovered" as a gap
@@ -69,17 +87,10 @@ SERIES_MAP = {
 #   KXNASCARFASTLAP (73), KXNASCARTOPTEAM (33): no model for either.
 #   KXMOTOGPTEAMS (11): MotoGP is a whole sport we don't cover.
 #   KXF1ACTION / KXF1CHINA / KXF1NEXTTEAM / KXF1RETIRE: novelty markets.
-#   KXF1H2H / KXNASCARH2H: the h2h MODEL exists and is already ingested from
-#     Polymarket, so this looks like a one-line coverage add. It is not, and the
-#     reason is worth recording. Both the pricer (_h2h_model_prob) and the
-#     grader (_grade_racing_h2h) read the pairing out of a single `team` string
-#     shaped "Driver A vs Driver B" -- Polymarket's client builds that from the
-#     event's two OUTCOMES. This module sets driver = yes_sub_title, which for a
-#     h2h market is ONE driver, so a SERIES_MAP entry would produce rows that
-#     nothing can price or settle. Needs a small dedicated parse, and both series
-#     had 0 open markets on 2026-08-07 (F1 summer break), so the real ticker
-#     shape could not be inspected to write it. Do it when a race weekend has
-#     them listed rather than guessing the format.
+#   (KXF1H2H / KXNASCARH2H moved INTO SERIES_MAP on 2026-08-07 -- the reason
+#     they were excluded, that yes_sub_title holds one driver rather than the
+#     pairing, was an assumption made when neither series had an open market to
+#     inspect, and checking 60 settled ones disproved it.)
 #   KXF1RACESPRINT / KXF1SPRINTPOLE / KXF1SPRINTTOP5 / KXF1SPRINTTOP10 /
 #     KXF1SPRINTTOPCONSTRUCTOR: sprint weekends (~6 a season) are genuinely
 #     uncovered. Held back deliberately: settlement needs a sprint-specific

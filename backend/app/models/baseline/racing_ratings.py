@@ -233,6 +233,30 @@ def resolve_driver_loose(series: str, name: str) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def split_h2h_label(label: str) -> "tuple[str, str] | None":
+    """('Ryan Blaney', 'Todd Gilliland') from a head-to-head label, else None.
+
+    ONE implementation because there were about to be two. The pricer
+    (racing_markets._h2h_model_prob) and the settlement grader
+    (bet_settlement._grade_racing_h2h) each split this label independently, and
+    both only knew " vs ". Adding Kalshi's wording to one and not the other
+    would have priced a market nothing could grade -- the same silent shape as
+    the Xfinity settlement gap found earlier today.
+
+    TWO WORDINGS, both real. Polymarket writes "A vs B"; Kalshi writes
+    "A beats B" in yes_sub_title (verified against 60 settled KXNASCARH2H
+    markets, e.g. "Todd Gilliland beats Ryan Blaney"). Order is meaningful in
+    both: the FIRST name is the side the bet backs.
+    """
+    import re
+
+    parts = re.split(r"\s+(?:vs\.?|beats)\s+", label or "", flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return None
+    a, b = parts[0].strip(), parts[1].strip()
+    return (a, b) if a and b else None
+
+
 def strength(series: str, driver_id: str, constructor: str | None, grid: int | None) -> float | None:
     """Validated blend for the sim. grid=None -> no grid term (pre-qualifying).
     None if the driver has no rating (unknown entrant -> left unpriced)."""
