@@ -239,10 +239,27 @@ def start():
     # app (measured while building it: 8 of 12 sports logged nothing). Daily
     # rather than 5-minutely because it re-prices all 12 sports, and a
     # once-a-day pre-event view is what the scoring needs anyway.
+    # HOURLY, not daily. REAL BUG this fixes (2026-08-08): at 24h this fired
+    # once, in the evening, so any event starting earlier in the day was
+    # captured AFTER it had already happened. For racing especially -- cards run
+    # afternoons -- that meant the "forward" log was recording post-hoc prices
+    # for most of the field, which is worthless for the one question it exists
+    # to answer. A user's 5pm NASCAR picks had no pre-race record at all.
+    #
+    # refresh() is idempotent (upsert per market_id) and already refuses to
+    # touch a row once event_start <= now, so extra runs cannot overwrite a
+    # pre-event view with a mid-event one -- they can only ADD coverage for
+    # events that had not started yet. That freeze is what makes a higher
+    # frequency safe rather than merely tolerable.
+    #
+    # Hourly bounds worst-case staleness at 1h before kickoff instead of 24h.
+    # Cost is bounded too: it reads each sport's market route, and those are
+    # served from the 180s response cache that the cache warmer keeps hot, so
+    # this is mostly cache reads rather than 12 full recomputes.
     scheduler.add_job(
         observation_logger.refresh,
         "interval",
-        hours=24,
+        hours=1,
         id="observation_log",
         next_run_time=base_tick + timedelta(minutes=20),
         replace_existing=True,
