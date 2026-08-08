@@ -67,6 +67,7 @@ def _is_exhibition(match: dict) -> bool:
 def refresh_ratings():
     matches = [m for m in soccer_data.load_matches() if not _is_exhibition(m)]
     states: dict[str, SoccerRatingState] = {}
+    last_played: dict[tuple[str, str], str] = {}
     for m in matches:
         league = m["league"]
         state = states.setdefault(league, SoccerRatingState())
@@ -75,10 +76,71 @@ def refresh_ratings():
             "home_team": canonical_team_key(m["home_team"]),
             "away_team": canonical_team_key(m["away_team"]),
         }
+        date = m.get("match_date") or ""
+        for side in ("home_team", "away_team"):
+            key = (league, canonical_match[side])
+            if date > last_played.get(key, ""):
+                last_played[key] = date
         predict_and_update(state, canonical_match)
     _cache["states_by_league"] = states
+    _cache["last_played"] = last_played
     for league, state in states.items():
         log.info("soccer ratings refreshed for %s: %d teams rated", league, len(state.attack_log))
+
+
+# How far back a club's last appearance in a division may be before its rating
+# there is treated as dead rather than current.
+#
+# REAL BUG THIS EXISTS FOR (found 2026-08-08 while smoke-testing cup pricing).
+# This cache holds three decades of football-data, so a club keeps a rating in
+# every division it has EVER played in, forever. Two things went wrong at once:
+#
+#   * STALE: L.R. Vicenza was priced off its Serie A rating. Vicenza's last
+#     Serie A match in this cache is 2001-06-17. It is a Serie C club now.
+#     Catania (last I1 2014) and Ravenna (last I2 2008) were the same.
+#   * WRONG TIER: a club with ratings in BOTH divisions was resolved by dict
+#     iteration order, not by which one it currently plays in. Monza has a 2025
+#     Serie A rating AND a 2026 Serie B rating, and got priced as a Serie A
+#     club against a Serie B opponent -- overrating it, and mislabelling the tie
+#     as cross-tier when it was not. Padova had a 1996 Serie A rating competing
+#     with its current Serie B one.
+#
+# Neither failure is visible in the output: both produce a confident, plausible
+# probability for the wrong club strength. Two seasons is the tolerance because
+# a club can miss a single season through relegation and return; three years
+# means it is gone.
+MAX_RATING_STALENESS_DAYS = 730
+
+
+def last_played(league: str, team: str) -> str | None:
+    return (_cache.get("last_played") or {}).get((league, canonical_team_key(team)))
+
+
+def resolve_league(team: str, as_of: str | None = None,
+                   max_staleness_days: int = MAX_RATING_STALENESS_DAYS) -> str | None:
+    """Which division a club should currently be rated in -- the one it played
+    in MOST RECENTLY, and only if that was recent enough to still describe the
+    club. Returns None rather than a stale or arbitrary answer.
+
+    This lives in the service, not in each caller, because the callers are
+    exactly where it was already got wrong once.
+    """
+    import datetime
+
+    key = canonical_team_key(team)
+    played = _cache.get("last_played") or {}
+    hits = [(date, league) for (league, t), date in played.items() if t == key and date]
+    if not hits:
+        return None
+    date, league = max(hits)
+    try:
+        seen = datetime.date.fromisoformat(date)
+    except ValueError:
+        return None
+    ref = datetime.date.fromisoformat(as_of) if as_of else datetime.date.today()
+    if (ref - seen).days > max_staleness_days:
+        return None  # club has left every division this app models
+    return league
 
 
 def get_team_match_count(league: str, team: str) -> int:

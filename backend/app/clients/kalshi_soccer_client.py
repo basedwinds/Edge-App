@@ -973,3 +973,161 @@ def get_top_n_markets() -> list[dict]:
                     "status": m.get("status"),
                 })
     return rows
+
+
+# ---------------------------------------------------------------------------
+# DOMESTIC CUPS (2026-08-08). Different from every league series above in one
+# structural way: a cup tie can pair clubs from DIFFERENT divisions, so the
+# division is a property of each CLUB, not of the series. Callers get the
+# competition and both tiers, and resolve each club's own division themselves
+# (app/models/cup_match.py does the rating conversion).
+#
+# SCOPE IS DELIBERATE. check_cup_market_coverage.py measured the live inventory:
+# Coppa Italia is 81% priceable because it starts at Serie A/B, but the DFB
+# Pokal is only 40% and structurally capped -- its first round pairs Bundesliga
+# clubs with REGIONALLIGA sides (Grossaspach, Hemelingen, Viktoria Cologne,
+# Luneburg, St. Tonis), third and fourth tier, two divisions below anything
+# football-data publishes for Germany. Both are ingested anyway: unrateable ties
+# simply price as None, exactly like an unrated league club, and the Pokal's
+# coverage improves in later rounds as the minnows are eliminated. Ingesting
+# them cannot produce a bad bet -- the rating gate decides that.
+CUP_COMPETITIONS = {
+    "coppa_italia": {
+        "name": "Coppa Italia",
+        "top": "I1", "second": "I2",
+        "moneyline": "KXCOPPAITALIAGAME",
+        "advance": "KXCOPPAITALIAADVANCE",
+        "total": "KXCOPPAITALIATOTAL",
+    },
+    "dfb_pokal": {
+        "name": "DFB Pokal",
+        "top": "D1", "second": "D2",
+        "moneyline": "KXDFBPOKALGAME",
+        "advance": "KXDFBPOKALADVANCE",
+        "total": None,  # no live total series for the Pokal as of 2026-08-08
+    },
+}
+
+# An ADVANCE event titles itself "Home vs Away: X To Advance", so the pair has
+# to be taken from the segment BEFORE the colon -- running _parse_title_teams
+# over the whole string would try to read the outcome clause as a team name.
+_ADVANCE_SUB_RE = re.compile(r"^(.+?)\s+advances$", re.IGNORECASE)
+_REG_TIME_PREFIX = re.compile(r"^Reg(?:ulation)?\s*Time:\s*", re.IGNORECASE)
+
+
+def _cup_pair(title: str) -> tuple[str, str] | None:
+    return _parse_title_teams(title.split(":", 1)[0].strip())
+
+
+def _cup_row(cup: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **extra) -> dict:
+    row = {
+        "event_ticker": ev["event_ticker"],
+        "event_title": ev.get("title", ""),
+        "competition": cup,
+        "competition_name": cfg["name"],
+        "top_division": cfg["top"],
+        "second_division": cfg["second"],
+        "home_team": home,
+        "away_team": away,
+        "ticker": m["ticker"],
+        "estimated_start_time": m.get("occurrence_datetime"),
+        "yes_bid": _to_float(m.get("yes_bid_dollars")),
+        "yes_ask": _to_float(m.get("yes_ask_dollars")),
+        "last_price": _to_float(m.get("last_price_dollars")),
+        "volume": _to_float(m.get("volume_fp")),
+        "status": m.get("status"),
+    }
+    row.update(extra)
+    return row
+
+
+def get_cup_moneyline_markets() -> list[dict]:
+    """3-way cup moneyline -- home/away/draw at 90 minutes, same shape as
+    get_moneyline_markets. NOTE these settle on REGULATION only; who actually
+    progresses is the separate ADVANCE series below."""
+    rows = []
+    for cup, cfg in CUP_COMPETITIONS.items():
+        for ev in get_open_events(cfg["moneyline"]):
+            teams = _cup_pair(ev.get("title", ""))
+            if teams is None:
+                continue
+            home, away = teams
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                # Cup moneyline labels carry a "Reg Time: " prefix that league
+                # ones do not ("Reg Time: Tie", "Reg Time: L.R. Vicenza"). That
+                # prefix is also the settlement rule stated out loud: these
+                # resolve on 90 minutes, NOT on who eventually progressed.
+                label = _REG_TIME_PREFIX.sub("", (m.get("yes_sub_title") or "").strip())
+                if label.lower() == "tie":
+                    side, team = "draw", None
+                elif label == home:
+                    side, team = "home", home
+                elif label == away:
+                    side, team = "away", away
+                else:
+                    continue  # never guess which club an unrecognised label means
+                rows.append(_cup_row(cup, cfg, ev, m, home, away, side=side, team=team))
+    return rows
+
+
+def get_cup_advance_markets() -> list[dict]:
+    """Who progresses -- INCLUDING extra time and penalties, which is why this
+    cannot be priced off the moneyline (see cup_match._advance_probs)."""
+    rows = []
+    for cup, cfg in CUP_COMPETITIONS.items():
+        for ev in get_open_events(cfg["advance"]):
+            teams = _cup_pair(ev.get("title", ""))
+            if teams is None:
+                continue
+            home, away = teams
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                sub = _ADVANCE_SUB_RE.match((m.get("yes_sub_title") or "").strip())
+                if not sub:
+                    continue
+                who = sub.group(1).strip()
+                if who == home:
+                    side, team = "home", home
+                elif who == away:
+                    side, team = "away", away
+                else:
+                    continue
+                rows.append(_cup_row(cup, cfg, ev, m, home, away, side=side, team=team))
+    return rows
+
+
+def get_cup_total_markets() -> list[dict]:
+    """Over/under total goals in REGULATION. The pair is not in the market
+    title here ("Will over 4.5 goals be scored?"), so it comes from the EVENT
+    title, and the line comes from yes_sub_title."""
+    rows = []
+    for cup, cfg in CUP_COMPETITIONS.items():
+        series = cfg.get("total")
+        if not series:
+            continue
+        for ev in get_open_events(series):
+            teams = _cup_pair(ev.get("title", ""))
+            if teams is None:
+                continue
+            home, away = teams
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                mt = re.search(r"([\d.]+)", m.get("yes_sub_title") or m.get("title") or "")
+                if not mt:
+                    continue
+                try:
+                    line = float(mt.group(1))
+                except ValueError:
+                    continue
+                rows.append(_cup_row(cup, cfg, ev, m, home, away, line=line, side="over"))
+    return rows

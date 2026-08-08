@@ -166,9 +166,21 @@ def predict_cup_tie(
     no bridge and carries no caution.
     """
     second_tier_teams = second_tier_teams or set()
-    cross_tier = bool(second_tier_teams)
+    both_second = {home_team, away_team} <= second_tier_teams
+    cross_tier = bool(second_tier_teams) and not both_second
 
-    if cross_tier:
+    if both_second:
+        # BOTH clubs are second-tier -- a Serie B v Serie B cup tie. There is no
+        # cross-tier gap to bridge here, and bridging would be actively wrong:
+        # it would discount both sides onto a scale neither of them is on, and
+        # raise a caution the tie does not warrant. Price it in its own division,
+        # exactly like a league match. (Caught 2026-08-08 when Monza v Avellino
+        # priced as cross-tier after the staleness gate correctly moved Monza
+        # from its stale Serie A rating to its current Serie B one.)
+        if second_state is None:
+            return None
+        state = second_state
+    elif cross_tier:
         if second_state is None:
             return None
         state = bridged_state(top_state, second_state, second_tier_teams)
