@@ -88,6 +88,56 @@ PARAMS = {
     "nascar_truck": {"grid_pts": 30.0, "con_w": 0.5},
 }
 
+# SEPARATE parameters for FINISHING-ORDER markets (top_n). PARAMS above is fitted
+# on P(1st) and stays the authority for race_winner / pole / h2h.
+#
+# Two parameters cannot be shared across both questions, and F1 is the proof:
+# grid_pts=130 is correct for winners (pole dominates F1) and badly wrong for
+# finishing order -- every reduced value fails a win-Brier constraint while every
+# value that fits winners leaves top-N miles out. Nothing was broken; the model
+# was fitted on one question and then asked a different one.
+#
+# Fitted jointly with attrition (scripts/fit_racing_joint_holdout.py) on top-N
+# calibration, and validated on races the fit never saw:
+#
+#   series    shipped -> fitted        hold-out calibration error
+#   nascar    130/0.00 -> 10.0/0.20     0.1180 -> 0.0277
+#   f1        130/0.00 -> 40.0/0.10     0.0883 -> 0.0280
+#   irl        30/0.00 -> 30.0/0.30     0.0806 -> 0.0192
+#   xfinity    30/0.00 -> 20.0/0.30     0.0904 -> 0.0179
+#   truck      30/0.00 -> 20.0/0.20     0.0995 -> 0.0321
+#
+# Attrition settles at a believable 0.10-0.30 here. Fitted ALONE against
+# calibration it ran to 0.55 -- more than half the field breaking every race --
+# because with grid_pts pinned to a winner-fitted value it was the only knob able
+# to move the tail. Freeing both is what made the pair identifiable.
+#
+# Track-specific versions of these were built and REJECTED on hold-out
+# (scripts/fit_racing_track_aware.py): the per-track physical spread is real
+# (12x in grid predictiveness, 6x in attrition) but unusable at ~3.7 races per
+# track. Do not re-attempt without materially more races per track.
+TOPN_PARAMS = {
+    "f1": {"grid_pts": 40.0, "attrition": 0.10},
+    "irl": {"grid_pts": 30.0, "attrition": 0.30},
+    "nascar": {"grid_pts": 10.0, "attrition": 0.20},
+    "nascar_xfinity": {"grid_pts": 20.0, "attrition": 0.30},
+    "nascar_truck": {"grid_pts": 20.0, "attrition": 0.20},
+}
+
+
+def topn_strength(series: str, driver_id: str, constructor: str | None, grid: int | None):
+    """strength() but with the FINISHING-ORDER grid weight. con_w is shared --
+    only the grid term and attrition were refit."""
+    p = TOPN_PARAMS.get(series)
+    if p is None:
+        return strength(series, driver_id, constructor, grid)
+    base = strength(series, driver_id, constructor, None)
+    if base is None:
+        return None
+    if grid is not None:
+        base -= p["grid_pts"] * (grid - 1)
+    return base
+
 _DATA_DIR = Path(__file__).resolve().parents[4] / "data"
 
 # {series: {"drivers": {id: rating}, "constructors": {name: rating},

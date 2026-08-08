@@ -74,10 +74,15 @@ PRE_QUALIFYING_NOTE = (
     "grid is the single biggest input -- without it the model is flat, which reads as an edge on "
     "every backmarker. It sharpens and becomes stakeable once the grid is published."
 )
-# Flip to True to stake top_n again -- see the block in the pricing loop for the
-# full measurement and the exact condition for lifting it (fitted attrition
-# wired in, and check_racing_topn_calibration confirming the bands).
-STAKE_TOP_N = False
+# LIFTED 2026-08-07, on the condition this comment set when the gate went in:
+# finishing-order parameters fitted and wired (racing_ratings.TOPN_PARAMS), and
+# the calibration measured on races the fit never saw. Hold-out result with the
+# exact shipped values -- nascar 0.1180 -> 0.0277 (-77%), f1 0.0883 -> 0.0280
+# (-68%), irl 0.0806 -> 0.0192 (-76%), xfinity 0.0904 -> 0.0179 (-80%), truck
+# 0.0995 -> 0.0321 (-68%).
+#
+# Set back to False to hold top_n off staking again; it is the single switch.
+STAKE_TOP_N = True
 TOPN_CALIBRATION_NOTE = (
     "Priced and tracked, not staked: measured walk-forward over 142 real races, the finishing-order "
     "model is badly calibrated away from the front. It said 92% for a top-20 finish that really "
@@ -277,8 +282,27 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         log.info("racing: skipping %s field pricing -- only %d of %d entrants rated (%.0f%%)",
                  rating_series, len(race_field), len(entrants), coverage * 100)
         sim = {}
+        topn_sim = {}
     else:
         sim = racing_sim.simulate(race_field, trials=20000) if len(race_field) >= 2 else {}
+        # SECOND simulation for finishing-order markets only. top_n needs its own
+        # grid weight and an attrition rate -- see racing_ratings.TOPN_PARAMS for
+        # the fitted values and why the two questions cannot share parameters.
+        # race_winner/pole/h2h keep reading `sim` above, which is unchanged.
+        topn_field = {}
+        for mk in markets:
+            if mk.market_type not in ("race_winner", "top_n"):
+                continue
+            dd = racing_ratings.resolve_driver_id(rating_series, mk.team or "")
+            if dd and dd not in topn_field:
+                g = (grid_by_event or {}).get(mk.race_event_id) or {}
+                s = racing_ratings.topn_strength(rating_series, dd, cc.get(dd), g.get(dd))
+                if s is not None:
+                    topn_field[dd] = s
+        topn_sim = (racing_sim.simulate(
+            topn_field, trials=20000,
+            attrition=racing_ratings.TOPN_PARAMS.get(rating_series, {}).get("attrition", 0.0),
+        ) if len(topn_field) >= 2 else {})
 
     # Pole probabilities over the FULL current grid (series-wide, from ratings),
     # not just this event's pole markets -- so constructor-pole markets, which
@@ -332,7 +356,8 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
             if m.market_type == "race_winner":
                 mp = sim.get(d, {}).get("win")
             elif m.market_type == "top_n" and m.line is not None:
-                mp = sim.get(d, {}).get(f"top{int(m.line)}")
+                # Finishing-order sim, not the winner sim -- see TOPN_PARAMS.
+                mp = topn_sim.get(d, {}).get(f"top{int(m.line)}")
             elif m.market_type == "pole":
                 mp = pole_p.get(d)
         imp = implied_by_id.get(m.id)
