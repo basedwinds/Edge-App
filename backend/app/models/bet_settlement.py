@@ -52,6 +52,9 @@ AUTO_SETTLE_MARKET_TYPES = {
     # espn_soccer_client.fetch_half_time_goals); second half is FT minus HT.
     "first_half_winner", "second_half_winner", "first_half_total", "second_half_total",
     "first_half_team_total", "second_half_team_total", "second_half_btts",
+    # cup + UEFA regulation markets (2026-08-08). cup_advance is deliberately
+    # NOT here -- see _SOCCER_GRADERS for why it must stay unsettleable.
+    "cup_moneyline_3way", "uefa_moneyline_3way", "cup_total", "uefa_total",
     # mma
     "distance", "rounds", "method_of_finish",
     # esports (cs2/valorant/lol). map_winner grades for LoL + Valorant -- see
@@ -734,6 +737,20 @@ _GRADERS = {  # score-based game sports (nfl/nba/wnba/mlb/cfb)
 # to register under that name later.
 _SOCCER_GRADERS = {
     "moneyline_3way": _grade_soccer_moneyline_3way,
+    # DOMESTIC CUPS + UEFA (2026-08-08). These settle on REGULATION -- Kalshi
+    # labels them "Reg Time" -- so the existing 90-minute graders are the right
+    # ones and are reused rather than re-derived.
+    #
+    # WHY cup_advance IS ABSENT AND MUST STAY ABSENT: it settles on who
+    # PROGRESSED, which includes extra time and penalties, and for UEFA
+    # knockouts an aggregate over two legs. No column here carries that. An
+    # unrecognised soccer market_type resolves to None and the bet stays
+    # pending (see this table's own comment above), which is the correct
+    # outcome -- pending is recoverable, a wrongly-graded bet is not.
+    "cup_moneyline_3way": _grade_soccer_moneyline_3way,
+    "uefa_moneyline_3way": _grade_soccer_moneyline_3way,
+    "cup_total": _grade_soccer_total,
+    "uefa_total": _grade_soccer_total,
     "game_spread": _grade_soccer_spread,
     "game_total": _grade_soccer_total,
     "team_total": _grade_soccer_team_total,
