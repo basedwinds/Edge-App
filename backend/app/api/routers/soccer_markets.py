@@ -305,7 +305,8 @@ def _half_btts_model_prob(market: Market, match: SoccerMatch | None, half: int) 
 # time, by elo_service_soccer.resolve_league -- which is also what prevents a
 # club being priced off a division it left years ago.
 CUP_TIERS = {"COPPA_ITALIA": ("I1", "I2"), "DFB_POKAL": ("D1", "D2"),
-             "EFL_CUP": ("E0", "E1")}
+             "EFL_CUP": ("E0", "E1"),
+             "FRA_SUPER_CUP": ("F1", "F2")}
 CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total"}
 
 # TRACKING-ONLY: priced and shown, never staked.
@@ -347,7 +348,7 @@ def _cup_prediction(match: SoccerMatch | None):
 # cups are: a UEFA tie is not a fixture in either club's league. Unlike a cup
 # there is no top/second tier -- each club's league is resolved individually and
 # the fitted strength offsets do the conversion (models/uefa_match.py).
-UEFA_LEAGUES = {"UCL", "UEL", "UECL"}
+UEFA_LEAGUES = {"UCL", "UEL", "UECL", "UEFA_SUPER_CUP"}
 UEFA_MARKET_TYPES = {"uefa_moneyline_3way", "uefa_total"}
 
 

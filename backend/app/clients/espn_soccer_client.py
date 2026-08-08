@@ -97,6 +97,8 @@ LEAGUE_CODES = {
     # it the Carabao Cup. Verified live before wiring -- eng.efl_cup and
     # eng.carabao_cup both 404.
     "EFL_CUP": "eng.league_cup",
+    "UEFA_SUPER_CUP": "uefa.super_cup",
+    "FRA_SUPER_CUP": "fra.super_cup",
     "UCL": "uefa.champions",
     "UEL": "uefa.europa",
     "UECL": "uefa.europa.conf",

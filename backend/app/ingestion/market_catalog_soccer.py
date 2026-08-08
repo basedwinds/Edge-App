@@ -716,7 +716,8 @@ def upsert_kalshi_soccer_top_n_market(session: Session, row: dict) -> Market:
 # elo_service_soccer.resolve_league (which is also what stops a club being
 # priced off a rating from a division it left years ago).
 CUP_LEAGUE_CODES = {"coppa_italia": "COPPA_ITALIA", "dfb_pokal": "DFB_POKAL",
-                    "efl_cup": "EFL_CUP"}
+                    "efl_cup": "EFL_CUP",
+                    "fra_super_cup": "FRA_SUPER_CUP"}
 
 
 def cup_league_code(competition: str) -> str:
@@ -773,7 +774,7 @@ def upsert_kalshi_cup_total_market(session: Session, row: dict, soccer_match_id:
 # so a UEFA tie can never leak into a domestic league's round-robin. Each club's
 # real league is resolved at pricing time and converted with the fitted strength
 # offsets (models/uefa_match.py).
-UEFA_LEAGUE_CODES = {"ucl": "UCL", "uel": "UEL", "uecl": "UECL"}
+UEFA_LEAGUE_CODES = {"ucl": "UCL", "uel": "UEL", "uecl": "UECL", "usc": "UEFA_SUPER_CUP"}
 
 
 def uefa_league_code(competition: str) -> str:

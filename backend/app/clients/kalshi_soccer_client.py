@@ -1092,6 +1092,19 @@ CUP_COMPETITIONS = {
         "advance": "KXEFLCUPADVANCE",
         "total": "KXEFLCUPTOTAL",
     },
+    # Trophee des Champions. A DOMESTIC cup, not a cross-country one: it is the
+    # Ligue 1 champion against the Coupe de France winner, so both sides are
+    # normally F1 and cup_match takes its same-tier branch -- no bridge applied
+    # and no caution raised, which is correct. F2 is still named as the second
+    # tier for the rare year a Ligue 2 side wins the Coupe de France.
+    # Live 2026-08-16: Lens vs PSG, both F1. Single match, no advance/total.
+    "fra_super_cup": {
+        "name": "France Super Cup",
+        "top": "F1", "second": "F2",
+        "moneyline": "KXFRASUPERCUPGAME",
+        "advance": None,
+        "total": None,
+    },
 }
 
 # An ADVANCE event titles itself "Home vs Away: X To Advance", so the pair has
@@ -1165,6 +1178,8 @@ def get_cup_advance_markets() -> list[dict]:
     cannot be priced off the moneyline (see cup_match._advance_probs)."""
     rows = []
     for cup, cfg in CUP_COMPETITIONS.items():
+        if not cfg.get("advance"):
+            continue  # single-match cups (super cups) have no advance series
         for ev in get_open_events(cfg["advance"]):
             teams = _cup_pair(ev.get("title", ""))
             if teams is None:
@@ -1239,6 +1254,11 @@ UEFA_COMPETITIONS = {
     "ucl": {"name": "Champions League", "moneyline": "KXUCLGAME", "total": "KXUCLTOTAL"},
     "uel": {"name": "Europa League", "moneyline": "KXUELGAME", "total": "KXUELTOTAL"},
     "uecl": {"name": "Conference League", "moneyline": "KXUECLGAME", "total": "KXUECLTOTAL"},
+    # UEFA Super Cup -- one match a year, UCL winner vs UEL winner, so it is
+    # cross-COUNTRY by construction and the fitted league offsets are exactly
+    # the right tool. Live 2026-08-12: PSG (F1) vs Aston Villa (E0), both rated.
+    # No total series is listed for it.
+    "usc": {"name": "UEFA Super Cup", "moneyline": "KXUEFASCGAME", "total": None},
 }
 
 
