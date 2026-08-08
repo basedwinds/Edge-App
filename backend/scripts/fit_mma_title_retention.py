@@ -36,6 +36,49 @@ sanity checks below then FAILED, so nothing is priced off this yet.
     Heavyweight           Jon Jones          0.88     50%          78.6%     n/a
     Flyweight             Joshua Van         1.62     50%          63.9%       -
 
+SECOND PASS, same day: both failures were addressed and the model IMPROVED but
+is STILL NOT SAFE TO PRICE. Recorded here so the next attempt starts from the
+evidence rather than repeating it.
+
+FIX A (hazard) WORKED. Replacing the flat base rate with an EMPIRICAL GAP
+distribution -- for each division, the historical spacing between consecutive
+title fights, asked "would a gap this long have completed by Dec 31 given how
+long it has already been?" -- makes the hazard schedule-aware without needing an
+announcement feed. Lightweight drops to 18% (Gaethje fought 55 days ago, so
+another fight before December is unlikely), which is exactly the behaviour the
+flat rate could not produce.
+
+FIX B (fighter quality) WORKED. Retention was a DIVISION average, so every
+champion was equally likely to lose. Using elo_service_mma for the champion
+against the average of that division's recent title fighters makes it specific:
+Makhachev 0.724, Ulberg 0.579, Strickland 0.550, Gaethje 0.448.
+
+COMBINED as P(hold) = 1 - P(fight) * (1 - P(champ beats field), the model now
+tracks the market on half the board:
+
+    division           model   market
+    Welterweight       0.724   0.71    <- close
+    Middleweight       0.653   0.63    <- close
+    Lightweight        0.901   0.805
+    Light Heavyweight  0.609   0.89    <- 28pp off, unexplained
+
+STILL BLOCKING:
+  * LIGHT HEAVYWEIGHT is 28pp below the market and nothing here explains it. LHW
+    has the division's worst historical retention (47%) and a short gap since
+    Ulberg's win, so the model sees a likely fight he is only 58% to win. The
+    market disagrees strongly. Until that is understood it is a model error, not
+    an edge -- and it would be the single largest recommendation on the board.
+  * NO WALK-FORWARD VALIDATION. Matching 2 of 4 champions by eye is not
+    validation, it is four data points. The archive supports scoring this against
+    real past year-ends, and that is the gate.
+
+FIX C (champion identity) DID NOT WORK. Including interim titles was tried and
+returns Ciryl Gane for Heavyweight, not Tom Aspinall -- so neither the real-only
+nor the interim-inclusive heuristic finds the actual champion. Vacations and
+promotions are not recoverable from fight results. A staleness guard (refuse a
+division whose last title fight is over ~12 months old) is the honest fallback,
+which would exclude Heavyweight entirely rather than price it wrong.
+
 FAILURE 1 -- A STALE CHAMPION. Four of the identified champions match the
 market's favourite exactly (Ulberg, Gaethje, Makhachev, Strickland), which is
 strong evidence the heuristic works in the normal case. HEAVYWEIGHT DOES NOT:
