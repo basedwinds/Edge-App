@@ -1,4 +1,11 @@
-"""Do STYLE-MATCHUP features beat pure Elo at picking MMA winners?
+"""Do STYLE-MATCHUP features beat PRODUCTION Elo at picking MMA winners?
+
+Re-run 2026-08-07 against the real baseline. The first pass used a hand-rolled
+K=24 Elo with no age term and scored 55.9% -- low for MMA, which meant the style
+gain could have been compensating for a weak baseline rather than adding real
+information. This uses elo_mma's shipped K=72 and its validated age adjustment.
+The age DIFFERENCE was also removed from the style block, since production now
+handles age structurally and leaving it in would double-count.
 
 WHY. elo_mma.py states plainly that the moneyline model carries "zero fighter-
 feature data (styles, physical...)". Meanwhile mma_features.build_feature_rows()
@@ -50,8 +57,14 @@ from sklearn.preprocessing import StandardScaler
 from app.ingestion import ufc_data
 from app.models import mma_features
 
-BASE = 1500.0
-K = 24.0
+from app.models.baseline import elo_mma
+
+# PRODUCTION parameters, not a hand-rolled stand-in. The first run used K=24 and
+# no age term, which made the baseline weak enough that part of the style gain
+# could have been style patching a soft Elo rather than adding information.
+BASE = elo_mma.BASE_RATING
+K = elo_mma.K                      # 72.0 -- three times the first attempt
+USE_AGE_ADJ = True                 # production's validated structural correction
 TRAIN_FRAC = 0.70
 
 
@@ -79,6 +92,9 @@ def main() -> None:
         if w not in (a, b):
             continue
         ra, rb = elo.get(a, BASE), elo.get(b, BASE)
+        if USE_AGE_ADJ:
+            ra += elo_mma.age_adjustment_elo(r.get("a_age"))
+            rb += elo_mma.age_adjustment_elo(r.get("b_age"))
 
         # Style block, antisymmetric in (a,b) -- see module docstring.
         ko = _f(r["a_ko_win_rate"]) * _f(r["b_ko_loss_rate"]) - _f(r["b_ko_win_rate"]) * _f(r["a_ko_loss_rate"])
@@ -89,7 +105,6 @@ def main() -> None:
             _f(r["a_avg_sig_str_landed"]) - _f(r["b_avg_sig_str_landed"]),
             _f(r["a_finish_rate"]) - _f(r["b_finish_rate"]),
             _f(r["a_reach_in"], 71.0) - _f(r["b_reach_in"], 71.0),
-            _f(r["a_age"], 30.0) - _f(r["b_age"], 30.0),
             _f(r["a_experience"]) - _f(r["b_experience"]),
             _f(r["a_win_rate"]) - _f(r["b_win_rate"]),
         ]
