@@ -7,6 +7,7 @@ from app import sports as app_sports
 from app.db.database import SessionLocal
 from app.ingestion.catalog_scan import scan_catalog
 from app.ingestion.poller import run_full_refresh
+from app.ingestion.poller_soccer import refresh_mls_playoff_sim
 from app.models import observation_logger
 from app.ingestion.poller_nba import run_full_refresh_nba
 from app.ingestion.poller_mlb import run_full_refresh_mlb
@@ -218,6 +219,18 @@ def start():
     # add the job paused (per its add_job docstring), which means it never fires again on
     # its own. The explicit startup thread in main.py handles the first run of each poller.
     base_tick = datetime.now() + timedelta(minutes=5)
+    # MLS playoff Monte Carlo -- 10,000 sims + ~10 live ESPN calls per run, for
+    # a league table that moves at most daily. Its own slow job precisely
+    # because it used to ride the 5-minute soccer refresh and pinned a core.
+    scheduler.add_job(
+        refresh_mls_playoff_sim,
+        "interval",
+        hours=6,
+        id="mls_playoff_sim",
+        next_run_time=base_tick + timedelta(minutes=3),
+        replace_existing=True,
+    )
+
     # Forward observation log: one row per priced market, scored later on
     # OUTCOMES. Runs ONCE DAILY and deliberately LAST in the tick order --
     # it reads every sport's market route, and those routes price off model

@@ -7,12 +7,13 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.response_cache import ResponseCacheMiddleware
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.routers import backtests, catalog, cfb_markets, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
 from app.config import settings
 from app.db.database import get_session, init_db
-from app.db.models import Setting
+from app.db.models import MarketSnapshot, Setting
 from app.ingestion.poller import LAST_REFRESH_KEY, run_full_refresh
 from app.ingestion.poller_nba import run_full_refresh_nba
 from app import sports as app_sports
@@ -156,8 +157,42 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health(session: Session = Depends(get_session)):
+        """`last_refresh_at` is the age of the NEWEST market snapshot -- i.e. how
+        fresh the data actually is, which is the only thing the TopBar's
+        "Updated Xm ago" is asking.
+
+        IT USED TO BE the LAST_REFRESH_KEY stamp, and that was measuring the
+        wrong thing. That key is written by exactly one place: the very end of
+        the NFL poller's run_full_refresh. With 12 sports now sharing one SQLite
+        write lock, NFL's later steps routinely sit waiting behind ~23,000
+        snapshot writes from the other eleven, so the stamp would not advance for
+        the better part of an hour while every sport's data was seconds old.
+        Observed 2026-08-08: stamp 49 minutes stale, newest snapshot 6 SECONDS
+        old, and a backend restart "didn't help" because nothing was broken.
+
+        An indicator that reports a stall when there is none is worse than no
+        indicator -- it sends you restarting a healthy service. The NFL pipeline
+        stamp is still returned as `last_full_refresh_at` for diagnostics, where
+        a genuine stall is worth seeing.
+        """
+        # Read the newest row by PRIMARY KEY, not max(ts). market_snapshots is
+        # append-only and 21.25M rows deep, and `ts` has no standalone index
+        # (only a composite market_id+ts), so max(ts) measured 1.77s -- which
+        # this endpoint would pay every 30 seconds per open tab, while competing
+        # for the same SQLite write lock the pollers need. Ordering by the
+        # autoincrement id is an index seek and is effectively free; rows are
+        # inserted in time order, so the newest id IS the newest snapshot.
+        newest_row = (session.query(MarketSnapshot.ts)
+                      .order_by(MarketSnapshot.id.desc()).limit(1).scalar())
+        newest = newest_row
         row = session.get(Setting, LAST_REFRESH_KEY)
-        return {"status": "ok", "data_dir": settings.data_dir, "last_refresh_at": row.value if row else None}
+        return {
+            "status": "ok",
+            "data_dir": settings.data_dir,
+            # naive UTC ISO, no offset -- the frontend appends "Z" itself
+            "last_refresh_at": newest.isoformat() if newest else (row.value if row else None),
+            "last_full_refresh_at": row.value if row else None,
+        }
 
     @app.post("/markets/refresh")
     def trigger_refresh():

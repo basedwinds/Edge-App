@@ -519,8 +519,11 @@ def refresh_mls_playoff_sim():
 
 
 def run_full_refresh_soccer():
+    # refresh_mls_playoff_sim is deliberately NOT here. It runs 10,000
+    # simulations and ~10 live ESPN calls, and this function fires every 5
+    # minutes -- see MIN_REFRESH_INTERVAL in playoff_sim_service_mls for the
+    # incident that caused. It has its own slow scheduler job.
     refresh_soccer_ratings()
-    refresh_mls_playoff_sim()
     refresh_kalshi_soccer_markets()
     refresh_polymarket_soccer_markets()
     refresh_kalshi_soccer_futures()

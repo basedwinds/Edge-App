@@ -37,6 +37,20 @@ log = logging.getLogger("playoff_sim_service_mls")
 
 N_SIMULATIONS = 10_000
 
+# Minimum gap between real recomputes. THIS EXISTS BECAUSE OF A REAL INCIDENT
+# (2026-08-08): refresh() was called from run_full_refresh_soccer, which runs
+# every 5 MINUTES. Each call is 10,000 simulations over ~242 remaining fixtures
+# plus 10 live ESPN requests -- so the backend sat at 100% of a core
+# continuously and hammered a free API ~2,880 times a day, for a league table
+# that changes at most once a day. The app showed "updated 42m ago" and never
+# advanced because the worker never got out of this loop.
+#
+# The scheduler now runs this on its own slow job, but the TTL is the actual
+# guarantee: any caller, at any frequency, gets a cached result until the data
+# could plausibly have changed. Cheap to keep, and it makes the cost of a
+# mistaken call site zero instead of catastrophic.
+MIN_REFRESH_INTERVAL = datetime.timedelta(hours=6)
+
 # Aggregate missing-fixture budget before this refuses to price at all.
 #
 # The check is (games played + fixtures still scheduled) == 34 for every team.
@@ -53,7 +67,11 @@ MAX_TOTAL_FIXTURE_SHORTFALL = 10
 _cache: dict = {"result": None, "refreshed_at": None, "table": None}
 
 
-def refresh():
+def refresh(force: bool = False):
+    last = _cache.get("refreshed_at")
+    if not force and last and (datetime.datetime.utcnow() - last) < MIN_REFRESH_INTERVAL:
+        return  # still fresh -- see MIN_REFRESH_INTERVAL
+
     state = elo_service_soccer.get_rating_state("MLS")
     if state is None:
         log.info("mls playoff sim: no MLS rating state yet, skipping")
