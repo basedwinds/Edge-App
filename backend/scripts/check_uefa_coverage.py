@@ -23,37 +23,51 @@ production sees, which is the "rating-lookup vs pricing-path" gap this project
 has already hit three times), and count matches by how many sides are rated.
 
 ===========================================================================
-RESULT, 2026-08-08 (2025-26 season, 531 matches). VERDICT: cross-country UCL/UEL
-is NOT worth building yet. Domestic cups are the cheap win instead.
+RESULT, 2026-08-08 (2025-26 season, 531 matches). Measured TWICE -- the first
+number was wrong and the correction matters, so both are kept.
 
-    Champions League   189 matches   both rated 27.0%   one side 52.4%
-    Europa League      189 matches   both rated 13.8%   one side 43.9%
-    Conference League  153 matches   both rated  6.5%   one side 35.3%
-    ALL                531 matches   both rated 16.4%
+FIRST RUN, before aliases existed -- A FLOOR, NOT A CEILING:
 
-16.4% IS A FLOOR, NOT THE CEILING -- read it with the caveat below. The most
+    Champions League   both rated 27.0%
+    Europa League      both rated 13.8%
+    Conference League  both rated  6.5%
+    ALL                both rated 16.4%
+
+That 16.4% was contaminated by naming, and its own output gave it away: the most
 frequent "unrated" clubs were Paris Saint-Germain, Bayer Leverkusen,
-Internazionale, Borussia Dortmund, VfB Stuttgart and SC Freiburg, all in leagues
-this app already rates. ESPN just spells them differently than football-data
-does. So part of that gap is naming, not coverage. check_uefa_name_gap.py splits
-the two: of 652 club-appearances, ~406 are name-mismatch candidates and ~246
-(38%) are clubs from leagues never rated at all -- Norway, Greece, Ukraine,
-Croatia, Czechia, Scotland, Turkey, Belgium, Austria, Switzerland, Israel and
-20+ more. No normalization reaches those; only adding their leagues would.
+Internazionale, Borussia Dortmund, VfB Stuttgart and SC Freiburg -- all in
+leagues this app already rates, just spelled differently by ESPN than by
+football-data. Reporting 16.4% as the ceiling would have killed a viable project
+on a measurement artifact.
 
-AND THE NAMING HALF CANNOT BE AUTOMATED. The fuzzy matcher in
-check_uefa_name_gap.py produced Rangers -> Angers at 0.92 (Scotland -> France)
-and Celtic -> Celta at 0.73 (Scotland -> Spain), alongside correct hits like
-AS Monaco -> monaco at 1.00. Those are the same failure mode as the
-Espanyol -> Barcelona match this project already caught, and either one would
-stake real money on the wrong club. A safe map has to be derived from
-date-aligned fixtures (same date, same opponent), not string similarity.
+SECOND RUN, with the 255 fixture-verified aliases from
+build_soccer_espn_aliases.py -- THE REAL CEILING:
 
-So UCL/UEL needs THREE things, not one: a verified ESPN<->football-data alias
-map, a country-strength normalization fitted on UEFA results, and new leagues
-for 38% of the field that no model can reach. The realistic ceiling after all
-that is well under half of UEFA matches, concentrated in the Champions League
-and near-zero in the Conference League.
+    Champions League   189 matches   both rated 105 = 55.6%   (was 27.0%)
+    Europa League      189 matches   both rated  52 = 27.5%   (was 13.8%)
+    Conference League  153 matches   both rated  10 =  6.5%   (unchanged)
+    ALL                531 matches   both rated 167 = 31.5%   (was 16.4%)
+
+So the Champions League is genuinely viable -- 105 priceable matches a season,
+not 51 -- while the Conference League is hopeless and did not move at all,
+because its field really is from uncovered leagues rather than misspelled ones.
+
+THE ALIAS MAP COULD NOT HAVE BEEN FUZZY-MATCHED. check_uefa_name_gap.py's
+similarity scorer produced Rangers -> Angers at 0.92 (Scotland -> France) and
+Celtic -> Celta at 0.73 (Scotland -> Spain) beside correct hits like
+AS Monaco -> monaco at 1.00; no threshold separates them. Same failure mode as
+the Espanyol -> Barcelona match this project already caught, and either would
+stake money on the wrong club. build_soccer_espn_aliases.py joins on FIXTURES
+(date + exact score) instead, which is why Rangers and Celtic are correctly
+absent from its output -- Scotland has no fixtures in this app to join against.
+
+WHAT STILL BLOCKS THE REMAINING 68%: clubs from leagues never rated -- Bodo/Glimt
+(Norway), Galatasaray and Fenerbahce (Turkey), Panathinaikos/Olympiacos/PAOK
+(Greece), Racing Genk and Club Brugge (Belgium), Shakhtar (Ukraine), Ferencvaros
+(Hungary), Dinamo Zagreb (Croatia), Ludogorets (Bulgaria), Red Star (Serbia),
+Midtjylland (Denmark), Qarabag (Azerbaijan). NOTE: football-data.co.uk already
+publishes Belgium (B1), Turkey (T1) and Greece (G1) -- adding those three would
+pick up seven of the fifteen most frequent blockers from a source already wired.
 
 THE CHEAPER ADJACENT WIN. Kalshi lists Coppa Italia and DFB Pokal (GAME,
 ADVANCE, TOTAL series, all live as of 2026-08-07). Those are Serie A vs Serie B
@@ -70,6 +84,7 @@ from __future__ import annotations
 
 import collections
 import datetime
+import json
 import sys
 from pathlib import Path
 
@@ -93,6 +108,9 @@ END = datetime.date(2026, 6, 1)
 # same reason every other client in this app goes through it.
 
 
+ALIAS_PATH = Path(__file__).resolve().parents[2] / "data" / "soccer_espn_aliases.json"
+
+
 def main() -> None:
     # WARM FIRST. A cold service reports every team unrated and would produce a
     # confident, completely wrong 0% answer.
@@ -102,7 +120,29 @@ def main() -> None:
     for lg, st in states.items():
         for team in st.attack_log:
             rated.setdefault(team, lg)
-    print(f"{len(rated)} rated teams across {len(states)} leagues: {sorted(states)}\n")
+    print(f"{len(rated)} rated teams across {len(states)} leagues: {sorted(states)}")
+
+    # The FIXTURE-DERIVED alias map (build_soccer_espn_aliases.py). Without it
+    # this audit reports a floor, not a ceiling -- ESPN and football-data spell
+    # the same clubs differently, so PSG/Inter/Dortmund all read as "unrated".
+    aliases: dict = {}
+    if ALIAS_PATH.exists():
+        aliases = json.loads(ALIAS_PATH.read_text(encoding="utf-8"))
+    print(f"{len(aliases)} verified ESPN aliases loaded"
+          f"{' -- RUN build_soccer_espn_aliases.py FIRST' if not aliases else ''}\n")
+
+    def resolve(name: str) -> str | None:
+        """ESPN club name -> a rated key, via direct canonicalization or a
+        fixture-verified alias. Never guesses."""
+        k = canonical_team_key(name)
+        if k in rated:
+            return k
+        entry = aliases.get(name)
+        if entry:
+            k2 = canonical_team_key(entry["team"])
+            if k2 in rated:
+                return k2
+        return None
 
     overall = collections.Counter()
     unrated_names: collections.Counter = collections.Counter()
@@ -129,14 +169,13 @@ def main() -> None:
                     names = [c["team"]["displayName"] for c in cs]
                 except (KeyError, IndexError):
                     continue
-                keys = [canonical_team_key(n) for n in names]
-                have = [k in rated for k in keys]
-                n_rated = sum(have)
+                keys = [resolve(n) for n in names]
+                n_rated = sum(k is not None for k in keys)
                 counts[n_rated] += 1
                 if n_rated == 2:
                     pair_leagues[tuple(sorted((rated[keys[0]], rated[keys[1]])))] += 1
-                for n, k, h in zip(names, keys, have):
-                    if not h:
+                for n, k in zip(names, keys):
+                    if k is None:
                         unrated_names[n] += 1
             d += datetime.timedelta(days=1)
 
