@@ -134,6 +134,12 @@ class MmaMarketOut(BaseModel):
     weight_class: str | None
     is_title_bout: bool
     scheduled_rounds: int | None
+    # Advisory caution, currently used to flag moneylines where a fuller
+    # style+defence model disagrees sharply with the Elo price this row is
+    # actually built from (see models/mma_model_disagreement.py). Never changes
+    # the price, the edge, or the stake -- it is information for the person
+    # placing the bet, in the same spirit as flagging a missing MLB pitcher.
+    model_note: str | None = None
     implied_prob: float | None
     yes_bid: float | None
     yes_ask: float | None

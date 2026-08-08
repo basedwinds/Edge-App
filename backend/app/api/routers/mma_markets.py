@@ -54,6 +54,7 @@ from app.db.database import get_session
 from app.db.models import Market, MmaFight
 from app.ingestion.market_matcher_mma import resolve_fight_side
 from app.models import distance_service_mma, method_service_mma, rounds_service_mma
+from app.models import mma_model_disagreement
 from app.models.baseline import elo_service_mma
 from app.models.ladder_sanity import find_resolved_entities
 from app.models.staking import has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
@@ -305,6 +306,18 @@ def list_mma_markets(session: Session = Depends(get_session)):
             model_prob = _rounds_model_prob(fight, m.side, m.line)
         else:
             model_prob = None
+        # ADVISORY FLAG on moneylines: a fuller model that also reads style and
+        # DEFENCE (takedown defence, strikes absorbed, control time) is measurably
+        # more accurate on past fights (-1.63% log loss) but has never been shown
+        # to beat the market, so it prices nothing. Where it disagrees sharply
+        # with the shipped Elo price, that is worth knowing before betting --
+        # same posture as flagging an MLB game with no announced pitcher: the bet
+        # stands, you just know more about its uncertainty. Fails soft to None.
+        disagreement_note = None
+        if m.market_type == "moneyline" and fight is not None:
+            disagreement_note = mma_model_disagreement.note_for(
+                fight.fighter_a_id, fight.fighter_b_id)
+
         if model_prob is not None:
             no_baseline_reason = None
         elif m.market_type == "rounds" and m.line is not None and m.line <= 1.0:
@@ -331,6 +344,7 @@ def list_mma_markets(session: Session = Depends(get_session)):
                 weight_class=fight.weight_class if fight else None,
                 is_title_bout=bool(fight.is_title_bout) if fight else False,
                 scheduled_rounds=fight.scheduled_rounds if fight else None,
+                model_note=disagreement_note,
                 implied_prob=implied,
                 yes_bid=snap.yes_bid if snap else None,
                 yes_ask=snap.yes_ask if snap else None,

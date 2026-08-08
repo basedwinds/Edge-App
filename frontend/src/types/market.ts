@@ -48,6 +48,10 @@ export interface MmaMarketRow {
   weight_class: string | null;
   is_title_bout: boolean;
   scheduled_rounds: number | null;
+  /** Advisory caution on moneylines -- set when a fuller style+defence model
+   *  disagrees sharply with the Elo price this row is built from. Never changes
+   *  the price, edge or stake; it is information for whoever places the bet. */
+  model_note?: string | null;
   implied_prob: number | null;
   yes_bid: number | null;
   yes_ask: number | null;

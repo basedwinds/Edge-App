@@ -19,7 +19,7 @@ from app.ingestion.market_matcher_mma import (
     names_from_event_title,
 )
 from app.ingestion.poller_lock import db_write_lock
-from app.models import distance_service_mma, method_service_mma, rounds_service_mma
+from app.models import distance_service_mma, mma_model_disagreement, method_service_mma, rounds_service_mma
 from app.models.baseline import elo_service_mma
 
 log = logging.getLogger("poller_mma")
@@ -30,6 +30,9 @@ def refresh_mma_ratings():
     distance_service_mma.refresh_model()
     method_service_mma.refresh_model()
     rounds_service_mma.refresh_model()
+    # Advisory only -- trains the style+defence model used to FLAG matchups where
+    # the shipped Elo price may be missing something. Prices nothing. Fails soft.
+    mma_model_disagreement.refresh()
 
 
 def _load_fights(session) -> list[dict]:

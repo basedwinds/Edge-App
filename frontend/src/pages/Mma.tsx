@@ -82,6 +82,14 @@ function MmaMarketsTable({ rows }: { rows: MmaMarketRow[] }) {
               <td className="px-4 py-3 whitespace-nowrap font-mono text-[var(--color-text-dim)]">{formatEventDate(r.event_date)}</td>
               <td className="px-4 py-3 whitespace-nowrap">
                 {r.fight_label ?? "—"}
+                {r.model_note && (
+                  <span
+                    className="ml-2 text-[10px] font-medium text-[var(--color-warning)] cursor-help"
+                    title={r.model_note}
+                  >
+                    ⚠ style/defence
+                  </span>
+                )}
                 {r.is_title_bout && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-[var(--color-accent)]">Title</span>}
               </td>
               <td className="px-4 py-3 whitespace-nowrap text-[var(--color-text-dim)]">{MARKET_TYPE_LABELS[r.market_type] ?? r.market_type}</td>
