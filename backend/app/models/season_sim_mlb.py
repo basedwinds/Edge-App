@@ -96,11 +96,43 @@ def _compute_starting_records(played_games: list[dict]) -> dict[str, int]:
     return wins
 
 
+# TEAM-STRENGTH SIGMA, added 2026-08-07. Elo is a point ESTIMATE; the true
+# strength a team carries through a season is uncertain, and simulating from the
+# point estimate alone treats it as known. Every other season sim in this app
+# already corrects for this (NFL 100, NBA 225/100, WNBA 100, CFB 225). MLB was
+# the only one without it, and it showed.
+#
+# MEASURED, not assumed (scripts/check_mlb_season_sim_calibration.py): preseason
+# playoff odds vs what actually happened, walk-forward over 9 seasons / 270
+# team-seasons with production Elo. Without a sigma the sim is overconfident in
+# one direction everywhere -- teams it called 90%+ qualified 79% of the time,
+# teams it called 10-25% qualified 32%. Weighted calibration error 0.0978.
+#
+# Sweep (same harness, same seasons):
+#     sigma=0    err 0.0978   worst bucket 0.1358
+#     sigma=25   0.0591       0.1666
+#     sigma=50   0.0269       0.0467   <-- chosen
+#     sigma=75   0.0280       0.0680
+#     sigma=100  0.0465       0.2659
+#
+# An INTERIOR optimum, so the fit is converged rather than pinned to the edge of
+# the grid. 50 also sits sensibly below NFL's 100 and CFB's 225: a 162-game
+# season leaves far less room for a team's true strength to diverge from its
+# rating than a 17-game one, which is exactly what this parameter encodes.
+#
+# Why it matters for money: the app stakes where model > market, so a systematic
+# +10 to +16pp on favourites means buying overpriced favourites across all 726
+# MLB futures markets -- the same "betting into the model's own bias" failure
+# fixed in racing top_n the same day.
+TEAM_STRENGTH_SIGMA = 50.0
+
+
 def run_simulation(
     ratings: dict[str, float],
     all_reg_games: list[dict],
     n_trials: int = N_TRIALS,
     seed: int | None = None,
+    team_strength_sigma: float | None = None,
 ) -> dict[str, dict]:
     """all_reg_games: every REG-season game for the season being simulated,
     played or not. Returns {team: {"division_pct", "playoff_pct" (made the
@@ -130,7 +162,16 @@ def run_simulation(
     # team's own pennant number.
     matchup_tallies: dict[tuple[str, str], int] = {}
 
+    sigma = TEAM_STRENGTH_SIGMA if team_strength_sigma is None else team_strength_sigma
+
     for _ in range(n_trials):
+        # Draw each team's TRUE strength once per trial, not once per game. A
+        # team's real strength is fixed across a season and uncertain between
+        # simulations; redrawing per game would model a team that changes
+        # identity nightly and would wash out to nothing over 162 games instead
+        # of spreading the season-long outcomes the futures markets price.
+        trial_ratings = ({t: r + rng.gauss(0.0, sigma) for t, r in ratings.items()}
+                         if sigma else ratings)
         wins = {t: starting_wins.get(t, 0) for t in all_teams}
         head_to_head: dict[tuple, str] = {}
 
@@ -139,7 +180,7 @@ def run_simulation(
             if home not in wins or away not in wins:
                 continue
             adv = NEUTRAL_SITE_HOME_FIELD_ADV if g.get("location") == "Neutral" else HOME_FIELD_ADV
-            winner = _simulate_game(ratings, home, away, adv, rng)
+            winner = _simulate_game(trial_ratings, home, away, adv, rng)
             loser = away if winner == home else home
             wins[winner] += 1
             head_to_head[(winner, loser)] = winner
