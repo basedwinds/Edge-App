@@ -56,6 +56,13 @@ LEAGUES = {
     "D1": "ger.1", "D2": "ger.2",
     "F1": "fra.1", "F2": "fra.2",
     "N1": "ned.1", "P1": "por.1",
+    # Added 2026-08-08 alongside the football-data B1/T1/G1 wiring. These three
+    # exist specifically to make UEFA clubs resolvable -- Genk and Club Brugge,
+    # Galatasaray and Fenerbahce, Panathinaikos/Olympiacos/PAOK were the seven
+    # most frequent unrateable sides in check_uefa_coverage.py. Without an alias
+    # entry a newly-rated club is still invisible to that audit, because ESPN
+    # and football-data spell them differently just like everywhere else.
+    "B1": "bel.1", "T1": "tur.1", "G1": "gre.1",
 }
 # Two full seasons -- more independent fixtures per club, and it covers clubs
 # that were promoted or relegated between them.

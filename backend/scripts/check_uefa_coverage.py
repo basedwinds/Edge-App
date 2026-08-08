@@ -61,13 +61,28 @@ stake money on the wrong club. build_soccer_espn_aliases.py joins on FIXTURES
 (date + exact score) instead, which is why Rangers and Celtic are correctly
 absent from its output -- Scotland has no fixtures in this app to join against.
 
-WHAT STILL BLOCKS THE REMAINING 68%: clubs from leagues never rated -- Bodo/Glimt
-(Norway), Galatasaray and Fenerbahce (Turkey), Panathinaikos/Olympiacos/PAOK
-(Greece), Racing Genk and Club Brugge (Belgium), Shakhtar (Ukraine), Ferencvaros
-(Hungary), Dinamo Zagreb (Croatia), Ludogorets (Bulgaria), Red Star (Serbia),
-Midtjylland (Denmark), Qarabag (Azerbaijan). NOTE: football-data.co.uk already
-publishes Belgium (B1), Turkey (T1) and Greece (G1) -- adding those three would
-pick up seven of the fifteen most frequent blockers from a source already wired.
+WHAT BLOCKED THE REMAINING 68% was clubs from leagues never rated. The seven
+worst offenders were Racing Genk and Club Brugge (Belgium), Galatasaray and
+Fenerbahce (Turkey), and Panathinaikos, Olympiacos and PAOK (Greece) -- all
+three countries already published by football-data.co.uk on the same mmz4281
+pattern this app has always used.
+
+THIRD RUN, after adding B1/T1/G1 (2026-08-08, +25,297 matches, 16 leagues /
+695 rated teams, 311 aliases):
+
+    Champions League   189 matches   both rated 140 = 74.1%   (from 27.0 -> 55.6)
+    Europa League      189 matches   both rated  73 = 38.6%   (from 13.8 -> 27.5)
+    Conference League  153 matches   both rated  17 = 11.1%   (from  6.5 ->  6.5)
+    ALL                531 matches   both rated 230 = 43.3%   (from 16.4 -> 31.5)
+
+The Champions League is now comfortably viable: 140 of 189 matches priceable,
+and only 5 (2.6%) with NEITHER side rated. Three league additions from a source
+already wired bought +35 UCL matches a season.
+
+STILL UNREACHED, and each needs a league football-data does not publish:
+Bodo/Glimt (Norway), Ferencvaros (Hungary), Shakhtar Donetsk (Ukraine), Qarabag
+(Azerbaijan). The Conference League remains structurally hopeless at 11.1% --
+its field is drawn from exactly the associations no free source covers.
 
 THE CHEAPER ADJACENT WIN. Kalshi lists Coppa Italia and DFB Pokal (GAME,
 ADVANCE, TOTAL series, all live as of 2026-08-07). Those are Serie A vs Serie B

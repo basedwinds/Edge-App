@@ -70,6 +70,30 @@ DIVISIONS = {
     # promoted Eredivisie clubs will have no prior rating and simply price as
     # "no baseline" rather than getting a fabricated one.
     "N1": "Netherlands - Eredivisie",
+    # Added 2026-08-08 for a different reason than every league above it: not
+    # because Kalshi lists a DOMESTIC market for them, but because their clubs
+    # are what blocks UEFA pricing. scripts/check_uefa_coverage.py measured the
+    # 2025-26 UEFA season and found the Champions League ceiling capped at
+    # 55.6% of matches, with the most frequent unrateable clubs being Racing
+    # Genk and Club Brugge (Belgium), Galatasaray and Fenerbahce (Turkey), and
+    # Panathinaikos, Olympiacos and PAOK (Greece) -- seven of the fifteen worst
+    # blockers, all three countries already published on the mmz4281 pattern
+    # this client has always used. Adding them raises the UEFA ceiling with no
+    # new fetch logic and no new source.
+    #
+    # Verified live before wiring, on the ONE check that matters here: every
+    # season self-reports its own Div (B1/T1/G1), so none of the three is
+    # subject to the redirect substitution that put a Spanish season into the
+    # Portuguese pool (see fetch_season_csv). Coverage starts around 2005-06 --
+    # 1993-94 returns HTTP 300, which fetch_season_csv already treats as "no
+    # file" rather than following into another division's data.
+    #
+    # No second tier for any of the three: football-data does not publish one,
+    # so a promoted Belgian/Turkish/Greek club prices as "no baseline" rather
+    # than getting a fabricated rating -- same deliberate handling as N1.
+    "B1": "Belgium - Jupiler Pro League",
+    "T1": "Turkey - Super Lig",
+    "G1": "Greece - Super League",
 }
 
 # Second tier of each country -- added 2026-07-19 specifically to fix a real
