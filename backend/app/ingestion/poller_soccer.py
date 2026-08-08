@@ -530,3 +530,59 @@ def run_full_refresh_soccer():
     refresh_soccer_results()
     refresh_soccer_news_adjustments()
     settle_soccer_placed_bets()
+
+
+def refresh_kalshi_cup_markets():
+    """Domestic cup ties (Coppa Italia, DFB Pokal).
+
+    Kept as its own entrypoint rather than folded into
+    refresh_kalshi_soccer_markets, for a structural reason and not just tidiness:
+    that function groups rows by event and requires exactly 3 per event to
+    identify a match (home/draw/away), then joins the other market types onto it
+    by an opaque per-division ticker suffix. Cups break both assumptions -- the
+    ADVANCE series has 2 rows per event, TOTAL has 6, and the suffix scheme is
+    per-competition rather than per-division. Threading that through would put
+    new failure modes into the busiest poller in the app.
+
+    Every fetch happens before the session opens, same discipline as every other
+    poller here (see refresh_kalshi_soccer_markets' own docstring).
+    """
+    batches = [
+        (kalshi_soccer_client.get_cup_moneyline_markets(),
+         market_catalog_soccer.upsert_kalshi_cup_moneyline_market, "cup_moneyline"),
+        (kalshi_soccer_client.get_cup_advance_markets(),
+         market_catalog_soccer.upsert_kalshi_cup_advance_market, "cup_advance"),
+        (kalshi_soccer_client.get_cup_total_markets(),
+         market_catalog_soccer.upsert_kalshi_cup_total_market, "cup_total"),
+    ]
+
+    counts: dict[str, int] = {}
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            # One SoccerMatch per real tie, shared by all three market types --
+            # keyed on the fixture itself, not the event ticker, because the
+            # three series use DIFFERENT event tickers for the same tie.
+            match_id_by_tie: dict[tuple[str, str, str, str], int | None] = {}
+
+            for rows, upsert, label in batches:
+                n = 0
+                for row in rows:
+                    league = market_catalog_soccer.cup_league_code(row["competition"])
+                    start = row.get("estimated_start_time") or ""
+                    date = start[:10] or None
+                    key = (league, canonical_team_key(row["home_team"]),
+                           canonical_team_key(row["away_team"]), date or "")
+                    if key not in match_id_by_tie:
+                        match = market_catalog_soccer.find_or_create_upcoming_match(
+                            session, league, row["home_team"], row["away_team"], date)
+                        session.flush()
+                        match_id_by_tie[key] = match.id if match is not None else None
+                    upsert(session, row, match_id_by_tie[key])
+                    n += 1
+                counts[label] = n
+            session.commit()
+        finally:
+            session.close()
+    log.info("kalshi cup markets refreshed: %s", counts)
+    return counts

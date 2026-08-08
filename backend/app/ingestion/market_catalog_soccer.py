@@ -648,3 +648,63 @@ def upsert_kalshi_soccer_top_n_market(session: Session, row: dict) -> Market:
     _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
                       yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
     return market
+
+
+# --- DOMESTIC CUPS (2026-08-08) --------------------------------------------
+# Cup ties are stored with the COMPETITION as the league code, not a division,
+# because a tie is not a fixture in either club's league and must never be
+# mistaken for one -- the season sim builds a round-robin from a league's team
+# list, and a cup tie leaking into that would invent fixtures that do not exist.
+# The two clubs' actual divisions are resolved at pricing time by
+# elo_service_soccer.resolve_league (which is also what stops a club being
+# priced off a rating from a division it left years ago).
+CUP_LEAGUE_CODES = {"coppa_italia": "COPPA_ITALIA", "dfb_pokal": "DFB_POKAL"}
+
+
+def cup_league_code(competition: str) -> str:
+    return CUP_LEAGUE_CODES.get(competition, competition.upper())
+
+
+def _cup_market(session: Session, row: dict, market_type: str, soccer_match_id: int | None) -> Market:
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type=market_type, sport="soccer",
+        )
+        session.add(market)
+    market.soccer_match_id = soccer_match_id
+    market.status = row.get("status") or "active"
+    return market
+
+
+def upsert_kalshi_cup_moneyline_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    """Regulation-time 3-way. Kalshi's own label says "Reg Time", so these
+    settle on 90 minutes -- who progressed is the separate ADVANCE market."""
+    market = _cup_market(session, row, "cup_moneyline_3way", soccer_match_id)
+    market.team = row.get("team")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_cup_advance_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    """Who progresses, INCLUDING extra time and penalties -- a strictly
+    different question from the moneyline, priced by cup_match._advance_probs."""
+    market = _cup_market(session, row, "cup_advance", soccer_match_id)
+    market.team = row.get("team")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_cup_total_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    """Total goals in REGULATION -- must not be priced off the extra-time grid."""
+    market = _cup_market(session, row, "cup_total", soccer_match_id)
+    market.line = row.get("line")
+    market.side = "over"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market

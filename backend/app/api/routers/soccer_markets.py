@@ -53,6 +53,7 @@ from app.db.models import Market, MarketSnapshot, SoccerMatch, SoccerNewsAdjustm
 from app.ingestion.market_catalog_soccer import get_soccer_news_adjustment_cache, soccer_news_cache_to_pydantic
 from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_match
 from app.models.baseline import elo_service_soccer
+from app.models.cup_match import predict_cup_tie
 from app.models.combine import combine_probability_3way
 from app.models.ladder_sanity import (
     SOCCER_LIVE_TRADING_MIN_PRICE_SWING,
@@ -74,6 +75,8 @@ GAME_MARKET_TYPES = {
     "team_total", "ftts", "correct_score",
     "first_half_winner", "first_half_spread", "first_half_total", "first_half_team_total", "first_half_btts",
     "second_half_winner", "second_half_spread", "second_half_total", "second_half_team_total", "second_half_btts",
+    # Domestic cups (2026-08-08) -- game-level, not futures.
+    "cup_moneyline_3way", "cup_advance", "cup_total",
 }
 
 # Real threshold-LADDER market types (multiple lines/rungs per real match+
@@ -292,7 +295,72 @@ def _half_btts_model_prob(market: Market, match: SoccerMatch | None, half: int) 
     return round(dist.prob_btts(), 4)
 
 
+# --- DOMESTIC CUPS ---------------------------------------------------------
+# A cup tie is stored with the COMPETITION as its league code, so it never
+# reaches the per-league pricing above (there is no "COPPA_ITALIA" rating pool,
+# by design). Each club's real division is resolved here instead, at pricing
+# time, by elo_service_soccer.resolve_league -- which is also what prevents a
+# club being priced off a division it left years ago.
+CUP_TIERS = {"COPPA_ITALIA": ("I1", "I2"), "DFB_POKAL": ("D1", "D2")}
+CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total"}
+
+
+def _cup_prediction(match: SoccerMatch | None):
+    if match is None or match.league not in CUP_TIERS:
+        return None
+    top, second = CUP_TIERS[match.league]
+    states = elo_service_soccer._cache.get("states_by_league") or {}
+    if top not in states:
+        return None
+    resolved = []
+    for name in (match.home_team, match.away_team):
+        league = elo_service_soccer.resolve_league(name)
+        if league not in (top, second):
+            return None  # unrated, or in a division this app does not model
+        resolved.append((canonical_team_key(name), league))
+    (hk, hl), (ak, al) = resolved
+    second_teams = {k for k, lg in resolved if lg == second}
+    return predict_cup_tie(hk, ak, states[top], states.get(second), second_teams)
+
+
+def _cup_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _cup_prediction(match)
+    if pred is None:
+        return None
+    # Settles on REGULATION -- Kalshi's own "Reg Time" label. Not P(advance).
+    return {"home": pred.prob_home_win, "draw": pred.prob_draw,
+            "away": pred.prob_away_win}.get(market.side, lambda: None)()
+
+
+def _cup_advance_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _cup_prediction(match)
+    if pred is None:
+        return None
+    if market.side == "home":
+        return pred.prob_home_advance
+    if market.side == "away":
+        return pred.prob_away_advance
+    return None
+
+
+def _cup_total_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _cup_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    return pred.prob_total_over(market.line)  # regulation grid, never extra time
+
+
+def cup_model_note(match: SoccerMatch | None) -> str | None:
+    """The cross-tier caution (see cup_match.CAUTION_NOTE). Returns None for a
+    same-tier tie, which needs no conversion and no warning."""
+    pred = _cup_prediction(match)
+    return pred.caution_note if pred is not None and pred.needs_caution else None
+
+
 _MODEL_PROB_DISPATCH = {
+    "cup_moneyline_3way": lambda m, match, news: _cup_moneyline_model_prob(m, match),
+    "cup_advance": lambda m, match, news: _cup_advance_model_prob(m, match),
+    "cup_total": lambda m, match, news: _cup_total_model_prob(m, match),
     "game_spread": lambda m, match, news: _game_spread_model_prob(m, match),
     "game_total": lambda m, match, news: _game_total_model_prob(m, match),
     "btts": lambda m, match, news: _btts_model_prob(m, match),
@@ -521,6 +589,19 @@ def list_soccer_markets(session: Session = Depends(get_session)):
     def _either_team_unrated(match: SoccerMatch | None) -> bool:
         if match is None:
             return False
+        if match.league in CUP_TIERS:
+            # A cup tie's league is the COMPETITION ("COPPA_ITALIA"), which has
+            # no rating pool by design, so the per-league count below would read
+            # zero for both clubs and short-circuit every cup row to unpriced
+            # BEFORE _model_prob ever runs. That is exactly what happened on
+            # 2026-08-08: 191 cup rows served unpriced while the same clubs
+            # priced fine in a fresh process, because this gate -- not the
+            # pricing -- was rejecting them. Each club's real division is
+            # resolved instead, by the same function the cup pricing uses.
+            return any(
+                elo_service_soccer.resolve_league(name) not in CUP_TIERS[match.league]
+                for name in (match.home_team, match.away_team)
+            )
         return (
             elo_service_soccer.get_team_match_count(match.league, match.home_team) == 0
             or elo_service_soccer.get_team_match_count(match.league, match.away_team) == 0
@@ -568,6 +649,7 @@ def list_soccer_markets(session: Session = Depends(get_session)):
                 model_validated=False,
                 edge=edge,
                 no_baseline_reason=no_baseline_reason,
+                model_note=cup_model_note(match) if m.market_type in CUP_MARKET_TYPES else None,
                 kelly_fraction=kelly,
                 suggested_stake_dollars=stake_dollars,
                 suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,

@@ -129,6 +129,17 @@ def resolve_league(team: str, as_of: str | None = None,
 
     key = canonical_team_key(team)
     played = _cache.get("last_played") or {}
+    if not played and _cache.get("states_by_league"):
+        # Ratings are loaded but last-played is not. That means this process
+        # populated its cache from a build BEFORE last_played existed, and every
+        # call here will refuse every club SILENTLY -- cup pricing just returns
+        # empty with no error anywhere. Seen for real on 2026-08-08: the live
+        # worker served 191 cup rows all unpriced while the same code priced 9
+        # of them fine in a fresh process. Loud, because the failure is not.
+        log.error("soccer resolve_league: ratings loaded but last_played is EMPTY -- "
+                  "stale in-process cache, refresh_ratings() must be re-run or every "
+                  "club will be refused")
+        return None
     hits = [(date, league) for (league, t), date in played.items() if t == key and date]
     if not hits:
         return None

@@ -216,6 +216,10 @@ class SoccerMarketOut(BaseModel):
     model_validated: bool
     edge: float | None
     no_baseline_reason: str | None
+    # Advisory caution shown beside the price -- currently the cross-division
+    # cup-tie warning (see models/cup_match.py CAUTION_NOTE). Not an error:
+    # the row is priced and stakeable, the note explains a known residual bias.
+    model_note: str | None = None
     kelly_fraction: float | None
     suggested_stake_dollars: float | None
     suggested_stake_units: float | None
