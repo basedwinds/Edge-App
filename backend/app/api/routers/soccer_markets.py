@@ -307,6 +307,22 @@ def _half_btts_model_prob(market: Market, match: SoccerMatch | None, half: int) 
 CUP_TIERS = {"COPPA_ITALIA": ("I1", "I2"), "DFB_POKAL": ("D1", "D2")}
 CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total"}
 
+# TRACKING-ONLY: priced and shown, never staked.
+#
+# cup_advance settles on who PROGRESSED -- extra time, penalties, and for a
+# two-legged tie an aggregate across both matches. bet_settlement deliberately
+# registers NO grader for it, because none of that is stored. Pricing it while
+# leaving it stakeable would produce a bet that can never settle: exactly the
+# "pending forever" failure this app already hit with racing bets and with
+# cancelled matchups (#84). Ungraded AND unstakeable is coherent; ungraded but
+# stakeable is a trap.
+#
+# Same posture and mechanism as the esports map_winner markets and the player
+# stat-projection futures (see PLAYER_STAT_TRACKING_ONLY in routers/markets.py):
+# the stake is zeroed AFTER it is computed, so model_prob and edge still surface
+# and the row keeps accruing forward evidence.
+TRACKING_ONLY_MARKET_TYPES = {"cup_advance"}
+
 
 def _cup_prediction(match: SoccerMatch | None):
     if match is None or match.league not in CUP_TIERS:
@@ -676,6 +692,9 @@ def list_soccer_markets(session: Session = Depends(get_session)):
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "soccer", m.market_type)
         stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)
+        if m.market_type in TRACKING_ONLY_MARKET_TYPES:
+            kelly = None
+            stake_dollars = None
         out.append(
             SoccerMarketOut(
                 id=m.id,
