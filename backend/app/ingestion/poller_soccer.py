@@ -97,6 +97,31 @@ def refresh_soccer_results():
     finally:
         read_session.close()
 
+    # LOUD when a league has matches waiting on results but no ESPN slug to
+    # fetch them with. THIS IS NOT HYPOTHETICAL -- it is the exact failure this
+    # warning was added for (2026-08-08). espn_soccer_client.LEAGUE_CODES held
+    # only the original six leagues, so every league added since (N1, E1, P1,
+    # B1, T1, G1, the domestic cups, all three UEFA competitions) had its
+    # results silently never REQUESTED. 134 live rows across 8 leagues could
+    # never resolve, and a user's Liga Portugal bets sat pending on a match
+    # that had finished hours earlier.
+    #
+    # What made it survive from the day Eredivisie was added is that it looked
+    # like nothing: the backfill logged "0/14 updated", which reads as a
+    # matching failure rather than a fetch that never happened. Same shape as
+    # observation_logger's "returned markets but priced NONE" warning, and
+    # added for the same reason -- a component that is merely UNWIRED produces
+    # no error, so it has to announce itself.
+    missing = {lg: len(ids) for lg, ids in by_league_ids.items()
+               if lg not in espn_soccer_client.LEAGUE_CODES}
+    if missing:
+        log.error(
+            "soccer results: %d league(s) have matches awaiting results but NO ESPN slug "
+            "in espn_soccer_client.LEAGUE_CODES -- these can NEVER resolve and their bets "
+            "will sit pending forever: %s",
+            len(missing), ", ".join(f"{lg} ({n} matches)" for lg, n in sorted(missing.items())),
+        )
+
     results_by_league: dict[str, list[dict]] = {}
     for league, match_ids in by_league_ids.items():
         # oldest date computed from the SAME read_session's rows above,
