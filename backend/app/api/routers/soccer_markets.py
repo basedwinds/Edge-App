@@ -615,6 +615,16 @@ _MARKET_TYPE_LABEL_TO_DIVISION.update({
 # from playoff_sim_service_mls instead, below.
 _MLS_PLAYOFF_MARKET_TYPES = ("mls_cup_winner", "mls_conference_winner")
 
+MLS_BRACKET_APPROXIMATE_NOTE = (
+    "Approximate: this price comes from a playoff bracket simulation that has never been "
+    "checked against real results. MLS's current format has only one completed postseason in "
+    "this app's data, which is not enough to calibrate against. The simulation is internally "
+    "consistent (every team's chances add up correctly), but that only means the arithmetic is "
+    "right, not that the numbers are true -- the racing finishing-order model added up "
+    "correctly too and was still 30 points off. Treat the edge as a disagreement with the "
+    "market, not a proven opportunity."
+)
+
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",
                          *_MLS_PLAYOFF_MARKET_TYPES]
 
@@ -744,6 +754,29 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             )
         )
     _collapse_nested_position_futures(out)
+
+    # The MLS bracket model is UNCALIBRATED, and saying so is the point.
+    #
+    # When it shipped (2026-08-07) it was checked for COHERENCE -- cup
+    # probabilities summing to exactly 1.0, conference to 2.0, playoff berths to
+    # 18.0 -- and that was mistaken for validation. It isn't. The racing
+    # finishing-order model summed correctly too and was still 30pp wrong:
+    # coherence means the arithmetic is right, calibration means the numbers are
+    # true. Nothing here has ever been compared against real outcomes.
+    #
+    # And it cannot be, yet. MLS's current playoff format has one completed
+    # postseason in this app's data. A model cannot be calibrated against one
+    # event, so the honest posture is the same "approximate" flag CFB's playoff
+    # markets carry -- priced, staked like anything else, clearly labelled, and
+    # judged on results rather than suppressed on theory (see
+    # cfb_markets.APPROXIMATE_MARKET_TYPES for why suppressing is worse).
+    #
+    # Appended rather than assigned so it cannot clobber the nested-collapse
+    # note above, which carries a staking consequence this one does not.
+    for row in out:
+        if row.market_type in _MLS_PLAYOFF_MARKET_TYPES:
+            row.model_note = f"{row.model_note or ''} {MLS_BRACKET_APPROXIMATE_NOTE}".strip()
+
     out.sort(key=lambda m: (m.group_label or "", -(m.implied_prob or 0)))
     return out
 
