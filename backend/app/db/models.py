@@ -351,6 +351,11 @@ class SoccerMatch(Base):
     away_goals_ft = Column(Integer, nullable=True)
     home_goals_ht = Column(Integer, nullable=True)
     away_goals_ht = Column(Integer, nullable=True)
+    # Which side scored FIRST ('H'/'A'), or 'N' for a goalless match. NULL
+    # means unknown -- ftts bets on such a match stay pending rather than
+    # being guessed. Populated from ESPN scoring plays; a final score alone
+    # cannot answer this, which is why 2 ftts bets sat permanently unsettled.
+    first_scorer = Column(String, nullable=True)
     result_ft = Column(String, nullable=True)  # "H" | "D" | "A" -- null until played
     # Real historical closing odds (decimal), football-data.co.uk only --
     # used for the go/no-go backtest gate; null rows (MLS, or any not-yet-

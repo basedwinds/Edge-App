@@ -52,6 +52,9 @@ AUTO_SETTLE_MARKET_TYPES = {
     # espn_soccer_client.fetch_half_time_goals); second half is FT minus HT.
     "first_half_winner", "second_half_winner", "first_half_total", "second_half_total",
     "first_half_team_total", "second_half_team_total", "second_half_btts",
+    # ftts needs SoccerMatch.first_scorer (ESPN scoring plays); its grader
+    # returns None when that is unknown, so those bets stay pending.
+    "ftts",
     # cup + UEFA regulation markets (2026-08-08). cup_advance is deliberately
     # NOT here -- see _SOCCER_GRADERS for why it must stay unsettleable.
     "cup_moneyline_3way", "uefa_moneyline_3way", "cup_total", "uefa_total",
@@ -735,6 +738,31 @@ _GRADERS = {  # score-based game sports (nfl/nba/wnba/mlb/cfb)
 # also means an unrecognised soccer market_type resolves to None and the bet
 # stays pending, instead of being graded by whatever the score sports happen
 # to register under that name later.
+def _grade_soccer_ftts(bet: PlacedBet, game: SoccerMatch) -> str | None:
+    """First Team To Score. CANNOT be graded from the final score -- a 1-0 home
+    win says nothing about who scored first in a 2-1, and a draw says nothing at
+    all. Graded off SoccerMatch.first_scorer, populated from ESPN's scoring
+    plays (espn_soccer_client._first_scorer).
+
+    Returns None when first_scorer is NULL, which leaves the bet pending. That
+    is deliberate and it is the whole point: before this existed, ftts bets sat
+    permanently unsettled with no indication why. Pending-and-explainable beats
+    graded-and-wrong.
+
+    'N' means a real goalless match, so BOTH sides lose -- nobody scored first.
+    """
+    first = getattr(game, "first_scorer", None)
+    if first is None:
+        return None  # unknown -- stay pending rather than guess
+    if first == "N":
+        return "lost"  # 0-0: neither side scored first
+    side_to_result = {"home": "H", "away": "A"}
+    want = side_to_result.get(bet.side)
+    if want is None:
+        return None  # unrecognised side -- never guess
+    return "won" if want == first else "lost"
+
+
 _SOCCER_GRADERS = {
     "moneyline_3way": _grade_soccer_moneyline_3way,
     # DOMESTIC CUPS + UEFA (2026-08-08). These settle on REGULATION -- Kalshi
@@ -765,6 +793,8 @@ _SOCCER_GRADERS = {
     "first_half_team_total": lambda b, g: _grade_soccer_half_team_total(b, g, 1),
     "second_half_team_total": lambda b, g: _grade_soccer_half_team_total(b, g, 2),
     "second_half_btts": _grade_soccer_second_half_btts,
+    # Graded off first_scorer, NOT the final score -- see the grader.
+    "ftts": _grade_soccer_ftts,
 }
 
 _MMA_GRADERS = {

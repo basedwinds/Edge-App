@@ -23,6 +23,7 @@ look like "no games happened" instead of a real fetch limit."""
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import httpx
 
@@ -154,6 +155,53 @@ def fetch_scoreboard(league: str, start: dt.date, end: dt.date) -> list[dict]:
     return out
 
 
+# Clock strings on ESPN's scoring plays are football minutes, and they are NOT
+# numerically sortable as text: a 90th-minute goal reads "90'", stoppage time
+# reads "45+2'" or "90+4'", and "9'" sorts after "45'" lexically. So they are
+# parsed to a comparable number, with stoppage added as a fraction so that
+# 45+2 sits after 45 but before 46.
+def _clock_minutes(v) -> float | None:
+    m = re.match(r"^\s*(\d+)(?:\s*\+\s*(\d+))?", str(v or ""))
+    if not m:
+        return None
+    base = int(m.group(1))
+    extra = int(m.group(2)) if m.group(2) else 0
+    return base + extra / 100.0
+
+
+def _first_scorer(comp: dict, home_id, away_id) -> str | None:
+    """'H' / 'A' for whichever side scored first, 'N' for a goalless match,
+    None when ESPN gave us no usable detail.
+
+    'N' and None are deliberately different: 'N' is a real answer (nobody
+    scored, so a First-Team-To-Score bet on either side loses), while None
+    means we do not know and the bet must stay pending rather than be guessed.
+    """
+    details = comp.get("details")
+    if details is None:
+        return None  # no play-by-play for this match -- unknown, not goalless
+    scoring = []
+    for d in details:
+        if not d.get("scoringPlay"):
+            continue
+        minute = _clock_minutes((d.get("clock") or {}).get("displayValue"))
+        team_id = str(((d.get("team") or {}).get("id")) or "")
+        if minute is None or not team_id:
+            continue
+        scoring.append((minute, team_id))
+    if not scoring:
+        # An empty detail list on a finished match is a real 0-0; but if the
+        # match had goals, the feed simply lacks them and we must not claim 0-0.
+        return None
+    scoring.sort(key=lambda x: x[0])
+    first_team = scoring[0][1]
+    if first_team == str(home_id):
+        return "H"
+    if first_team == str(away_id):
+        return "A"
+    return None
+
+
 def parse_final_results(raw_events: list[dict]) -> list[dict]:
     """Simplified sibling of parse_final_events -- only the fields needed to
     MATCH a real ESPN result onto an already-existing, live-tracked
@@ -188,9 +236,17 @@ def parse_final_results(raw_events: list[dict]) -> list[dict]:
         if match_date is None:
             continue
         result_ft = "H" if home_goals > away_goals else ("A" if away_goals > home_goals else "D")
+        first_scorer = _first_scorer(comp, (home.get("team") or {}).get("id"),
+                                     (away.get("team") or {}).get("id"))
+        if first_scorer is None and home_goals == 0 and away_goals == 0:
+            first_scorer = "N"  # a real goalless match, corroborated by the score
         out.append({
             "home_team": home_name, "away_team": away_name, "match_date": match_date,
             "home_goals_ft": home_goals, "away_goals_ft": away_goals, "result_ft": result_ft,
+            # Who scored FIRST -- ftts markets cannot be graded from a final
+            # score. Carried from the same scoreboard payload this call already
+            # fetches, so it costs no extra request.
+            "first_scorer": first_scorer,
             # Needed to fetch half-time goals, which the scoreboard does not
             # carry -- see fetch_half_time_goals.
             "event_id": e.get("id"),

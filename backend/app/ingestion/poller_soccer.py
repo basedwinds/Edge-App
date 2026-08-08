@@ -201,6 +201,11 @@ def refresh_soccer_results():
                 match.home_goals_ft = found["home_goals_ft"]
                 match.away_goals_ft = found["away_goals_ft"]
                 match.result_ft = found["result_ft"]
+                # Who scored first -- ftts cannot be graded from a final score.
+                # May be None when ESPN carried no play-by-play; the grader
+                # leaves those bets pending rather than guessing.
+                if found.get("first_scorer") is not None:
+                    match.first_scorer = found["first_scorer"]
                 if found.get("halves") is not None:
                     match.home_goals_ht, match.away_goals_ht = found["halves"]
                     ht += 1
