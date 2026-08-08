@@ -908,3 +908,79 @@ class NbaCoachSnapshot(Base):
     # ~45 days after this feature ships, since that's when every row is
     # first created.
     previous_coach_name = Column(String, nullable=True)
+
+
+class ModelObservation(Base):
+    """Every priced matchup, recorded BEFORE it happens, so the model can be
+    scored against the market on OUTCOMES.
+
+    WHY THIS EXISTS AND PlacedBet DOES NOT SUFFICE. This app can measure whether
+    a model got more accurate; it cannot currently measure whether a model beats
+    the MARKET. That question came up three separate times in one day (racing
+    top_n, the MLB season sim, MMA style/defence features) and each time the
+    answer was "we can't tell from here". Two structural reasons:
+
+      1. PlacedBet only records matchups where the model ALREADY found an edge.
+         Scoring on it measures the tail the app chose to bet, not calibration
+         against the market -- it is guaranteed to flatter the model. Answering
+         "do we beat the market" needs the UNSELECTED population, including all
+         the boring rows where model and market agree.
+      2. paper_logger was built to be judged on CLV, and this app later
+         established that CLV does NOT predict profit. That retired the yardstick
+         without replacing it.
+
+    So: one row per priced market, logged whether or not it is bettable, scored
+    on the real outcome. No stake, no bankroll, no effect on recommendations --
+    this table is a measuring instrument, deliberately separate from PlacedBet so
+    it can never pollute the tracker's P/L or the exposure caps.
+
+    Gradeable fields deliberately MIRROR PlacedBet's names (team/side/line plus
+    the per-sport entity ids) so bet_settlement's existing graders can grade an
+    observation unchanged -- they read those attributes off whatever they are
+    handed. Reusing the graders is what keeps this small; a parallel settlement
+    path would be a second thing to keep correct.
+    """
+
+    __tablename__ = "model_observations"
+
+    id = Column(Integer, primary_key=True)
+    market_id = Column(Integer, index=True)
+    sport = Column(String, index=True)
+    market_type = Column(String, index=True)
+    source = Column(String)
+
+    # --- gradeable snapshot: names match PlacedBet so graders duck-type ------
+    team = Column(String)
+    side = Column(String)
+    line = Column(Float)
+    nfl_game_id = Column(String)
+    nba_game_id = Column(String)
+    wnba_game_id = Column(String)
+    cfb_game_id = Column(String)
+    mlb_game_id = Column(String)
+    mma_fight_id = Column(String)
+    tennis_match_id = Column(String)
+    soccer_match_id = Column(String)
+    valorant_match_id = Column(String)
+    cs2_match_id = Column(String)
+    lol_match_id = Column(String)
+    race_event_id = Column(Integer)
+
+    # --- what was believed, and what the market said, at observation time ----
+    model_prob = Column(Float)
+    market_prob = Column(Float)
+    edge = Column(Float)
+    volume = Column(Float)
+
+    # First seen and last refreshed. The row is UPDATED while the event is still
+    # upcoming (the model sharpens as team news and ratings move), then frozen
+    # once it starts -- so `market_prob`/`model_prob` are the last pre-event
+    # view, which is the honest thing to score. first_seen_at is kept so a
+    # later analysis can ask how far out the observation was made.
+    first_seen_at = Column(DateTime, index=True)
+    observed_at = Column(DateTime, index=True)
+    event_start = Column(DateTime, index=True)
+
+    status = Column(String, default="pending", index=True)   # pending|won|lost|push|void
+    settled_at = Column(DateTime)
+    settlement_note = Column(String)

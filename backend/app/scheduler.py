@@ -7,6 +7,7 @@ from app import sports as app_sports
 from app.db.database import SessionLocal
 from app.ingestion.catalog_scan import scan_catalog
 from app.ingestion.poller import run_full_refresh
+from app.models import observation_logger
 from app.ingestion.poller_nba import run_full_refresh_nba
 from app.ingestion.poller_mlb import run_full_refresh_mlb
 from app.ingestion.poller_tennis import run_full_refresh_tennis
@@ -217,6 +218,30 @@ def start():
     # add the job paused (per its add_job docstring), which means it never fires again on
     # its own. The explicit startup thread in main.py handles the first run of each poller.
     base_tick = datetime.now() + timedelta(minutes=5)
+    # Forward observation log: one row per priced market, scored later on
+    # OUTCOMES. Runs ONCE DAILY and deliberately LAST in the tick order --
+    # it reads every sport's market route, and those routes price off model
+    # caches the pollers fill. Run cold, soccer/mma/cfb/tennis return every
+    # market with model_prob=None and the log silently covers a third of the
+    # app (measured while building it: 8 of 12 sports logged nothing). Daily
+    # rather than 5-minutely because it re-prices all 12 sports, and a
+    # once-a-day pre-event view is what the scoring needs anyway.
+    scheduler.add_job(
+        observation_logger.refresh,
+        "interval",
+        hours=24,
+        id="observation_log",
+        next_run_time=base_tick + timedelta(minutes=20),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        observation_logger.settle,
+        "interval",
+        hours=24,
+        id="observation_settle",
+        next_run_time=base_tick + timedelta(minutes=35),
+        replace_existing=True,
+    )
     scheduler.add_job(
         run_full_refresh,
         "interval",
