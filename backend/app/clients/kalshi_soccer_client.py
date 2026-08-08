@@ -1131,3 +1131,93 @@ def get_cup_total_markets() -> list[dict]:
                     continue
                 rows.append(_cup_row(cup, cfg, ev, m, home, away, line=line, side="over"))
     return rows
+
+
+# --- UEFA CLUB COMPETITIONS (2026-08-08) -----------------------------------
+# Cross-COUNTRY, so unlike the domestic cups above there is no "top/second tier"
+# pair -- each club's league is resolved individually and converted with the
+# fitted strength offsets (app/models/uefa_match.py).
+#
+# ADVANCE IS DELIBERATELY NOT INGESTED. KXUCLADVANCE and friends exist and have
+# live inventory, but UEFA knockout ties are decided over TWO LEGS plus extra
+# time, so "to advance" depends on an aggregate score across two matches. The
+# single-leg formula that prices domestic cup advancement would be wrong here
+# (see uefa_match.py's own docstring), and pricing it off the single-match
+# distribution would be worse than not pricing it. GAME and TOTAL settle on one
+# match's regulation result and are fine.
+#
+# SPREAD is also skipped for now: its yes_sub_title uses a different shape from
+# the league spread parser ("Goal Diff Reg Time: <team> ...") and there are only
+# 16 live rows, so it is not worth a bespoke parser until the league phase.
+UEFA_COMPETITIONS = {
+    "ucl": {"name": "Champions League", "moneyline": "KXUCLGAME", "total": "KXUCLTOTAL"},
+    "uel": {"name": "Europa League", "moneyline": "KXUELGAME", "total": "KXUELTOTAL"},
+    "uecl": {"name": "Conference League", "moneyline": "KXUECLGAME", "total": "KXUECLTOTAL"},
+}
+
+
+def _uefa_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **extra) -> dict:
+    row = {
+        "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
+        "competition": comp, "competition_name": cfg["name"],
+        "home_team": home, "away_team": away,
+        "ticker": m["ticker"], "estimated_start_time": m.get("occurrence_datetime"),
+        "yes_bid": _to_float(m.get("yes_bid_dollars")), "yes_ask": _to_float(m.get("yes_ask_dollars")),
+        "last_price": _to_float(m.get("last_price_dollars")), "volume": _to_float(m.get("volume_fp")),
+        "status": m.get("status"),
+    }
+    row.update(extra)
+    return row
+
+
+def get_uefa_moneyline_markets() -> list[dict]:
+    """Regulation-time 3-way for a single UEFA match. Labels carry the same
+    "Reg Time: " prefix the domestic cups use."""
+    rows = []
+    for comp, cfg in UEFA_COMPETITIONS.items():
+        for ev in get_open_events(cfg["moneyline"]):
+            teams = _cup_pair(ev.get("title", ""))
+            if teams is None:
+                continue
+            home, away = teams
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                label = _REG_TIME_PREFIX.sub("", (m.get("yes_sub_title") or "").strip())
+                if label.lower() == "tie":
+                    side, team = "draw", None
+                elif label == home:
+                    side, team = "home", home
+                elif label == away:
+                    side, team = "away", away
+                else:
+                    continue
+                rows.append(_uefa_row(comp, cfg, ev, m, home, away, side=side, team=team))
+    return rows
+
+
+def get_uefa_total_markets() -> list[dict]:
+    """Over/under total goals in regulation."""
+    rows = []
+    for comp, cfg in UEFA_COMPETITIONS.items():
+        for ev in get_open_events(cfg["total"]):
+            teams = _cup_pair(ev.get("title", ""))
+            if teams is None:
+                continue
+            home, away = teams
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                mt = re.search(r"([\d.]+)", m.get("yes_sub_title") or m.get("title") or "")
+                if not mt:
+                    continue
+                try:
+                    line = float(mt.group(1))
+                except ValueError:
+                    continue
+                rows.append(_uefa_row(comp, cfg, ev, m, home, away, line=line, side="over"))
+    return rows

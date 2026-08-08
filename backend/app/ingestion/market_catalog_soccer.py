@@ -708,3 +708,33 @@ def upsert_kalshi_cup_total_market(session: Session, row: dict, soccer_match_id:
     _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
                      yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
     return market
+
+
+# --- UEFA CLUB COMPETITIONS (2026-08-08) -----------------------------------
+# Same storage shape as the domestic cups: the COMPETITION is the league code,
+# so a UEFA tie can never leak into a domestic league's round-robin. Each club's
+# real league is resolved at pricing time and converted with the fitted strength
+# offsets (models/uefa_match.py).
+UEFA_LEAGUE_CODES = {"ucl": "UCL", "uel": "UEL", "uecl": "UECL"}
+
+
+def uefa_league_code(competition: str) -> str:
+    return UEFA_LEAGUE_CODES.get(competition, competition.upper())
+
+
+def upsert_kalshi_uefa_moneyline_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "uefa_moneyline_3way", soccer_match_id)
+    market.team = row.get("team")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_uefa_total_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "uefa_total", soccer_match_id)
+    market.line = row.get("line")
+    market.side = "over"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market

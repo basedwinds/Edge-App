@@ -586,3 +586,45 @@ def refresh_kalshi_cup_markets():
             session.close()
     log.info("kalshi cup markets refreshed: %s", counts)
     return counts
+
+
+def refresh_kalshi_uefa_markets():
+    """UEFA club competitions. Same separate-entrypoint reasoning as
+    refresh_kalshi_cup_markets, and the same fetch-before-session discipline.
+
+    ADVANCE is not fetched at all -- UEFA knockout ties run over two legs, so
+    that market cannot be priced from a single-match distribution (see
+    models/uefa_match.py). Ingesting it would only produce rows this app must
+    then refuse to price.
+    """
+    batches = [
+        (kalshi_soccer_client.get_uefa_moneyline_markets(),
+         market_catalog_soccer.upsert_kalshi_uefa_moneyline_market, "uefa_moneyline"),
+        (kalshi_soccer_client.get_uefa_total_markets(),
+         market_catalog_soccer.upsert_kalshi_uefa_total_market, "uefa_total"),
+    ]
+    counts: dict[str, int] = {}
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            match_id_by_tie: dict[tuple, int | None] = {}
+            for rows, upsert, label in batches:
+                n = 0
+                for row in rows:
+                    league = market_catalog_soccer.uefa_league_code(row["competition"])
+                    date = (row.get("estimated_start_time") or "")[:10] or None
+                    key = (league, canonical_team_key(row["home_team"]),
+                           canonical_team_key(row["away_team"]), date or "")
+                    if key not in match_id_by_tie:
+                        match = market_catalog_soccer.find_or_create_upcoming_match(
+                            session, league, row["home_team"], row["away_team"], date)
+                        session.flush()
+                        match_id_by_tie[key] = match.id if match is not None else None
+                    upsert(session, row, match_id_by_tie[key])
+                    n += 1
+                counts[label] = n
+            session.commit()
+        finally:
+            session.close()
+    log.info("kalshi uefa markets refreshed: %s", counts)
+    return counts

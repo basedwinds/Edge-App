@@ -54,6 +54,7 @@ from app.ingestion.market_catalog_soccer import get_soccer_news_adjustment_cache
 from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_match
 from app.models.baseline import elo_service_soccer
 from app.models.cup_match import predict_cup_tie
+from app.models.uefa_match import predict_uefa_match
 from app.models.combine import combine_probability_3way
 from app.models.ladder_sanity import (
     SOCCER_LIVE_TRADING_MIN_PRICE_SWING,
@@ -77,6 +78,8 @@ GAME_MARKET_TYPES = {
     "second_half_winner", "second_half_spread", "second_half_total", "second_half_team_total", "second_half_btts",
     # Domestic cups (2026-08-08) -- game-level, not futures.
     "cup_moneyline_3way", "cup_advance", "cup_total",
+    # UEFA club competitions (2026-08-08) -- cross-country, offsets-based.
+    "uefa_moneyline_3way", "uefa_total",
 }
 
 # Real threshold-LADDER market types (multiple lines/rungs per real match+
@@ -323,6 +326,45 @@ def _cup_prediction(match: SoccerMatch | None):
     return predict_cup_tie(hk, ak, states[top], states.get(second), second_teams)
 
 
+# UEFA competitions are stored under their own league code for the same reason
+# cups are: a UEFA tie is not a fixture in either club's league. Unlike a cup
+# there is no top/second tier -- each club's league is resolved individually and
+# the fitted strength offsets do the conversion (models/uefa_match.py).
+UEFA_LEAGUES = {"UCL", "UEL", "UECL"}
+UEFA_MARKET_TYPES = {"uefa_moneyline_3way", "uefa_total"}
+
+
+def _uefa_prediction(match: SoccerMatch | None):
+    if match is None or match.league not in UEFA_LEAGUES:
+        return None
+    states = elo_service_soccer._cache.get("states_by_league") or {}
+    resolved = []
+    for name in (match.home_team, match.away_team):
+        league = elo_service_soccer.resolve_league(name)
+        if league is None:
+            return None  # club is not in any league this app rates
+        resolved.append((canonical_team_key(name), league))
+    (hk, hl), (ak, al) = resolved
+    # predict_uefa_match itself refuses a league with no fitted offset, rather
+    # than pricing it off an assumed average.
+    return predict_uefa_match(hk, hl, ak, al, states)
+
+
+def _uefa_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _uefa_prediction(match)
+    if pred is None:
+        return None
+    return {"home": pred.prob_home_win, "draw": pred.prob_draw,
+            "away": pred.prob_away_win}.get(market.side, lambda: None)()
+
+
+def _uefa_total_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _uefa_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    return pred.prob_total_over(market.line)
+
+
 def _cup_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
     pred = _cup_prediction(match)
     if pred is None:
@@ -358,6 +400,8 @@ def cup_model_note(match: SoccerMatch | None) -> str | None:
 
 
 _MODEL_PROB_DISPATCH = {
+    "uefa_moneyline_3way": lambda m, match, news: _uefa_moneyline_model_prob(m, match),
+    "uefa_total": lambda m, match, news: _uefa_total_model_prob(m, match),
     "cup_moneyline_3way": lambda m, match, news: _cup_moneyline_model_prob(m, match),
     "cup_advance": lambda m, match, news: _cup_advance_model_prob(m, match),
     "cup_total": lambda m, match, news: _cup_total_model_prob(m, match),
@@ -589,6 +633,13 @@ def list_soccer_markets(session: Session = Depends(get_session)):
     def _either_team_unrated(match: SoccerMatch | None) -> bool:
         if match is None:
             return False
+        if match.league in UEFA_LEAGUES:
+            # Identical trap to the cup one below: a UEFA tie's league is the
+            # COMPETITION, which has no rating pool, so the per-league count
+            # would read zero for both clubs and reject every row before
+            # _model_prob runs. Resolve each club's real league instead.
+            return any(elo_service_soccer.resolve_league(n) is None
+                       for n in (match.home_team, match.away_team))
         if match.league in CUP_TIERS:
             # A cup tie's league is the COMPETITION ("COPPA_ITALIA"), which has
             # no rating pool by design, so the per-league count below would read
