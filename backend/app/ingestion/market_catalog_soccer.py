@@ -17,20 +17,39 @@ maps to THREE Market rows (home/draw/away), not two.
 Every Market/PlacedBet row this writes gets sport="soccer"."""
 import datetime
 import json
+import logging
 
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
 from app.db.models import Market, MarketSnapshot, SoccerMatch, SoccerNewsAdjustmentCache
-from app.ingestion.market_matcher_soccer import match_upcoming_soccer_match
+from app.ingestion.market_matcher_soccer import canonical_team_key, match_upcoming_soccer_match
 from app.models.news_adjustment.schema import NewsAdjustment
+
+log = logging.getLogger("market_catalog_soccer")
 
 
 def _load_upcoming_matches(session: Session, league: str) -> list[dict]:
     rows = session.query(SoccerMatch).filter(
         SoccerMatch.league == league, SoccerMatch.result_ft.is_(None),
     ).all()
-    return [{"id": r.id, "home_team": r.home_team, "away_team": r.away_team} for r in rows]
+    return [{"id": r.id, "home_team": r.home_team, "away_team": r.away_team,
+             "match_date": r.match_date, "estimated_start_time": r.estimated_start_time}
+            for r in rows]
+
+
+def _kickoff_day(match_date, estimated_start_time):
+    """Real kickoff DAY. estimated_start_time wins when present -- a live row's
+    match_date is the SCRAPE date and can sit days from kickoff (measured up to
+    7), which is exactly why a date-equality join on it would not work."""
+    for v in (estimated_start_time, match_date):
+        if not v:
+            continue
+        try:
+            return datetime.date.fromisoformat(str(v)[:10])
+        except ValueError:
+            continue
+    return None
 
 
 def _infer_season(league: str, match_date: str) -> str:
@@ -56,6 +75,44 @@ def find_or_create_upcoming_match(
     found = match_upcoming_soccer_match(home_team_name, away_team_name, upcoming)
     if found is not None:
         return session.get(SoccerMatch, found["id"])
+
+    # FIXTURE FALLBACK -- the name match above failed, which does NOT mean this
+    # is a new fixture. It routinely means the other platform spells the clubs
+    # differently, and creating a row here is how this app accumulated 14
+    # duplicate fixtures holding 91 bets (2026-08-08): CS Marítimo vs Madeira,
+    # Vitória SC vs Guimarães, and nine MLS pairs where one feed simply
+    # TRUNCATES the name ("Los Angeles F", "New York RB"). Neither row could
+    # settle, because refresh_soccer_results also matches ESPN by name.
+    #
+    # So before minting a row, ask whether this fixture already exists: same
+    # league, kickoff within a day, and at least ONE side canonicalizing to the
+    # same club. That is the identity test scripts/dedupe_soccer_fixtures.py
+    # uses to merge them after the fact, applied here to stop making them.
+    #
+    # ONLY when exactly one candidate matches. Names are what is unreliable
+    # here, so an ambiguous answer must create a new row rather than guess --
+    # a missed join costs one duplicate, a wrong one silently merges two real
+    # fixtures and corrupts both their bets.
+    ours = _kickoff_day(match_date, None)
+    if ours is not None:
+        hk, ak = canonical_team_key(home_team_name), canonical_team_key(away_team_name)
+        cands = []
+        for row in upcoming:
+            theirs = _kickoff_day(row.get("match_date"), row.get("estimated_start_time"))
+            if theirs is None or abs((theirs - ours).days) > 1:
+                continue
+            rh, ra = canonical_team_key(row["home_team"]), canonical_team_key(row["away_team"])
+            if hk in (rh, ra) or ak in (rh, ra):
+                cands.append(row)
+        if len(cands) == 1:
+            log.info("soccer: joined %s vs %s onto existing fixture %s (%s vs %s) by FIXTURE, "
+                     "not name", home_team_name, away_team_name, cands[0]["id"],
+                     cands[0]["home_team"], cands[0]["away_team"])
+            return session.get(SoccerMatch, cands[0]["id"])
+        if len(cands) > 1:
+            log.warning("soccer: %s vs %s matches %d existing fixtures by date+side -- "
+                        "creating a new row rather than guessing", home_team_name,
+                        away_team_name, len(cands))
 
     resolved_date = match_date or datetime.date.today().isoformat()
     source_match_id = f"live:{league}:{home_team_name}:{away_team_name}:{resolved_date}"
