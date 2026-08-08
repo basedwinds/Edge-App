@@ -4,6 +4,7 @@ market_catalog_soccer.py's docstring), but grouped by 3 rows per event
 (home/draw/away), not 2 like every moneyline market elsewhere in this app."""
 import datetime
 import logging
+import time
 
 from app.clients import espn_soccer_client, kalshi_soccer_client, polymarket_soccer_client, transfermarkt_client
 from app.db.database import SessionLocal
@@ -543,11 +544,14 @@ def run_full_refresh_soccer():
         ("polymarket markets", refresh_polymarket_soccer_markets),
         ("kalshi futures", refresh_kalshi_soccer_futures),
     )
+    timings: list[tuple[str, float]] = []
     for name, fn in steps:
+        _t0 = time.monotonic()
         try:
             fn()
         except Exception:
             log.exception("soccer %s refresh failed -- continuing the rest of the pass", name)
+        timings.append((name, time.monotonic() - _t0))
     # REAL BUG this fixes (2026-08-08, found within hours of building them).
     # Both of these were written, verified by hand, and then left out of this
     # function -- so their markets were ingested ONCE and never polled again.
@@ -571,17 +575,29 @@ def run_full_refresh_soccer():
     # likely thing in this function to throw. A new, optional market family must
     # never be able to take settlement down with it.
     for name, fn in (("cup", refresh_kalshi_cup_markets), ("uefa", refresh_kalshi_uefa_markets)):
+        _t0 = time.monotonic()
         try:
             fn()
         except Exception:
             log.exception("soccer %s market refresh failed -- continuing the rest of the pass", name)
+        timings.append((name, time.monotonic() - _t0))
     for name, fn in (("results", refresh_soccer_results),
                      ("news adjustments", refresh_soccer_news_adjustments),
                      ("bet settlement", settle_soccer_placed_bets)):
+        _t0 = time.monotonic()
         try:
             fn()
         except Exception:
             log.exception("soccer %s failed -- continuing the rest of the pass", name)
+        timings.append((name, time.monotonic() - _t0))
+
+    # PER-STEP TIMING, because this pass is currently slower than its own
+    # 5-minute interval and apscheduler is reporting overlapping instances.
+    # Without this line the only way to find out which step is eating the
+    # budget is to guess. Logged as one sorted line per pass, worst first.
+    total = sum(d for _n, d in timings)
+    breakdown = "  ".join(f"{n}={d:.1f}s" for n, d in sorted(timings, key=lambda x: -x[1]))
+    log.warning("soccer pass took %.1fs (interval is 300s) -- %s", total, breakdown)
 
 
 def refresh_kalshi_cup_markets():
