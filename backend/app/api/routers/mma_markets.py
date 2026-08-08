@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 
 from app.api.routers.markets import _batch_latest_snapshots, _edge_sentence, _implied_prob, _seeded_choice
 from app.api.routers.settings import get_mma_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
-from app.api.schemas import MmaMarketOut, ReasoningFactorOut, ReasoningOut
+from app.api.schemas import FuturesMarketOut, MmaMarketOut, ReasoningFactorOut, ReasoningOut
 from app.db.database import get_session
 from app.db.models import Market, MmaFight
 from app.ingestion.market_matcher_mma import resolve_fight_side
@@ -573,3 +573,66 @@ def get_mma_market_reasoning(
         factors=factors,
         caveats=caveats,
     )
+
+
+TITLE_NO_BASELINE_REASON = (
+    "No baseline yet -- pricing 'who holds the belt on Dec 31' needs the current champion, "
+    "the title fights scheduled before then, and retention chained forward. This app has "
+    "fight-level win probability (elo_service_mma), which is the INPUT to that model, not "
+    "the answer. Shown unpriced rather than as a guessed number."
+)
+
+
+@router.get("/futures", response_model=list[FuturesMarketOut])
+def list_mma_futures(session: Session = Depends(get_session)):
+    """UFC weight-class title futures -- "Who will be the {Weight} Title Holder
+    on Dec 31?", one leg per candidate fighter, grouped by weight class.
+
+    INVENTORY WITHOUT A MODEL, deliberately. 81 live markets across 8 weight
+    classes were being ingested by nothing at all until 2026-08-08; now they are
+    stored and surfaced, but every row carries model_prob=None and is never
+    staked, because no model for belt retention exists yet (see #109/#110 and
+    TITLE_NO_BASELINE_REASON). Same posture this app already takes for
+    method_of_victory and NFL preseason: show the market, refuse to invent a
+    number for it.
+
+    Surfacing them unpriced is not cosmetic -- it is what starts them accruing
+    forward observation-log evidence, so the day a retention model lands there
+    is already a history of market prices to score it against.
+    """
+    markets = (
+        session.query(Market)
+        .filter(Market.sport == "mma", Market.market_type == "title_holder", Market.status == "active")
+        .all()
+    )
+    snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
+    out = []
+    for m in markets:
+        snap = snapshots_by_market.get(m.id)
+        out.append(
+            FuturesMarketOut(
+                id=m.id,
+                market_type=m.market_type,
+                source=m.source,
+                team=m.team,
+                group_label=m.group_label,
+                line=None,
+                side=None,
+                implied_prob=_implied_prob(snap),
+                yes_bid=snap.yes_bid if snap else None,
+                yes_ask=snap.yes_ask if snap else None,
+                last_price=snap.last_price if snap else None,
+                volume=snap.volume if snap else None,
+                updated_at=m.updated_at.isoformat() if m.updated_at else None,
+                model_prob=None,
+                model_validated=False,
+                edge=None,
+                no_baseline_reason=TITLE_NO_BASELINE_REASON,
+                kelly_fraction=None,
+                suggested_stake_dollars=None,
+                suggested_stake_units=None,
+                stake_pool=None,
+                line_move_pp=None,
+            )
+        )
+    return out

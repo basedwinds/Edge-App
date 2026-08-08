@@ -245,3 +245,67 @@ def get_round_of_victory_markets() -> list[dict]:
                 is_other_outcome=is_other,
             ))
     return rows
+
+
+# --- WEIGHT-CLASS TITLE FUTURES (2026-08-08) -------------------------------
+# "Who will be the {Weight} Title Holder on Dec 31, {year}?" -- one binary
+# market per candidate fighter, yes_sub_title = the fighter's name. A futures
+# family shaped like racing's drivers_champion: a field of candidates whose
+# probabilities sum to ~1 within a weight class.
+#
+# NOT FIGHT-TIED, which is why these get their own row builder instead of
+# _market_row: there is no fight_suffix to hang them on and no MmaFight row to
+# join to. The weight class IS the grouping key.
+#
+# CONFIRMED LIVE 2026-08-08, 81 open markets across 8 series:
+#   BANTAM 9, FEATHER 11, FLY 9, HEAVY 11, LHEAVY 10, LIGHT 12, MIDDLE 8, WELTER 11
+# The three generic series (KXUFC, KXUFCTITLE, KXUFCMWEIGHT) are catalogued by
+# Kalshi but returned ZERO open events, so they are deliberately absent here --
+# the same "ship what has real inventory" rule the rest of this app follows.
+#
+# NO MODEL YET. Pricing "who holds the belt on Dec 31" needs current champion +
+# scheduled title fights in the window + retention chained forward, structurally
+# like racing_championship. elo_service_mma gives fight-level win probability,
+# which is the input to that, not the answer. These therefore surface UNPRICED
+# with a no-baseline reason rather than a guessed number -- same posture as
+# method_of_victory. Ingesting them now means they start accruing forward
+# observation-log evidence immediately, and the rows exist the day a model lands.
+TITLE_SERIES = {
+    "bantamweight": "KXUFCBANTAMWEIGHTTITLE",
+    "featherweight": "KXUFCFEATHERWEIGHTTITLE",
+    "flyweight": "KXUFCFLYWEIGHTTITLE",
+    "heavyweight": "KXUFCHEAVYWEIGHTTITLE",
+    "light_heavyweight": "KXUFCLHEAVYWEIGHTTITLE",
+    "lightweight": "KXUFCLIGHTWEIGHTTITLE",
+    "middleweight": "KXUFCMIDDLEWEIGHTTITLE",
+    "welterweight": "KXUFCWELTERWEIGHTTITLE",
+}
+
+
+def get_title_markets() -> list[dict]:
+    """One row per (weight class, candidate fighter)."""
+    rows = []
+    for weight_class, series in TITLE_SERIES.items():
+        for ev in get_open_events(series):
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                fighter = (m.get("yes_sub_title") or "").strip()
+                if not fighter:
+                    continue  # never invent a candidate
+                rows.append({
+                    "event_ticker": ev["event_ticker"],
+                    "event_title": ev.get("title", ""),
+                    "series": series,
+                    "weight_class": weight_class,
+                    "fighter": fighter,
+                    "ticker": m["ticker"],
+                    "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                    "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                    "last_price": _to_float(m.get("last_price_dollars")),
+                    "volume": _to_float(m.get("volume_fp")),
+                    "status": m.get("status"),
+                })
+    return rows

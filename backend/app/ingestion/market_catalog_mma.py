@@ -368,3 +368,41 @@ def upsert_kalshi_mma_round_of_victory_market(session: Session, row: dict, mma_f
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
+
+
+# --- WEIGHT-CLASS TITLE FUTURES (2026-08-08) -------------------------------
+# NOT fight-tied: there is no MmaFight to join to, so mma_fight_id stays NULL
+# and the WEIGHT CLASS is the grouping key (group_label), the same way soccer's
+# league_winner futures group by league. That grouping is what lets the futures
+# view and any future coherence check treat a weight class as one field whose
+# candidate probabilities should sum to ~1.
+_TITLE_LABEL = {
+    "bantamweight": "UFC Bantamweight Title Holder",
+    "featherweight": "UFC Featherweight Title Holder",
+    "flyweight": "UFC Flyweight Title Holder",
+    "heavyweight": "UFC Heavyweight Title Holder",
+    "light_heavyweight": "UFC Light Heavyweight Title Holder",
+    "lightweight": "UFC Lightweight Title Holder",
+    "middleweight": "UFC Middleweight Title Holder",
+    "welterweight": "UFC Welterweight Title Holder",
+}
+
+
+def upsert_kalshi_mma_title_market(session: Session, row: dict) -> Market:
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="title_holder", sport="mma",
+        )
+        session.add(market)
+    market.team = row["fighter"]
+    market.group_label = _TITLE_LABEL.get(row["weight_class"], row["weight_class"])
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(MarketSnapshot(
+        market_id=market.id, ts=datetime.datetime.utcnow(),
+        yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
+        last_price=row.get("last_price"), volume=row.get("volume"),
+    ))
+    return market

@@ -288,7 +288,39 @@ def refresh_polymarket_mma_markets():
 
 
 def run_full_refresh_mma():
-    refresh_mma_fights()
-    refresh_mma_ratings()
-    refresh_kalshi_mma_markets()
-    refresh_polymarket_mma_markets()
+    # Each step wrapped so one upstream failure -- a Kalshi 429 is the common
+    # one -- cannot silently skip everything after it. That exact failure was
+    # skipping soccer's settlement until 2026-08-08; the same shape applies here.
+    for name, fn in (
+        ("fights", refresh_mma_fights),
+        ("ratings", refresh_mma_ratings),
+        ("kalshi markets", refresh_kalshi_mma_markets),
+        ("kalshi title futures", refresh_kalshi_mma_title_markets),
+        ("polymarket markets", refresh_polymarket_mma_markets),
+    ):
+        try:
+            fn()
+        except Exception:
+            log.exception("mma %s refresh failed -- continuing the rest of the pass", name)
+
+
+def refresh_kalshi_mma_title_markets():
+    """UFC weight-class title futures. Own entrypoint, not folded into
+    refresh_kalshi_mma_markets, for a structural reason: that function reads the
+    fight list first and hangs every row on a fight_suffix. These are NOT
+    fight-tied -- there is no fight to join to -- so threading them through
+    would put a null-fight special case into the busiest path in this file.
+
+    Fetch before the session opens, same discipline as every poller here.
+    """
+    rows = kalshi_mma_client.get_title_markets()
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for row in rows:
+                market_catalog_mma.upsert_kalshi_mma_title_market(session, row)
+            session.commit()
+        finally:
+            session.close()
+    log.info("kalshi mma title markets refreshed: %d rows", len(rows))
+    return len(rows)
