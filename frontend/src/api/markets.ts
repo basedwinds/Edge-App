@@ -301,6 +301,40 @@ export interface ReasoningPayload {
   caveats: string[];
 }
 
+/** Backend router prefix that serves each sport's reasoning endpoint.
+ *
+ *  A Record<SportKey, string> ON PURPOSE, not an if/else chain: TypeScript now
+ *  fails the build if a sport is missing, which is exactly how this broke.
+ *
+ *  REAL BUG (found 2026-08-08): the old chain had no "cfb" branch, so College
+ *  Football fell through to NFL's /markets/:id/reasoning. That endpoint does not
+ *  404 -- it returns 200 with ZERO factors and an empty summary, so the reasoning
+ *  panel rendered blank rather than erroring. CFB is the largest futures family
+ *  in the app (1,380 markets), so "futures reasoning won't load" was almost
+ *  entirely this. Measured on market 59813: /markets returned 427 bytes and 0
+ *  factors, /cfb returned 1,404 bytes and a real factor.
+ *
+ *  sports.ts's own docstring already records earlier per-sport lists drifting,
+ *  "some missing cfb" -- the same omission, in a list that had no compiler check.
+ *  This one has one. */
+const REASONING_PREFIX: Record<SportKey, string> = {
+  nfl: "",           // NFL is served by the root /markets router
+  nba: "/nba",
+  wnba: "/wnba",
+  cfb: "/cfb",
+  mlb: "/mlb",
+  soccer: "/soccer",
+  mma: "/mma",
+  tennis: "/tennis",
+  valorant: "/valorant",
+  cs2: "/cs2",
+  lol: "/lol",
+  // The three racing series share one backend router.
+  f1: "/racing",
+  irl: "/racing",
+  nascar: "/racing",
+};
+
 export async function fetchMarketReasoning(
   marketId: number,
   modelProb: number | null,
@@ -310,18 +344,7 @@ export async function fetchMarketReasoning(
   const params = new URLSearchParams();
   if (modelProb !== null) params.set("model_prob", String(modelProb));
   if (marketProb !== null) params.set("market_prob", String(marketProb));
-  const path =
-    sport === "f1" || sport === "nascar" || sport === "irl" ? `/racing/markets/${marketId}/reasoning`
-    : sport === "nba" ? `/nba/markets/${marketId}/reasoning`
-    : sport === "wnba" ? `/wnba/markets/${marketId}/reasoning`
-    : sport === "mlb" ? `/mlb/markets/${marketId}/reasoning`
-    : sport === "mma" ? `/mma/markets/${marketId}/reasoning`
-    : sport === "tennis" ? `/tennis/markets/${marketId}/reasoning`
-    : sport === "soccer" ? `/soccer/markets/${marketId}/reasoning`
-    : sport === "valorant" ? `/valorant/markets/${marketId}/reasoning`
-    : sport === "cs2" ? `/cs2/markets/${marketId}/reasoning`
-    : sport === "lol" ? `/lol/markets/${marketId}/reasoning`
-    : `/markets/${marketId}/reasoning`;
+  const path = `${REASONING_PREFIX[sport]}/markets/${marketId}/reasoning`;
   return apiGet<ReasoningPayload>(`${path}?${params.toString()}`);
 }
 
