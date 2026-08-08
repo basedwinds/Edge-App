@@ -523,10 +523,31 @@ def run_full_refresh_soccer():
     # simulations and ~10 live ESPN calls, and this function fires every 5
     # minutes -- see MIN_REFRESH_INTERVAL in playoff_sim_service_mls for the
     # incident that caused. It has its own slow scheduler job.
-    refresh_soccer_ratings()
-    refresh_kalshi_soccer_markets()
-    refresh_polymarket_soccer_markets()
-    refresh_kalshi_soccer_futures()
+    #
+    # EVERY STEP IS WRAPPED, and this is not defensive padding -- it is fixing a
+    # real, observed, pre-existing failure. On 2026-08-08 the whole pass was
+    # dying at refresh_kalshi_soccer_futures on a Kalshi 429 (rate limit) raised
+    # out of get_open_events. One rate-limited futures fetch therefore silently
+    # skipped EVERY later step in the pass, including refresh_soccer_results and
+    # settle_soccer_placed_bets -- so settled bets were not being settled, for a
+    # reason that had nothing to do with settlement and left no error anyone was
+    # looking at. This predates the cup/UEFA work; those additions only made it
+    # visible by being at the end of the queue (and, being ~90 more Kalshi
+    # events per cycle, by adding to the rate pressure that triggers it).
+    #
+    # A transient upstream 429 in ONE market family must never be able to stop
+    # the others, and above all must never stop settlement.
+    steps = (
+        ("ratings", refresh_soccer_ratings),
+        ("kalshi markets", refresh_kalshi_soccer_markets),
+        ("polymarket markets", refresh_polymarket_soccer_markets),
+        ("kalshi futures", refresh_kalshi_soccer_futures),
+    )
+    for name, fn in steps:
+        try:
+            fn()
+        except Exception:
+            log.exception("soccer %s refresh failed -- continuing the rest of the pass", name)
     # REAL BUG this fixes (2026-08-08, found within hours of building them).
     # Both of these were written, verified by hand, and then left out of this
     # function -- so their markets were ingested ONCE and never polled again.
@@ -554,9 +575,13 @@ def run_full_refresh_soccer():
             fn()
         except Exception:
             log.exception("soccer %s market refresh failed -- continuing the rest of the pass", name)
-    refresh_soccer_results()
-    refresh_soccer_news_adjustments()
-    settle_soccer_placed_bets()
+    for name, fn in (("results", refresh_soccer_results),
+                     ("news adjustments", refresh_soccer_news_adjustments),
+                     ("bet settlement", settle_soccer_placed_bets)):
+        try:
+            fn()
+        except Exception:
+            log.exception("soccer %s failed -- continuing the rest of the pass", name)
 
 
 def refresh_kalshi_cup_markets():
