@@ -208,3 +208,92 @@ def fetch_division_history(div: str, end_year: int | None = None) -> pd.DataFram
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+# --- "EXTRA" FORMAT (2026-08-08) -------------------------------------------
+# A SECOND, structurally different feed from the same publisher, at
+# /new/{CODE}.csv. Everything above uses mmz4281/{season}/{div}.csv -- one file
+# per season per division, with FTHG/FTAG and AvgH-style odds. The extra files
+# are one file per COUNTRY covering every season, with different column names.
+# They are the only free source for the non-European leagues Kalshi actually
+# lists, so they get their own reader rather than being forced into the other.
+#
+# VERIFIED LIVE before writing this (2026-08-08):
+#   BRA 5,525 rows / 15 seasons   ARG 6,280 / 16   MEX 4,682 / 15
+#   JPN 4,523 / 14                USA 6,084 / 15   CHN 2,972 / 13
+#
+# Columns: Country, League, Season, Date, Time, Home, Away, HG, AG, Res, then
+# PSCH/PSCD/PSCA (Pinnacle CLOSING), MaxCH/MaxCD/MaxCA, AvgCH/AvgCD/AvgCA.
+#
+# THE ODDS ARE THE REASON THIS IS WORTH DOING. 5,275 of 5,525 Brazilian rows
+# carry closing prices, which makes these leagues BACKTESTABLE against a real
+# market -- something MLS never was and never can be (see SoccerMatch's own
+# docstring). A first check reported "no odds" because it looked for AvgH/PH;
+# this format names them AvgCH/PSCH.
+#
+# FOUR DIFFERENCES that would silently corrupt data if assumed away:
+#   1. No `Div` column, so fetch_season_csv's redirect-substitution guard does
+#      not apply. `Country` is validated instead -- these files are not served
+#      through the redirect that swapped a Spanish season into the Portuguese
+#      pool, but validating something is the point of that guard.
+#   2. Dates are DD/MM/YYYY only, not the mmz4281 mixed DD/MM/YY.
+#   3. One file can hold MULTIPLE divisions via the `League` column. BRA
+#      currently carries only "Serie A", but the code must not assume that --
+#      it filters on the league name it was asked for.
+#   4. Current-season rows have NaN closing odds (not yet settled), so odds
+#      must stay optional per row.
+EXTRA_BASE_URL = "https://www.football-data.co.uk/new/{code}.csv"
+
+# app division code -> (file code, League value inside that file, display name)
+EXTRA_DIVISIONS = {
+    "BRA1": ("BRA", "Serie A", "Brazil - Serie A"),
+    "ARG1": ("ARG", "Liga Profesional", "Argentina - Liga Profesional"),
+    "MEX1": ("MEX", "Liga MX", "Mexico - Liga MX"),
+    "JPN1": ("JPN", "J1 League", "Japan - J1 League"),
+}
+
+
+def fetch_extra_division(div: str) -> pd.DataFrame:
+    """Every season of one extra-format division, normalised onto the SAME
+    column names the mmz4281 reader produces, so soccer_data can treat both
+    identically. Returns an empty frame rather than raising."""
+    entry = EXTRA_DIVISIONS.get(div)
+    if entry is None:
+        return pd.DataFrame()
+    code, league_name, _label = entry
+    try:
+        resp = httpx.get(EXTRA_BASE_URL.format(code=code), timeout=60.0,
+                         follow_redirects=True, headers=_HEADERS)
+        if resp.status_code != 200 or len(resp.content) < 200:
+            return pd.DataFrame()
+        df = pd.read_csv(io.BytesIO(resp.content), encoding="latin-1", on_bad_lines="skip")
+    except Exception:
+        return pd.DataFrame()
+
+    for required in ("Home", "Away", "HG", "AG", "Date"):
+        if required not in df.columns:
+            return pd.DataFrame()  # shape changed -- refuse rather than guess
+
+    # A file may carry several divisions; keep only the one asked for. If the
+    # League column is absent entirely, the file IS one division.
+    if "League" in df.columns:
+        df = df[df["League"].astype(str).str.strip() == league_name]
+    if df.empty:
+        return pd.DataFrame()
+
+    out = pd.DataFrame({
+        "Date": df["Date"],
+        "HomeTeam": df["Home"],
+        "AwayTeam": df["Away"],
+        "FTHG": pd.to_numeric(df["HG"], errors="coerce"),
+        "FTAG": pd.to_numeric(df["AG"], errors="coerce"),
+        "FTR": df["Res"] if "Res" in df.columns else None,
+        # Map this format's closing-odds names onto the ones
+        # _row_to_football_data_match already reads.
+        "AvgCH": pd.to_numeric(df.get("AvgCH", df.get("PSCH")), errors="coerce"),
+        "AvgCD": pd.to_numeric(df.get("AvgCD", df.get("PSCD")), errors="coerce"),
+        "AvgCA": pd.to_numeric(df.get("AvgCA", df.get("PSCA")), errors="coerce"),
+    })
+    out = out.dropna(subset=["FTHG", "FTAG"])  # unplayed fixtures carry no goals
+    season = pd.to_numeric(df.get("Season"), errors="coerce") if "Season" in df.columns else None
+    return out.assign(_div=div, _season_start_year=season)

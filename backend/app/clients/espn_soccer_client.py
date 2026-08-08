@@ -88,6 +88,12 @@ LEAGUE_CODES = {
     "SC0": "sco.1",      # Scottish Premiership
     "E2": "eng.3",       # League One
     "E3": "eng.4",       # League Two
+    # Extra-format leagues, added with the parser. Verified live:
+    # bra.1 40 events, arg.1 78, mex.1 33, jpn.1 40 in August 2026.
+    "BRA1": "bra.1",     # Brasileirao Serie A
+    "ARG1": "arg.1",     # Liga Profesional
+    "MEX1": "mex.1",     # Liga MX
+    "JPN1": "jpn.1",     # J1 League
     # Cup and continental competitions are stored under their COMPETITION as
     # the league code (see market_catalog_soccer.cup_league_code /
     # uefa_league_code), so they key in here the same way a league does.

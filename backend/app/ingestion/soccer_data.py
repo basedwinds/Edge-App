@@ -134,6 +134,18 @@ def build_football_data_cache(end_year: int | None = None) -> list[dict]:
             m = _row_to_football_data_match(row)
             if m is not None:
                 matches.append(m)
+
+    # EXTRA-FORMAT divisions (Brazil, Argentina, Mexico, Japan) come from a
+    # structurally different feed -- one file per COUNTRY, all seasons, its own
+    # column names -- so they have their own reader. fetch_extra_division
+    # normalises onto the SAME columns the loop above produces, which is why
+    # _row_to_football_data_match needs no special case here.
+    for div in football_data_client.EXTRA_DIVISIONS:
+        df = football_data_client.fetch_extra_division(div)
+        for _, row in df.iterrows():
+            m = _row_to_football_data_match(row)
+            if m is not None:
+                matches.append(m)
     matches.sort(key=lambda m: m["match_date"])
     FOOTBALL_DATA_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     FOOTBALL_DATA_CACHE_PATH.write_text(json.dumps(matches))
