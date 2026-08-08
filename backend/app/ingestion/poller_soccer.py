@@ -527,6 +527,20 @@ def run_full_refresh_soccer():
     refresh_kalshi_soccer_markets()
     refresh_polymarket_soccer_markets()
     refresh_kalshi_soccer_futures()
+    # REAL BUG this fixes (2026-08-08, found within hours of building them).
+    # Both of these were written, verified by hand, and then left out of this
+    # function -- so their markets were ingested ONCE and never polled again.
+    # The failure is not "no data": the rows sit in the DB, status active,
+    # priced correctly by the router. But this router drops any market whose
+    # newest MarketSnapshot is stale relative to the feed's own poll cadence
+    # (that is how it tells a live market from a dead one), and nothing was
+    # writing fresh snapshots. So all 191 cup rows silently disappeared from
+    # /soccer/markets about 40 minutes after being verified working, with
+    # every intermediate check -- market_type filter, active status, future
+    # match dates, a direct ORM query -- passing. A poller that is never
+    # scheduled looks exactly like a poller that is broken, one cycle later.
+    refresh_kalshi_cup_markets()
+    refresh_kalshi_uefa_markets()
     refresh_soccer_results()
     refresh_soccer_news_adjustments()
     settle_soccer_placed_bets()
