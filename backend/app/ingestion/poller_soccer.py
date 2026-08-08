@@ -543,6 +543,25 @@ def run_full_refresh_soccer():
         ("kalshi markets", refresh_kalshi_soccer_markets),
         ("polymarket markets", refresh_polymarket_soccer_markets),
         ("kalshi futures", refresh_kalshi_soccer_futures),
+        # MLS playoff sim. It has its OWN 6-hourly scheduler job, and this does
+        # not replace it -- this is a belt-and-braces warm so an empty cache
+        # cannot silently unprice all 60 MLS futures rows.
+        #
+        # REAL BUG this fixes (2026-08-08): mls_cup_winner and
+        # mls_conference_winner were serving 60/60 rows with model_prob=None.
+        # The model was fine -- run by hand it completes 10,000 sims over 242
+        # remaining fixtures in ~30s -- but its job had not fired in the live
+        # worker, so the in-process cache was empty and the router had nothing
+        # to read. Same shape as the cup rows earlier today: a working model,
+        # starved by scheduling.
+        #
+        # SAFE AT THIS CADENCE BY CONSTRUCTION, which is the whole point of
+        # playoff_sim_service_mls.MIN_REFRESH_INTERVAL: calling refresh() more
+        # often than every 6 hours returns the cached result immediately without
+        # simulating. That TTL was added precisely so a mistaken call site costs
+        # nothing -- see its own comment about the incident where this ran every
+        # 5 minutes and pinned a core.
+        ("mls playoff sim", refresh_mls_playoff_sim),
     )
     timings: list[tuple[str, float]] = []
     for name, fn in steps:
