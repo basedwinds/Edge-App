@@ -74,6 +74,19 @@ PRE_QUALIFYING_NOTE = (
     "grid is the single biggest input -- without it the model is flat, which reads as an edge on "
     "every backmarker. It sharpens and becomes stakeable once the grid is published."
 )
+# Flip to True to stake top_n again -- see the block in the pricing loop for the
+# full measurement and the exact condition for lifting it (fitted attrition
+# wired in, and check_racing_topn_calibration confirming the bands).
+STAKE_TOP_N = False
+TOPN_CALIBRATION_NOTE = (
+    "Priced and tracked, not staked: measured walk-forward over 142 real races, the finishing-order "
+    "model is badly calibrated away from the front. It said 92% for a top-20 finish that really "
+    "happens 69% of the time, and the error grows with N. The cause is that its strength spread was "
+    "fitted on who WINS, so nothing ever constrained the rest of the order -- and a top-20 market is "
+    "mostly a bet on whether the car survives, which it never simulated. The bias runs one way "
+    "(favourites too high), so an apparent edge here can be entirely model error. Race winner, pole "
+    "and head-to-head are unaffected and still staked."
+)
 CHAMP_NOTE = (
     "Season-title price: a standings-aware Monte Carlo simulates the remaining "
     "races from current championship points and driver strength. model_validated: "
@@ -455,6 +468,40 @@ def list_racing_markets(session: Session = Depends(get_session)):
                 stake = None
                 kelly = None
                 row.model_note = f"{row.model_note or ''} {PRE_QUALIFYING_NOTE}".strip()
+
+            # TOP-N HELD OFF STAKING, 2026-08-07. Separate from the gate above,
+            # and it fires even WITH a grid -- which is the whole point. The
+            # pre-qualifying gate was added because a flat field inflates
+            # backmarkers; measuring whether that survived qualifying
+            # (scripts/check_racing_topn_calibration.py, walk-forward over 142
+            # NASCAR races priced off their own real grids) found the opposite
+            # and worse problem underneath.
+            #
+            # The strength spread was fitted on P(1st) only, so nothing ever
+            # constrained the deep tail of the finishing order. Measured, with a
+            # grid known: top-20 said 92% where the truth was 69%; top-10 said 3%
+            # where the truth was 15%; error grows monotonically with N. Even
+            # top-3 runs +9.8pp (20-35% band) and +14.4pp (35-60%) on favourites.
+            # Against a 10pp staking gate, an apparent edge on a top-N favourite
+            # can be entirely model bias -- and since the app only stakes where
+            # model > market, the bias and the bet point the same way every time.
+            #
+            # NOT a permanent judgement on top_n. racing_sim now models attrition
+            # (a per-race chance of a race-ruining event, which is the missing
+            # mechanism -- 24.3% of NASCAR drivers starting top-5 finish in the
+            # back 40% of the field, and the sim had no way to produce that).
+            # Fitting that rate per series cuts calibration error 48-78% at
+            # essentially no cost to win Brier. LIFT THIS once the fitted rates
+            # are wired into the pricing path and check_racing_topn_calibration
+            # confirms the bands line up.
+            #
+            # race_winner/pole/h2h are deliberately untouched: race_winner IS the
+            # model that was fitted, pole is a different one (quali Elo), and h2h
+            # is closed-form with no deep tail.
+            if STAKE_TOP_N is False and row.market_type == "top_n":
+                stake = None
+                kelly = None
+                row.model_note = f"{row.model_note or ''} {TOPN_CALIBRATION_NOTE}".strip()
             row.kelly_fraction = kelly
             row.suggested_stake_dollars = stake
             row.suggested_stake_units = round(stake / unit_dollars, 2) if (stake is not None and unit_dollars) else None

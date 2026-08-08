@@ -32,7 +32,8 @@ def _weights(ratings: dict[str, float]) -> dict[str, float]:
 
 
 def simulate(ratings: dict[str, float], trials: int = DEFAULT_TRIALS,
-             top_ns: tuple[int, ...] = (1, 3, 5, 10, 20), seed: int | None = None) -> dict[str, dict]:
+             top_ns: tuple[int, ...] = (1, 3, 5, 10, 20), seed: int | None = None,
+             attrition: float = 0.0) -> dict[str, dict]:
     """Returns {driver: {"win": p, "top3": p, "top5": p, "top10": p, "top20": p}}.
     Needs >=2 drivers with a rating; returns {} otherwise. Deterministic given
     `seed` (default: seeded from the field so displayed prices don't jitter
@@ -61,8 +62,41 @@ def simulate(ratings: dict[str, float], trials: int = DEFAULT_TRIALS,
 
     counts = {d: {n: 0 for n in top_ns} for d in field}
     for _ in range(trials):
-        remaining = list(field)
-        rem_w = dict(w)
+        # ATTRITION (added 2026-08-07). Each driver independently suffers a
+        # race-ruining event with probability `attrition` and is placed BEHIND
+        # everyone who finished, which is what a DNF actually does to a result.
+        #
+        # This module used to argue explicitly that DNFs needed no term because
+        # "the strength spread already reflects them empirically via the
+        # walk-forward fit". That is true for WINNING and false for finishing
+        # position, and the difference is measurable: the spread was fitted on
+        # P(1st) only, so nothing ever constrained the deep tail. Measured
+        # walk-forward over 142 NASCAR races with real grids
+        # (scripts/check_racing_topn_calibration.py), the un-attrited model said
+        # 92% for top-20 where the truth was 69%, and 3% for top-10 where the
+        # truth was 15% -- error growing monotonically with N, because a top-20
+        # market in a 40-car field is mostly a bet on whether the car survives,
+        # and survival was the one thing not simulated. Directly in the data:
+        # 24.3% of NASCAR drivers starting top-5 finish in the back 40% of the
+        # field (F1 11.0%).
+        #
+        # Default 0.0 keeps the previous behaviour exactly, so callers that have
+        # not been given a fitted rate are unchanged.
+        retired: list[str] = []
+        if attrition > 0.0:
+            retired = [d for d in field if rng.random() < attrition]
+        if retired and len(retired) < len(field):
+            retired_set = set(retired)
+            remaining = [d for d in field if d not in retired_set]
+            rem_w = {d: w[d] for d in remaining}
+            # Order among the retired is not modelled -- one DNF is not
+            # meaningfully "ahead" of another for any market priced here.
+            rng.shuffle(retired)
+            tail = retired
+        else:
+            remaining = list(field)
+            rem_w = dict(w)
+            tail = []
         pos = 0
         while remaining:
             pos += 1
@@ -82,6 +116,19 @@ def simulate(ratings: dict[str, float], trials: int = DEFAULT_TRIALS,
             del rem_w[pick]
             if pos >= max(top_ns):
                 break  # nothing below the deepest top-N line is ever asked for
+
+        # If enough of the field retired that the SURVIVORS don't fill the
+        # deepest line, the remaining places are taken by retired cars -- in a
+        # 40-car race where 25 drop out, positions 26-40 are DNFs, and a top-20
+        # market still has to put someone in P16-20. Skipping this would leave
+        # those slots uncounted and quietly deflate every top-N probability.
+        for d in tail:
+            if pos >= max(top_ns):
+                break
+            pos += 1
+            for n in top_ns:
+                if pos <= n:
+                    counts[d][n] += 1
 
     out = {}
     for d in field:
