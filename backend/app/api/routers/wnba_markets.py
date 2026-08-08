@@ -418,6 +418,30 @@ def get_wnba_market_reasoning(
                     f"The ratings lean {stronger} here, well ahead of {weaker} ({s_r:.0f} to {w_r:.0f}), {hca_note}. ",
                     f"Team Elo gives the edge to {stronger}, above {weaker} ({s_r:.0f} to {w_r:.0f}), {hca_note}. ",
                 ])
+    # FUTURES. Everything above is inside `if game is not None`, and a futures
+    # market has no wnba_game_id -- it is season-long. So this endpoint returned
+    # ZERO factors for every WNBA futures row: a 200 with an empty body, which
+    # renders as a blank reasoning panel rather than an error. Same shape as the
+    # soccer futures gap, found in the same 2026-08-08 sweep.
+    if game is None and m.market_type in SEASON_MARKET_TYPES:
+        rating = elo_service_wnba.get_team_rating(m.team) if m.team else None
+        if rating is not None:
+            factors.append(ReasoningFactorOut(
+                label="Team Elo", detail=f"{m.team} {rating:.0f} (league average is 1500)."))
+        question = {
+            "win_total": f"Finishes the regular season with more than {m.line} wins" if m.line is not None else "Season win total",
+            "championship": "Wins the WNBA title",
+            "playoff_qualifier": "Makes the playoffs",
+            "one_seed": "Finishes as the #1 seed",
+        }.get(m.market_type, m.market_type)
+        factors.append(ReasoningFactorOut(label="Question", detail=f"{m.team or '—'}: {question}"))
+        factors.append(ReasoningFactorOut(
+            label="How this is priced",
+            detail=("A Monte Carlo of the remaining regular season from current records and team Elo, "
+                    "with a per-team strength offset drawn each simulation so a rating is treated as an "
+                    "estimate rather than a known quantity -- that offset was fitted against real "
+                    "outcomes (mean calibration gap 7.77pp -> 1.50pp).")))
+
     insight += (
         "It's a pure Elo read with no situational layer wired for WNBA yet, so the rating is the whole story. "
         + ("From there the model parts ways with the market by "

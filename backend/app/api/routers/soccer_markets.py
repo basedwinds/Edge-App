@@ -625,6 +625,13 @@ MLS_BRACKET_APPROXIMATE_NOTE = (
     "market, not a proven opportunity."
 )
 
+_SOCCER_LEAGUE_NAME = {
+    "E0": "Premier League", "SP1": "La Liga", "I1": "Serie A", "D1": "Bundesliga",
+    "F1": "Ligue 1", "MLS": "MLS", "P1": "Liga Portugal", "N1": "Eredivisie",
+    "E1": "EFL Championship", "SP2": "La Liga 2", "I2": "Serie B", "D2": "2. Bundesliga",
+    "F2": "Ligue 2",
+}
+
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",
                          *_MLS_PLAYOFF_MARKET_TYPES]
 
@@ -923,6 +930,51 @@ def get_soccer_market_reasoning(market_id: int, session: Session = Depends(get_s
                 detail=f"{news.adjustment_pct:+.1f}pp home-perspective ({news.confidence} confidence): "
                        + "; ".join(f.factor for f in news.factors),
             ))
+
+    # FUTURES. Everything above sits under `if match is not None`, and a futures
+    # market has no soccer_match_id -- it is season-long, not tied to one game.
+    # So this endpoint used to return ZERO factors for all 714 soccer futures
+    # rows: a 200 with an empty body, which renders as a reasoning panel that
+    # silently shows nothing rather than an error. Found 2026-08-08 while
+    # auditing every sport's reasoning after the CFB routing bug.
+    elif m.market_type in _FUTURES_MARKET_TYPES:
+        division = _futures_division(m)
+        if m.market_type in _MLS_PLAYOFF_MARKET_TYPES:
+            division = "MLS"
+        label = f"{m.team or '—'} — {m.group_label or m.market_type}"
+        if division:
+            state = elo_service_soccer.get_rating_state(division)
+            n = state.get_count(canonical_team_key(m.team)) if (state and m.team) else 0
+            factors.append(ReasoningFactorOut(
+                label="Competition",
+                detail=f"{_SOCCER_LEAGUE_NAME.get(division, division)} ({division})"))
+            factors.append(ReasoningFactorOut(
+                label="Team match history",
+                detail=(f"{m.team}: {n} rated matches in this league's pool"
+                        if n else f"{m.team}: no rated history in this pool -- priced off a promoted-team placeholder")))
+        question = {
+            "league_winner": "Wins the league",
+            "relegation": "Finishes in the automatic relegation zone",
+            "top2": "Finishes in the top 2", "top4": "Finishes in the top 4",
+            "top_half": "Finishes in the top half",
+            "team_points": f"Finishes the season on {m.line} or more points" if m.line is not None else "Season points total",
+            "mls_cup_winner": "Wins the MLS Cup",
+            "mls_conference_winner": "Wins their conference's playoff bracket",
+        }.get(m.market_type, m.market_type)
+        factors.append(ReasoningFactorOut(label="Question", detail=question))
+        if m.market_type in _MLS_PLAYOFF_MARKET_TYPES:
+            factors.append(ReasoningFactorOut(
+                label="How this is priced",
+                detail=("A playoff bracket simulation seeded from the live MLS conference standings and the "
+                        "real remaining fixture list, run 10,000 times. It has never been checked against "
+                        "real results -- MLS's current format has only one completed postseason -- so treat "
+                        "the edge as a disagreement with the market, not a proven opportunity.")))
+        else:
+            factors.append(ReasoningFactorOut(
+                label="How this is priced",
+                detail=("A Monte Carlo of the full season: every pairing's goal distribution comes from the "
+                        "same Poisson attack/defence ratings used for single matches, and 3,000 simulated "
+                        "seasons are ranked by points, goal difference and goals scored.")))
 
     methodology = (
         "A walk-forward attack/defense Poisson goal-rating model (see elo_soccer.py), trained on real "
