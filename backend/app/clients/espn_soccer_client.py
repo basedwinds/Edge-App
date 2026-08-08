@@ -58,7 +58,41 @@ STANDINGS_LEAGUE_CODES = {
 # live 2026-07-19 the same scoreboard endpoint pattern generalizes cleanly
 # to every non-MLS league too (e.g. a real Crystal Palace 1-1 Fulham result
 # for eng.1 on 2026-01-01).
-LEAGUE_CODES = {**STANDINGS_LEAGUE_CODES, "MLS": "usa.1"}
+LEAGUE_CODES = {
+    **STANDINGS_LEAGUE_CODES,
+    "MLS": "usa.1",
+    # REAL BUG this fixes (2026-08-08). This map had only the original six
+    # leagues, but refresh_soccer_results uses it to decide which leagues to
+    # FETCH results for at all -- so every league added since was invisible to
+    # it and its matches could never resolve, no matter how long they waited.
+    # Measured: 202 unresolved live rows across 13 leagues, 134 of them in
+    # leagues absent from this dict. That included P1, which is why a user's
+    # 20 Maritimo bets sat pending on a match that had finished hours earlier:
+    # Liga Portugal results were never requested. The duplicate-fixture row
+    # for that match was real but not the cause.
+    #
+    # Every slug below was verified live against ESPN's scoreboard earlier the
+    # same day while building the alias maps and the cup/UEFA pipelines --
+    # these are not guesses at ESPN's naming.
+    "P1": "por.1",       # Liga Portugal
+    "N1": "ned.1",       # Eredivisie
+    "E1": "eng.2",       # EFL Championship
+    "B1": "bel.1",       # Belgian Pro League
+    "T1": "tur.1",       # Turkish Super Lig
+    "G1": "gre.1",       # Greek Super League
+    "D2": "ger.2",       # 2. Bundesliga
+    "I2": "ita.2",       # Serie B
+    "SP2": "esp.2",      # Segunda Division
+    "F2": "fra.2",       # Ligue 2
+    # Cup and continental competitions are stored under their COMPETITION as
+    # the league code (see market_catalog_soccer.cup_league_code /
+    # uefa_league_code), so they key in here the same way a league does.
+    "COPPA_ITALIA": "ita.coppa_italia",
+    "DFB_POKAL": "ger.dfb_pokal",
+    "UCL": "uefa.champions",
+    "UEL": "uefa.europa",
+    "UECL": "uefa.europa.conf",
+}
 
 
 # ESPN's scoreboard returns AT MOST 100 events per call and silently truncates
