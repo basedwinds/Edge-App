@@ -539,8 +539,21 @@ def run_full_refresh_soccer():
     # every intermediate check -- market_type filter, active status, future
     # match dates, a direct ORM query -- passing. A poller that is never
     # scheduled looks exactly like a poller that is broken, one cycle later.
-    refresh_kalshi_cup_markets()
-    refresh_kalshi_uefa_markets()
+    #
+    # WRAPPED, and the wrapping is the point. On the first scheduled run after
+    # these were added, the log showed "kalshi cup markets refreshed" twice and
+    # the UEFA line zero times -- meaning the pass reached cups and then never
+    # got past UEFA, which also silently skipped refresh_soccer_results,
+    # refresh_soccer_news_adjustments and settle_soccer_placed_bets for that
+    # cycle. UEFA is by far the biggest fetch here (441 markets over ~90 events,
+    # and Kalshi 429s are already visible in this app's logs), so it is the most
+    # likely thing in this function to throw. A new, optional market family must
+    # never be able to take settlement down with it.
+    for name, fn in (("cup", refresh_kalshi_cup_markets), ("uefa", refresh_kalshi_uefa_markets)):
+        try:
+            fn()
+        except Exception:
+            log.exception("soccer %s market refresh failed -- continuing the rest of the pass", name)
     refresh_soccer_results()
     refresh_soccer_news_adjustments()
     settle_soccer_placed_bets()
