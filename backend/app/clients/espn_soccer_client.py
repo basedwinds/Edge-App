@@ -84,6 +84,9 @@ LEAGUE_CODES = {
     "I2": "ita.2",       # Serie B
     "SP2": "esp.2",      # Segunda Division
     "F2": "fra.2",       # Ligue 2
+    "SC0": "sco.1",      # Scottish Premiership
+    "E2": "eng.3",       # League One
+    "E3": "eng.4",       # League Two
     # Cup and continental competitions are stored under their COMPETITION as
     # the league code (see market_catalog_soccer.cup_league_code /
     # uefa_league_code), so they key in here the same way a league does.

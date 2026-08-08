@@ -63,6 +63,10 @@ LEAGUES = {
     # entry a newly-rated club is still invisible to that audit, because ESPN
     # and football-data spell them differently just like everywhere else.
     "B1": "bel.1", "T1": "tur.1", "G1": "gre.1",
+    # Added 2026-08-08 with the divisions themselves. SC0 is the one that moves
+    # the UEFA number: Celtic and Rangers are regular participants and were the
+    # clubs the fuzzy matcher infamously tried to map onto Angers and Celta.
+    "SC0": "sco.1", "E2": "eng.3", "E3": "eng.4",
 }
 # Two full seasons -- more independent fixtures per club, and it covers clubs
 # that were promoted or relegated between them.

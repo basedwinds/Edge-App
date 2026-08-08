@@ -79,10 +79,24 @@ The Champions League is now comfortably viable: 140 of 189 matches priceable,
 and only 5 (2.6%) with NEITHER side rated. Three league additions from a source
 already wired bought +35 UCL matches a season.
 
+FOURTH RUN, after adding Scotland (SC0) plus English tiers 3-4 (2026-08-08,
+19 leagues / 755 rated teams / 372 aliases):
+
+    ALL                531 matches   both rated 243 = 45.8%   (from 43.3%)
+
+Scotland is the whole gain: Celtic and Rangers are regular UEFA participants
+and were unrateable, which is also exactly why check_uefa_name_gap.py's fuzzy
+matcher reached for Angers and Celta -- there was no correct answer available
+to it. E2/E3 were added for the EFL Cup, not for UEFA, and contribute nothing
+here as expected.
+
 STILL UNREACHED, and each needs a league football-data does not publish:
-Bodo/Glimt (Norway), Ferencvaros (Hungary), Shakhtar Donetsk (Ukraine), Qarabag
-(Azerbaijan). The Conference League remains structurally hopeless at 11.1% --
-its field is drawn from exactly the associations no free source covers.
+Bodo/Glimt and Brann (Norway), Ferencvaros (Hungary), Shakhtar (Ukraine),
+Qarabag (Azerbaijan), Midtjylland (Denmark), Dinamo Zagreb and Rijeka
+(Croatia), Ludogorets (Bulgaria), Red Star (Serbia), Viktoria Plzen and Sigma
+Olomouc (Czechia), Lech Poznan (Poland), NK Celje (Slovenia). The tail is now
+long and flat -- roughly ten matches each, no single addition moves the number
+much, which is the natural stopping point for this line of work.
 
 THE CHEAPER ADJACENT WIN. Kalshi lists Coppa Italia and DFB Pokal (GAME,
 ADVANCE, TOTAL series, all live as of 2026-08-07). Those are Serie A vs Serie B

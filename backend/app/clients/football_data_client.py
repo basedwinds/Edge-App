@@ -94,7 +94,23 @@ DIVISIONS = {
     "B1": "Belgium - Jupiler Pro League",
     "T1": "Turkey - Super Lig",
     "G1": "Greece - Super League",
+    # Added 2026-08-08. SCOTLAND closes a real UEFA gap: Celtic and Rangers are
+    # regular Champions/Europa League participants and were unrateable, which is
+    # also why check_uefa_name_gap.py's fuzzy matcher tried to map Rangers onto
+    # Angers and Celtic onto Celta -- there was no correct answer available to it.
+    "SC0": "Scotland - Premiership",
+    # ENGLISH TIERS 3 AND 4 exist for the EFL Cup, added the same day. Its first
+    # round is Plymouth (League One) vs Exeter and Mansfield (League Two) vs
+    # Sheffield United -- with only E0/E1 rated, three of those four clubs were
+    # unrateable and the competition was almost entirely unpriceable until the
+    # Premier League entered at round three.
+    "E2": "England - League One",
+    "E3": "England - League Two",
 }
+# ALSO AVAILABLE on the same pattern, not added: SC1/SC2/SC3 (Scottish lower
+# tiers) and EC (National League, English 5th tier). No market inventory reaches
+# them and they would only add rating pools nothing queries -- revisit if a cup
+# draw or a Kalshi series ever does.
 
 # Second tier of each country -- added 2026-07-19 specifically to fix a real
 # gap: a newly-promoted team has ZERO rating in the top-flight-only cache
