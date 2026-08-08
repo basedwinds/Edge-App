@@ -19,7 +19,7 @@ Explicitly NOT built (same "different kind of model" scoping as NFL's
 240-series Phase-4 audit): MVP/DPOY/ROY/6MOY/COY and every other player-level
 award/prop series -- this app's team-level Elo has no way to price those.
 """
-from app.clients.base import get_json, paginate
+from app.clients.base import get_json, paginate, markets_for_event
 from app.ingestion.market_matcher_nba import KALSHI_TEAM_ABBRS, parse_kalshi_event_ticker, split_teams_blob, to_espn_abbr
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -72,8 +72,9 @@ def get_open_events(series_ticker: str) -> list[dict]:
 
 
 def get_markets_for_event(event_ticker: str) -> list[dict]:
-    d = get_json(f"{BASE}/markets?event_ticker={event_ticker}")
-    return d.get("markets", [])
+    """Batched per SERIES in base.markets_for_event -- see its comment for the
+    measured 429/latency problem the per-event version caused."""
+    return markets_for_event(BASE, event_ticker)
 
 
 def _to_float(v):

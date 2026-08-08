@@ -36,7 +36,7 @@ yes_sub_title).
 import re
 from app.ingestion.kalshi_ticker_time import start_from_ticker
 
-from app.clients.base import get_json, paginate
+from app.clients.base import get_json, paginate, markets_for_event
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
@@ -71,8 +71,9 @@ def get_open_events(series_ticker: str) -> list[dict]:
 
 
 def get_markets_for_event(event_ticker: str) -> list[dict]:
-    d = get_json(f"{BASE}/markets?event_ticker={event_ticker}")
-    return d.get("markets", [])
+    """Batched per SERIES in base.markets_for_event -- see its comment for the
+    measured 429/latency problem the per-event version caused."""
+    return markets_for_event(BASE, event_ticker)
 
 
 def _to_float(v):

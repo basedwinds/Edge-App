@@ -24,7 +24,7 @@ actually price), KXMLBEXTRAS (extra innings), half-line-equivalents.
 Player-level props/awards/leaderboards stay out of scope for the same
 "different kind of model" reason as NFL/NBA.
 """
-from app.clients.base import get_json, paginate
+from app.clients.base import get_json, paginate, markets_for_event
 from app.ingestion.market_matcher_mlb import parse_kalshi_event_ticker, split_teams_blob
 from app.ingestion.mlb_data import team_abbreviations
 
@@ -67,8 +67,9 @@ def get_open_events(series_ticker: str) -> list[dict]:
 
 
 def get_markets_for_event(event_ticker: str) -> list[dict]:
-    d = get_json(f"{BASE}/markets?event_ticker={event_ticker}")
-    return d.get("markets", [])
+    """Batched per SERIES in base.markets_for_event -- see its comment for the
+    measured 429/latency problem the per-event version caused."""
+    return markets_for_event(BASE, event_ticker)
 
 
 def _to_float(v):

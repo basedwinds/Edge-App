@@ -15,7 +15,7 @@ Series tickers confirmed live against the public API on 2026-07-14:
 """
 import re
 
-from app.clients.base import get_json, paginate
+from app.clients.base import get_json, paginate, markets_for_event
 from app.ingestion.market_matcher import KALSHI_TEAM_ABBRS, parse_kalshi_event_ticker, split_teams_blob, to_nflverse_abbr
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -121,8 +121,9 @@ def get_markets_by_tickers(tickers: list[str]) -> list[dict]:
 
 
 def get_markets_for_event(event_ticker: str) -> list[dict]:
-    d = get_json(f"{BASE}/markets?event_ticker={event_ticker}")
-    return d.get("markets", [])
+    """Batched per SERIES in base.markets_for_event -- see its comment for the
+    measured 429/latency problem the per-event version caused."""
+    return markets_for_event(BASE, event_ticker)
 
 
 def get_open_markets_for_series(series_ticker: str) -> list[dict]:

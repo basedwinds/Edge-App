@@ -43,7 +43,7 @@ backtest/CLV logic touches MMA fight-tied markets.
 Futures (KXUFCTITLE + 8 weight-class title series) deliberately NOT built
 yet -- user asked to build MMA futures last/low-priority, see Phase 4.
 """
-from app.clients.base import get_json, paginate
+from app.clients.base import get_json, paginate, markets_for_event
 from app.ingestion.market_matcher_mma import kalshi_fight_suffix
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -67,8 +67,9 @@ def get_open_events(series_ticker: str) -> list[dict]:
 
 
 def get_markets_for_event(event_ticker: str) -> list[dict]:
-    d = get_json(f"{BASE}/markets?event_ticker={event_ticker}")
-    return d.get("markets", [])
+    """Batched per SERIES in base.markets_for_event -- see its comment for the
+    measured 429/latency problem the per-event version caused."""
+    return markets_for_event(BASE, event_ticker)
 
 
 def _to_float(v):
