@@ -89,6 +89,10 @@ LEAGUE_CODES = {
     # uefa_league_code), so they key in here the same way a league does.
     "COPPA_ITALIA": "ita.coppa_italia",
     "DFB_POKAL": "ger.dfb_pokal",
+    # Kalshi calls it EFL Cup, ESPN calls it eng.league_cup, the sponsor calls
+    # it the Carabao Cup. Verified live before wiring -- eng.efl_cup and
+    # eng.carabao_cup both 404.
+    "EFL_CUP": "eng.league_cup",
     "UCL": "uefa.champions",
     "UEL": "uefa.europa",
     "UECL": "uefa.europa.conf",

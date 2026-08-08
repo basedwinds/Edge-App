@@ -1073,6 +1073,25 @@ CUP_COMPETITIONS = {
         "advance": "KXDFBPOKALADVANCE",
         "total": None,  # no live total series for the Pokal as of 2026-08-08
     },
+    # EFL Cup (the Carabao Cup -- Kalshi files it under EFL, not the sponsor
+    # name, which is why a KXCARABAO* probe returns nothing). Added 2026-08-08
+    # after a user asked whether it was covered; it was not, and all four of its
+    # series sat dispositioned not_relevant.
+    #
+    # Same coverage caveat as the DFB Pokal, for the same structural reason:
+    # the EFL Cup admits all four English professional tiers, and this app rates
+    # only E0 and E1. The live first round is Plymouth (League One) vs Exeter
+    # (League Two), neither of which is rateable. Coverage improves sharply from
+    # round three, when Premier League clubs enter. Ingested anyway -- an
+    # unrateable tie simply prices as None, exactly like an unrated league club,
+    # and the alternative is noticing in October that nothing was collected.
+    "efl_cup": {
+        "name": "EFL Cup",
+        "top": "E0", "second": "E1",
+        "moneyline": "KXEFLCUPGAME",
+        "advance": "KXEFLCUPADVANCE",
+        "total": "KXEFLCUPTOTAL",
+    },
 }
 
 # An ADVANCE event titles itself "Home vs Away: X To Advance", so the pair has

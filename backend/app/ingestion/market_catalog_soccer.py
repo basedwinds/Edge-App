@@ -715,7 +715,8 @@ def upsert_kalshi_soccer_top_n_market(session: Session, row: dict) -> Market:
 # The two clubs' actual divisions are resolved at pricing time by
 # elo_service_soccer.resolve_league (which is also what stops a club being
 # priced off a rating from a division it left years ago).
-CUP_LEAGUE_CODES = {"coppa_italia": "COPPA_ITALIA", "dfb_pokal": "DFB_POKAL"}
+CUP_LEAGUE_CODES = {"coppa_italia": "COPPA_ITALIA", "dfb_pokal": "DFB_POKAL",
+                    "efl_cup": "EFL_CUP"}
 
 
 def cup_league_code(competition: str) -> str:

@@ -304,7 +304,8 @@ def _half_btts_model_prob(market: Market, match: SoccerMatch | None, half: int) 
 # by design). Each club's real division is resolved here instead, at pricing
 # time, by elo_service_soccer.resolve_league -- which is also what prevents a
 # club being priced off a division it left years ago.
-CUP_TIERS = {"COPPA_ITALIA": ("I1", "I2"), "DFB_POKAL": ("D1", "D2")}
+CUP_TIERS = {"COPPA_ITALIA": ("I1", "I2"), "DFB_POKAL": ("D1", "D2"),
+             "EFL_CUP": ("E0", "E1")}
 CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total"}
 
 # TRACKING-ONLY: priced and shown, never staked.
