@@ -112,10 +112,18 @@ def main() -> None:
         used += 1
 
         # Elo update with the real result, AFTER the row is recorded.
+        #
+        # BUG FIXED 2026-08-07: this used to write `ra`/`rb` back, which INCLUDE
+        # the age adjustment -- so the age term compounded into the stored rating
+        # on every single fight and corrupted the ladder. Age is a per-fight
+        # prediction-time correction, never part of a fighter's rating. The bug
+        # weakened the Elo baseline (57.5% accuracy, vs ~61% once fixed) and so
+        # INFLATED the apparent value of the style block, from -0.64% to -2.17%.
+        # Update the stored rating only.
         pa = 1.0 / (1.0 + 10 ** ((rb - ra) / 400.0))
         sa = 1.0 if w == a else 0.0
-        elo[a] = ra + K * (sa - pa)
-        elo[b] = rb + K * ((1.0 - sa) - (1.0 - pa))
+        elo[a] = elo.get(a, BASE) + K * (sa - pa)
+        elo[b] = elo.get(b, BASE) + K * ((1.0 - sa) - (1.0 - pa))
 
     split = int(used * TRAIN_FRAC)
     print(f"usable={used}  train={split}  holdout={used - split}")
