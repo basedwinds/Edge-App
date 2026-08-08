@@ -28,6 +28,7 @@ kalshi_client.py's own get_spread_markets/get_total_markets docstrings):
     (confirmed: 0.5 through 5.5 goals, 6 rungs), yes_sub_title "Over X.5
     goals scored", team-less (game-level, not per-team)."""
 import re
+import time
 
 from app.clients.base import get_json, paginate
 
@@ -184,7 +185,73 @@ def get_open_events(series_ticker: str) -> list[dict]:
     return paginate(url_builder, list_key="events", cursor_style="cursor")
 
 
+# --- BATCHED MARKET FETCH (2026-08-08) -------------------------------------
+# MEASURED PROBLEM this solves. run_full_refresh_soccer was taking 784s against
+# a 300s interval, with "kalshi markets" alone at 415s -- 1.4x the entire
+# interval -- and that figure swung 174s -> 415s between consecutive passes,
+# which is rate-limit backoff variance rather than workload. The app had logged
+# 805 Kalshi 429s since startup; base.get_json sleeps 2*(attempt+1)s per 429 up
+# to four retries, so a throttled call can burn 12s doing nothing, and every
+# sport's poller competes for the same quota.
+#
+# THE CAUSE was one HTTP call PER EVENT. Each fetcher below walks
+# get_open_events(series) and then calls get_markets_for_event() for every
+# event it found -- hundreds of round trips per cycle across 9 leagues and a
+# dozen market types. But Kalshi will return every market for a whole SERIES in
+# a single request, which is how this session's probes read all 441 UEFA
+# markets instantly. So the per-event call is replaced by one batched fetch per
+# series, memoized for a short window and grouped by event_ticker.
+#
+# NO CALL SITE CHANGES. All 22 callers keep calling get_markets_for_event; it
+# just answers from the batch now. The series is recoverable from the event
+# ticker, which is always "{SERIES}-{EVENT SUFFIX}".
+#
+# FALLS BACK RATHER THAN GUESSING: if an event is absent from its series batch
+# (an unexpected ticker shape, or a market the series query does not surface),
+# the original per-event request is issued for that event alone. A miss costs
+# one call, never a wrong or empty answer.
+_MARKET_BATCH_TTL_SECONDS = 120  # shorter than the 300s poll interval, so each cycle refetches once
+_market_batch_cache: dict[str, tuple[float, dict[str, list[dict]]]] = {}
+
+
+def _series_of(event_ticker: str) -> str | None:
+    head = (event_ticker or "").split("-", 1)[0].strip()
+    return head or None
+
+
+def _markets_by_event_for_series(series_ticker: str) -> dict[str, list[dict]]:
+    cached = _market_batch_cache.get(series_ticker)
+    if cached and (time.time() - cached[0]) < _MARKET_BATCH_TTL_SECONDS:
+        return cached[1]
+
+    def url_builder(cursor):
+        url = f"{BASE}/markets?series_ticker={series_ticker}&status=open&limit=1000"
+        if cursor:
+            url += f"&cursor={cursor}"
+        return url
+
+    try:
+        markets = paginate(url_builder, list_key="markets", cursor_style="cursor")
+    except Exception:
+        # A failed batch must not poison the cache -- leave it unset so the
+        # per-event fallback handles this cycle and the next pass retries.
+        return {}
+    grouped: dict[str, list[dict]] = {}
+    for m in markets:
+        ev = m.get("event_ticker")
+        if ev:
+            grouped.setdefault(ev, []).append(m)
+    _market_batch_cache[series_ticker] = (time.time(), grouped)
+    return grouped
+
+
 def get_markets_for_event(event_ticker: str) -> list[dict]:
+    series = _series_of(event_ticker)
+    if series:
+        grouped = _markets_by_event_for_series(series)
+        hit = grouped.get(event_ticker)
+        if hit is not None:
+            return hit
     d = get_json(f"{BASE}/markets?event_ticker={event_ticker}")
     return d.get("markets", [])
 
