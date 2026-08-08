@@ -56,6 +56,26 @@ resolve. Anchor on the side that already resolves, require the date's ESPN
 fixture list to contain exactly one match with that club, and the opponent is
 determined without ever comparing two strings.
 
+SECOND RUN, after build_soccer_kalshi_aliases.py resolved five of them
+(L.R. Vicenza, Munster, Rostock, Stabia, Sudtirol Bolzano):
+
+    KXCOPPAITALIAGAME       39 /  9   81%   (was 62%)
+    KXCOPPAITALIAADVANCE    26 /  6   81%   (was 62%)
+    KXDFBPOKALGAME          18 / 27   40%   (was 27%)
+    KXDFBPOKALADVANCE       12 / 18   40%   (was 27%)
+    both clubs rated: 38 / 62 = 61%        (was 45%)
+      I1vI1 14, D2vD2 12, I2vI2 2 same tier;  I1vI2 10 cross-tier
+
+Five aliases moved Coppa Italia from 62% to 81%. Note what the anchored join
+did NOT do: "1860 Munich" and "Union Brescia" are still unmapped, because no
+unique anchor existed for them. That is the method being correctly conservative
+rather than failing -- an unmapped club costs one fixture, a wrongly mapped one
+costs a bet.
+
+Still blocking and RECOVERABLE with more anchors as later rounds are listed:
+Hellas Verona (-> verona I1), Entella (-> virtus entella I2). Union Brescia is
+genuinely NOT recoverable -- it is a Serie C refoundation, not the Brescia in I1.
+
 2. THE DFB POKAL IS STRUCTURALLY POOR AND WILL STAY THAT WAY. Its first round
 pairs Bundesliga clubs with Regionalliga sides -- Grossaspach, Hemelingen,
 Viktoria Cologne, Luneburg, St. Tonis are all third or fourth tier, two
@@ -68,6 +88,7 @@ opposite case: it starts at Serie A/B, so 62% before any naming work.
 from __future__ import annotations
 
 import collections
+import json
 import re
 import sys
 from pathlib import Path
@@ -96,7 +117,22 @@ def main() -> None:
     for lg, st in states.items():
         for team in st.attack_log:
             rated.setdefault(team, lg)
-    print(f"{len(rated)} rated teams across {len(states)} leagues\n")
+    kal = Path(__file__).resolve().parents[2] / "data" / "soccer_kalshi_aliases.json"
+    kalias = json.loads(kal.read_text(encoding="utf-8")) if kal.exists() else {}
+    print(f"{len(rated)} rated teams across {len(states)} leagues, "
+          f"{len(kalias)} Kalshi aliases\n")
+
+    def rk(name: str):
+        """Kalshi club name -> rated key, via canonicalization or the
+        fixture-anchored Kalshi alias map (build_soccer_kalshi_aliases.py).
+        Never guesses -- returns None rather than a similar-looking club."""
+        k = canonical_team_key(name)
+        if k in rated:
+            return k
+        entry = kalias.get(name)
+        if entry and entry["team"] in rated:
+            return entry["team"]
+        return None
 
     per_series = collections.Counter()
     fixtures: dict[str, tuple] = {}
@@ -116,8 +152,8 @@ def main() -> None:
                 # lives in the ticker's event segment instead.
                 continue
             a, b = mt.group(1).strip(), mt.group(2).strip()
-            ka, kb = canonical_team_key(a), canonical_team_key(b)
-            la, lb = rated.get(ka), rated.get(kb)
+            ka, kb = rk(a), rk(b)
+            la, lb = (rated.get(ka) if ka else None), (rated.get(kb) if kb else None)
             key = m.get("event_ticker") or f"{ka}|{kb}"
             fixtures[key] = (series, a, b, la, lb)
             per_series[(series, la is not None and lb is not None)] += 1
