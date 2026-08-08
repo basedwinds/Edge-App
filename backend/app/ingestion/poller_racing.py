@@ -229,7 +229,10 @@ def refresh_racing_grids():
     import datetime
     import json
     from pathlib import Path
-    from app.clients.espn_racing_results import _event_ids_for_season, fetch_race_grid
+    from app.clients.espn_racing_results import (
+        RACE_SESSION, SPRINT_SESSION, _event_ids_for_season, fetch_race_grid,
+    )
+    from app.clients.kalshi_racing_client import is_sprint_event
     from app.config import settings
     from app.db.models import RaceEvent
     try:
@@ -237,8 +240,10 @@ def refresh_racing_grids():
         try:
             now = datetime.datetime.utcnow()
             soon = now + datetime.timedelta(days=4)
+            # event_ticker rides along so a SPRINT can be told from its grand
+            # prix -- same ESPN event, same weekend, different session.
             want = [
-                (e.id, e.series, e.start_time.year, e.start_time.date().isoformat())
+                (e.id, e.series, e.start_time.year, e.start_time.date().isoformat(), e.event_ticker)
                 for e in session.query(RaceEvent).filter(RaceEvent.result_json.is_(None)).all()
                 if e.start_time and now - datetime.timedelta(hours=6) <= e.start_time <= soon
             ]
@@ -250,7 +255,7 @@ def refresh_racing_grids():
         grids: dict[str, dict] = {}
         from app.clients.espn_racing_results import NASCAR_RESULT_SERIES
 
-        for rid, series, season, edate in want:
+        for rid, series, season, edate, ev_ticker in want:
             # SAME multi-calendar search the settler uses, and for a sharper
             # reason. Every NASCAR RaceEvent stores series="nascar", so this
             # loop used to search only the CUP calendar. For an Xfinity race
@@ -287,7 +292,10 @@ def refresh_racing_grids():
                          hits[0][1], hits[1][1], edate, hits[0][0], rid)
                 continue
             _delta, cand, eid = hits[0]
-            g = fetch_race_grid(cand, eid)
+            # Sprint grids come from sprint qualifying (SS), grand prix grids
+            # from Saturday qualifying (Qual) -- see fetch_race_grid.
+            espn_session = SPRINT_SESSION if is_sprint_event(ev_ticker) else RACE_SESSION
+            g = fetch_race_grid(cand, eid, espn_session)
             if g:
                 grids[str(rid)] = g
         path = Path(settings.data_dir) / RACING_GRID_CACHE
@@ -309,14 +317,19 @@ def refresh_racing_results():
     auto-settle. ESPN fetch happens BEFORE the write lock."""
     import datetime
     import json
-    from app.clients.espn_racing_results import _event_ids_for_season, fetch_race_result
+    from app.clients.espn_racing_results import (
+        RACE_SESSION, SPRINT_SESSION, _event_ids_for_season, fetch_race_result,
+    )
+    from app.clients.kalshi_racing_client import is_sprint_event
     from app.db.models import RaceEvent
     try:
         session = SessionLocal()
         try:
             now = datetime.datetime.utcnow()
+            # event_ticker rides along so a SPRINT can be told from its grand
+            # prix -- same ESPN event, same weekend, different session.
             want = [
-                (e.id, e.series, e.start_time.year, e.start_time.date().isoformat())
+                (e.id, e.series, e.start_time.year, e.start_time.date().isoformat(), e.event_ticker)
                 for e in session.query(RaceEvent).filter(RaceEvent.result_json.is_(None)).all()
                 if e.start_time and e.start_time < now
             ]
@@ -328,7 +341,7 @@ def refresh_racing_results():
         results: dict = {}
         from app.clients.espn_racing_results import NASCAR_RESULT_SERIES
 
-        for rid, series, season, edate in want:
+        for rid, series, season, edate, ev_ticker in want:
             # A NASCAR RaceEvent cannot say WHICH series it is -- Kalshi files
             # Cup, Xfinity and Truck under one ticker, so they all store
             # series="nascar". Search all three calendars and require exactly
@@ -360,7 +373,13 @@ def refresh_racing_results():
                          hits[0][1], hits[1][1], edate, hits[0][0], rid)
                 continue
             _delta, cand, eid = hits[0]
-            r = fetch_race_result(cand, eid)
+            # A sprint and its grand prix are the SAME ESPN event on the same
+            # weekend -- only the session differs. Grading a sprint market off
+            # the Sunday result (or vice versa) would be confidently wrong
+            # rather than merely unsettled, so the session is chosen from the
+            # Kalshi event ticker, which is what distinguishes them.
+            espn_session = SPRINT_SESSION if is_sprint_event(ev_ticker) else RACE_SESSION
+            r = fetch_race_result(cand, eid, espn_session)
             if r:
                 results[rid] = r
         if not results:

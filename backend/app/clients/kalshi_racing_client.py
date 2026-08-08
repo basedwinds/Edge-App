@@ -71,7 +71,51 @@ SERIES_MAP = {
     # the first name in the label is always the side being backed.
     "KXF1H2H": ("f1", "h2h", None),
     "KXNASCARH2H": ("nascar", "h2h", None),
+    # F1 SPRINT WEEKENDS, added 2026-08-08. Both reasons these were held back
+    # have now been checked rather than assumed:
+    #
+    #  1. "settlement needs a sprint-specific results source". It exists --
+    #     ESPN's f1 feed splits each weekend into sessions and exposes a
+    #     completed "SR" competition with a full finishing order (verified on
+    #     22 real sprints, 2023-2026). "SS" carries sprint qualifying.
+    #  2. "the main race Elo must NOT be assumed to transfer -- a sprint is a
+    #     third the distance with no mandatory stop". Measured instead of
+    #     assumed (scripts/check_f1_sprint_transfer.py): rating-vs-finish rank
+    #     correlation 0.603 on sprints against 0.572 on grands prix, winner-hit
+    #     45.5% vs 45.9%. It transfers -- if anything a shorter race gives
+    #     chaos less time to reorder the field. Small sample (22 sprints), so
+    #     the honest claim is "no evidence of degradation".
+    #
+    # Mapped onto the EXISTING market types rather than sprint-specific ones,
+    # which is what makes this coverage rather than a new pipeline: Kalshi's
+    # event ticker carries the series prefix (KXF1RACESPRINT-BRIGP26 vs
+    # KXF1RACE-BRIGP26), and upsert_race_event keys on the full ticker, so a
+    # sprint automatically becomes its OWN RaceEvent. It then inherits every
+    # existing guard unchanged -- field-coverage floor, implausible-disagreement,
+    # and crucially the pre-qualifying staking gate, which keeps sprints priced
+    # and tracked but UNSTAKED until a sprint grid is known.
+    #
+    # Market shapes verified against real SETTLED markets, not inferred:
+    # yes_sub_title is the driver name on all four, exactly as the main-race
+    # series. KXF1SPRINTTOPCONSTRUCTOR is deliberately excluded -- its
+    # yes_sub_title is a CONSTRUCTOR ("Red Bull Racing"), a different resolve
+    # path, and constructor-wins-the-sprint is a market this app has no model
+    # for (constructor_pole is a different question).
+    "KXF1RACESPRINT": ("f1", "race_winner", None),
+    "KXF1SPRINTPOLE": ("f1", "pole", None),
+    "KXF1SPRINTTOP5": ("f1", "top_n", 5),
+    "KXF1SPRINTTOP10": ("f1", "top_n", 10),
 }
+
+# Kalshi event-ticker prefixes whose RaceEvent is a SPRINT, not the grand prix.
+# Settlement must read ESPN's "SR" session for these, never the Sunday "Race"
+# result -- same weekend, same venue, different classification.
+SPRINT_EVENT_PREFIXES = ("KXF1RACESPRINT", "KXF1SPRINTPOLE", "KXF1SPRINTTOP5",
+                         "KXF1SPRINTTOP10")
+
+
+def is_sprint_event(event_ticker: str | None) -> bool:
+    return bool(event_ticker) and str(event_ticker).startswith(SPRINT_EVENT_PREFIXES)
 
 # DELIBERATELY NOT POLLED, and why -- so this list isn't "rediscovered" as a gap
 # every time someone audits Kalshi's racing catalogue (checked live 2026-08-06):
@@ -91,13 +135,13 @@ SERIES_MAP = {
 #     they were excluded, that yes_sub_title holds one driver rather than the
 #     pairing, was an assumption made when neither series had an open market to
 #     inspect, and checking 60 settled ones disproved it.)
-#   KXF1RACESPRINT / KXF1SPRINTPOLE / KXF1SPRINTTOP5 / KXF1SPRINTTOP10 /
-#     KXF1SPRINTTOPCONSTRUCTOR: sprint weekends (~6 a season) are genuinely
-#     uncovered. Held back deliberately: settlement needs a sprint-specific
-#     results source (ESPN's race result is the Sunday grand prix), and the main
-#     race Elo must NOT be assumed to transfer -- a sprint is a third the
-#     distance with no mandatory stop and a different overtaking profile. That
-#     is a model question, not coverage.
+#   KXF1SPRINTTOPCONSTRUCTOR: the only sprint series still excluded. Its
+#     yes_sub_title is a CONSTRUCTOR, not a driver, and "which team wins the
+#     sprint" is a market this app has no model for. The other four sprint
+#     series moved INTO SERIES_MAP on 2026-08-08 -- both of the reasons they
+#     were held back (no sprint results source; the main-race model might not
+#     transfer) were checked and both turned out to be wrong. See the block in
+#     SERIES_MAP for the measurements.
 
 
 def _to_float(v):

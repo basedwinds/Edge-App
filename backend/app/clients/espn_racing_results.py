@@ -50,8 +50,49 @@ def _event_ids_for_season(series: str, season: int) -> list[tuple[str, str, str]
     return out
 
 
-def fetch_race_result(series: str, espn_event_id: str) -> "dict | None":
-    """Finishing order + pole for one ESPN race event, or None if not finished."""
+
+# ESPN splits a race weekend into SESSIONS, each a "competition" on the same
+# event, and tags them: FP1/FP2/FP3 practice, "Qual" qualifying, "SS" sprint
+# qualifying, "SR" sprint race, "Race" the grand prix.
+#
+# REAL BUG this fixes (found 2026-08-08): the selectors below used to take the
+# competition with the LARGEST FIELD among those carrying a winner. On a sprint
+# weekend BOTH the sprint and the grand prix have 20 cars and a winner, and
+# ESPN lists SR *before* Race -- and Python's max() returns the FIRST maximal
+# element. Verified on the 2025 Chinese Grand Prix: the sprint was won by Lewis
+# Hamilton and the grand prix by Oscar Piastri, and the old rule picked
+# Hamilton. Every F1 sprint weekend (~6 a season) was therefore settling GRAND
+# PRIX markets against the SPRINT result -- a correct bet on the actual race
+# winner would have been graded a loss.
+#
+# Selecting by TYPE removes the ambiguity entirely, and is also what makes the
+# sprint markets settleable: same event, same 20 cars, different session.
+RACE_SESSION = "Race"
+SPRINT_SESSION = "SR"
+_QUALI_FOR = {"Race": ("Qual",), "SR": ("SS",)}
+
+
+def _pick_session(comps, session_type):
+    """The competition matching `session_type` by ESPN's own abbreviation.
+    Falls back to the old largest-field-with-a-winner heuristic ONLY when no
+    competition is typed, so a feed that stops publishing types degrades to the
+    previous behaviour rather than returning nothing."""
+    typed = [cp for cp in comps
+             if ((cp.get("type") or {}).get("abbreviation") or "").strip() == session_type]
+    if typed:
+        return max(typed, key=lambda cp: len(cp.get("competitors", [])))
+    if any((cp.get("type") or {}).get("abbreviation") for cp in comps):
+        return None  # types exist and none matched -- that session did not happen
+    withwin = [cp for cp in comps if any(x.get("winner") for x in cp.get("competitors", []))]
+    return max(withwin, key=lambda cp: len(cp.get("competitors", []))) if withwin else None
+
+
+def fetch_race_result(series: str, espn_event_id: str, session_type: str = RACE_SESSION) -> "dict | None":
+    """Finishing order + pole for one ESPN race event, or None if not finished.
+
+    `session_type` selects WHICH session of the weekend -- "Race" for the grand
+    prix (default, every existing caller) or "SR" for the sprint. See
+    _pick_session for the bug that made this explicit."""
     slug = _SLUG.get(series)
     if not slug:
         return None
@@ -65,11 +106,9 @@ def fetch_race_result(series: str, espn_event_id: str) -> "dict | None":
         comps.append(cp)
     if not comps:
         return None
-    # the Race competition = the one with a winner flag + the largest field
-    withwin = [cp for cp in comps if any(x.get("winner") for x in cp.get("competitors", []))]
-    race = max(withwin, key=lambda cp: len(cp.get("competitors", []))) if withwin else None
-    if race is None:
-        return None  # not finished yet
+    race = _pick_session(comps, session_type)
+    if race is None or not any(x.get("winner") for x in race.get("competitors", [])):
+        return None  # session absent or not finished yet
 
     finishers = []  # (order, athlete_id)
     pole = None
@@ -96,7 +135,7 @@ def fetch_race_result(series: str, espn_event_id: str) -> "dict | None":
     return {"order": [aid for _o, aid in finishers], "pole": pole}
 
 
-def fetch_race_grid(series: str, espn_event_id: str) -> "dict[str, int] | None":
+def fetch_race_grid(series: str, espn_event_id: str, session_type: str = RACE_SESSION) -> "dict[str, int] | None":
     """{espn_driver_id: starting position} for a race whose grid is set, or None.
 
     Separate from fetch_race_result on purpose: that one deliberately returns None
@@ -119,8 +158,16 @@ def fetch_race_grid(series: str, espn_event_id: str) -> "dict[str, int] | None":
         ce = get_json(f"{core}/events/{espn_event_id}")
     except Exception:
         return None
+    # The grid for a session comes from ITS OWN qualifying -- Qual for the grand
+    # prix, SS for the sprint. Taking the fullest grid on the event (the old
+    # rule) could hand a sprint's starting order to a grand prix, the same
+    # cross-session mix-up _pick_session documents.
+    comps = ce.get("competitions", [])
+    wanted = _QUALI_FOR.get(session_type, ()) + (session_type,)
+    scoped = [cp for cp in comps
+              if ((cp.get("type") or {}).get("abbreviation") or "").strip() in wanted]
     best: dict[str, int] = {}
-    for cp in ce.get("competitions", []):
+    for cp in (scoped or comps):
         grid: dict[str, int] = {}
         for comp in cp.get("competitors", []):
             start = comp.get("startOrder")
