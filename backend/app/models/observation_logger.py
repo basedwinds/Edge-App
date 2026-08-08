@@ -74,7 +74,34 @@ ENTITY_FIELDS = [
 ]
 
 _START_FIELDS = ["estimated_start_time", "start_time", "commence_time", "match_date",
-                 "event_date", "gameday", "game_date"]
+                 "event_date", "gameday", "game_date",
+                 # CFB game rows call it `gametime` -- not covered by any name
+                 # above, so its game markets logged event_start=NULL too.
+                 # (Its ~1,380 FUTURES rows are correctly NULL: a season-long
+                 # market has no single start. Same for WNBA futures. Only the
+                 # game rows were a real miss.)
+                 "gametime",
+                 # RACING carries none of the above -- its rows expose `event`
+                 # (a slug), `race_event_id`, and `close_time`, and nothing
+                 # else time-shaped. So every one of its observations was
+                 # written with event_start=NULL, which quietly defeats the
+                 # whole point of a FORWARD observation log: with no start
+                 # time there is no way to tell whether a row was captured
+                 # before its race or after it, and settle() cannot tell
+                 # either (it gates on `event_start <= now`).
+                 #
+                 # close_time is the market's own close, which for a race
+                 # market is effectively the green flag -- Kalshi closes it at
+                 # the start. Measured live: populated on 759 of 853 racing
+                 # rows. The 94 without it are season-long futures
+                 # (drivers_champion etc), which genuinely have no single
+                 # start, so NULL is the correct answer there rather than a
+                 # missing one.
+                 #
+                 # LAST in the list on purpose: this is a fallback, and any
+                 # sport that exposes a real start time above still wins. It
+                 # is not a claim that close == start in general.
+                 "close_time"]
 
 
 def _get(row, *names):
