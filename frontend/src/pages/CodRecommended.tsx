@@ -132,8 +132,12 @@ export function CodRecommended() {
 
       <p className="text-xs text-[var(--color-text-muted)] mt-4 max-w-2xl">
         Call of Duty gets the same 6% slice of your bankroll as every other sport (see Settings). There is no
-        futures sub-pool because neither Kalshi nor Polymarket lists CoD futures — that is the real
-        inventory, not a coverage gap. Markets come from Kalshi (KXCODGAME, match winner) and Polymarket
+        futures sub-pool, and the earlier claim here that neither platform lists CoD futures was wrong.
+        Kalshi does list one — &ldquo;COD Esports World Cup Champion&rdquo;, 16 teams — but checked live on
+        2026-08-09 every one of those 16 had no bid, no ask, no last price, no volume and no open interest.
+        It is listed and untraded, so there is nothing to bet into rather than nothing to bet on. Polymarket
+        lists no CoD champion market at all. The sub-pool stays at zero until a book actually appears.
+        Markets come from Kalshi (KXCODGAME, match winner) and Polymarket
         (match winner plus total-maps ladders); a match priced on both venues is collapsed to one row.
         The model is a team-level Elo trained on 3,615 real matches (2020–2026) from breakingpoint.gg,
         scoring 64.8% walk-forward accuracy over 2,508 predictions — between this app&rsquo;s CS2 (60.8%) and

@@ -136,4 +136,25 @@ def check_registry_consistency() -> list[str]:
                 problems.append(f"{s.key}: app.db.models has no {s.entity_model!r}")
     except Exception as exc:  # pragma: no cover - defensive only
         problems.append(f"registry check could not inspect models: {exc}")
+
+    # A sport missing from the catalog scanner is INVISIBLE, not broken, which
+    # is why this keeps happening -- three times now. Its series fall to the
+    # "other" catch-all and get bulk-dismissed as not_relevant in a sweep of
+    # untracked sports:
+    #   NCAAF  45 series dismissed, six of them actively priced
+    #   CS2/LoL  150 already-ingested Polymarket events reported as untracked
+    #   CoD    all four KXCOD* series dismissed -- including KXCODGAME, which
+    #          is priced, and KXCOD, whose dismissal is the reason a later
+    #          check concluded Call of Duty had no futures market at all
+    # Nothing errors in any of those cases; the sport simply never appears.
+    try:
+        from app.ingestion.catalog_scan import _SPORT_FETCHERS
+        for s in SPORTS:
+            if s.key not in _SPORT_FETCHERS:
+                problems.append(
+                    f"{s.key}: no catalog_scan fetcher -- its series will fall to the "
+                    f"'other' catch-all and be dismissed as not_relevant"
+                )
+    except Exception as exc:  # pragma: no cover - defensive only
+        problems.append(f"registry check could not inspect catalog_scan: {exc}")
     return problems

@@ -171,6 +171,22 @@ _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
     # how 45 of them (including six the app now actively prices) ended up bulk-
     # dismissed as not_relevant in a sweep of untracked sports.
     "cfb": _prefix_matcher("KXNCAAF"),
+    # CoD added 2026-08-09, and it is the THIRD time this exact omission has
+    # bitten (NCAAF above, CS2/LoL in the Polymarket map below). Call of Duty
+    # shipped as a full sport without being added here, so all four KXCOD*
+    # series fell to the "other" catch-all and were bulk-dismissed as
+    # not_relevant -- including KXCODGAME, which the app ACTIVELY PRICES, and
+    # KXCOD (COD Tournament Winner), whose dismissal is why a later check
+    # concluded Call of Duty had no futures at all. It does.
+    "cod": _prefix_matcher("KXCOD", "KXEWCCALLOFDUTY", "KXWCCOD"),
+    # WNBA and racing, added 2026-08-09 by the same audit -- BOTH were already
+    # priced and staked while every one of their series sat under "other".
+    # Measured at the time: 44 KXWNBA* entries, 7 KXNASCAR*, 6 KXF1*, all
+    # sport="other", several dispositioned not_relevant. Found by the new
+    # registry guard in app/sports.check_registry_consistency rather than by
+    # anyone noticing, which is the whole argument for that guard.
+    "wnba": _prefix_matcher("KXWNBA"),
+    "racing": _prefix_matcher("KXF1", "KXNASCAR", "KXINDYCAR"),
 }
 
 
@@ -181,6 +197,41 @@ def _fetch_kalshi_series_for_sport(sport: str) -> list[dict]:
         for s in _fetch_kalshi_sports_series()
         if s.get("ticker") and match(s.get("ticker", ""), s.get("title") or "")
     ]
+
+
+def fetch_kalshi_wnba_series() -> list[dict]:
+    """Every KXWNBA* series -- moneyline/spread/total plus the season ladders
+    and bracket families kalshi_wnba_client already reads."""
+    return _fetch_kalshi_series_for_sport("wnba")
+
+
+def fetch_polymarket_wnba_events() -> list[dict]:
+    return _fetch_polymarket_events_for_sport("wnba")
+
+
+def fetch_kalshi_racing_series() -> list[dict]:
+    """F1, NASCAR and IndyCar together, matching the app's single `racing`
+    registry key (the routers split by series underneath)."""
+    return _fetch_kalshi_series_for_sport("racing")
+
+
+def fetch_polymarket_racing_events() -> list[dict]:
+    return _fetch_polymarket_events_for_sport("racing")
+
+
+def fetch_kalshi_cod_series() -> list[dict]:
+    """Every KXCOD* series plus the Esports-World-Cup-branded CoD families.
+    Deliberately the whole family, same reasoning as CFB below: the tournament
+    and map series list little or nothing most weeks, and the point is that
+    they appear here the moment they do."""
+    return _fetch_kalshi_series_for_sport("cod")
+
+
+def fetch_polymarket_cod_events() -> list[dict]:
+    """The same `call-of-duty` tag polymarket_cod_client.py already ingests --
+    kept in step with it deliberately, since a catch-all that does not know the
+    real tag reports already-ingested events as untracked."""
+    return _fetch_polymarket_events_for_sport("cod")
 
 
 def fetch_kalshi_cfb_series() -> list[dict]:
@@ -218,6 +269,11 @@ _POLYMARKET_SLUGS: dict[str, dict[str, tuple[str, ...]]] = {
     "tennis": {"series": ("atp", "wta", "itf")},
     "soccer": {"tag": ("epl", "la-liga", "serie-a", "bundesliga", "ligue-1", "mls")},
     "valorant": {"tag": ("valorant",)},
+    # Matches polymarket_cod_client.COD_TAG_SLUGS exactly.
+    "cod": {"tag": ("call-of-duty",)},
+    # Matches polymarket_wnba_client.TAG_SLUG and polymarket_racing_client._TAGS.
+    "wnba": {"tag": ("wnba",)},
+    "racing": {"tag": ("f1", "nascar", "indycar")},
     # counter-strike-2 added 2026-08-02, in the same change that taught
     # ingestion to read those events (polymarket_cs2_client.py) -- exactly the
     # paired edit the comment above anticipated. `cs2` is kept alongside it:
@@ -671,6 +727,9 @@ _SPORT_FETCHERS: dict[str, list[tuple[str, callable]]] = {
     # catch-all so KXNCAAF* series classify as "cfb"; the catch-all is defined as
     # the complement of the named sports and would otherwise swallow them.
     "cfb": [("kalshi", fetch_kalshi_cfb_series)],
+    "cod": [("kalshi", fetch_kalshi_cod_series), ("polymarket", fetch_polymarket_cod_events)],
+    "wnba": [("kalshi", fetch_kalshi_wnba_series), ("polymarket", fetch_polymarket_wnba_events)],
+    "racing": [("kalshi", fetch_kalshi_racing_series), ("polymarket", fetch_polymarket_racing_events)],
     OTHER_SPORT: [("kalshi", fetch_kalshi_other_series),
                   ("polymarket", fetch_polymarket_other_events)],
 }
