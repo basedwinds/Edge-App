@@ -203,9 +203,13 @@ export interface CodMarketRow {
    *  futures series exist (checked live via the /series index). Named
    *  "series_winner" to match the other esports titles rather than inventing a
    *  fifth spelling of the same concept. */
-  market_type: "series_winner";
-  source: "kalshi";
+  market_type: "series_winner" | "series_total";
+  source: "kalshi" | "polymarket";
   team: string | null;
+  /** series_total only: "over" (the under is its complement, not a second row). */
+  side: "over" | null;
+  /** series_total only: the total-maps threshold. */
+  line: number | null;
   match_label: string | null; // "{team_a} vs {team_b}"
   cod_match_id: number | null;
   event_name: string | null;

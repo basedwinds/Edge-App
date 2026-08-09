@@ -417,6 +417,12 @@ export interface SettingsPayload {
   lol_pool_dollars: number;
   lol_futures_pool_dollars: number;
   lol_weekly_pool_dollars: number;
+  cod_allocation_pct: number;
+  cod_pool_dollars: number;
+  cod_weekly_pool_dollars: number;
+  cod_futures_pool_dollars: number;
+  racing_pool_dollars: number;
+  racing_futures_pool_dollars: number;
   racing_weekly_pool_dollars: number;
 }
 
@@ -873,7 +879,7 @@ function computeMlbWaitReason(m: MlbMarketRow): string | null {
 export function perGamePoolLabel(sport: SportKey): string {
   if (sport === "nba" || sport === "wnba" || sport === "mlb") return "Daily";
   if (sport === "mma") return "Per-fight";
-  if (sport === "tennis" || sport === "soccer" || sport === "valorant" || sport === "cs2" || sport === "lol") return "Per-match";
+  if (sport === "tennis" || sport === "soccer" || sport === "valorant" || sport === "cs2" || sport === "lol" || sport === "cod") return "Per-match";
   return "Weekly";
 }
 
@@ -891,6 +897,7 @@ export function crossPlatformKey(row: {
   valorantMatchId?: number | null;
   cs2MatchId?: number | null;
   lolMatchId?: number | null;
+  codMatchId?: number | null;
   fixtureKey?: number | null;
   team: string | null;
   line: number | null;
@@ -942,7 +949,12 @@ export function crossPlatformKey(row: {
     (row.tennisMatchId ? `tennis:${row.fixtureKey ?? row.tennisMatchId}` : null) || row.soccerMatchId ||
     (row.valorantMatchId ? `valorant:${row.fixtureKey ?? row.valorantMatchId}` : null) ||
     (row.cs2MatchId ? `cs2:${row.fixtureKey ?? row.cs2MatchId}` : null) ||
-    (row.lolMatchId ? `lol:${row.fixtureKey ?? row.lolMatchId}` : null);
+    (row.lolMatchId ? `lol:${row.fixtureKey ?? row.lolMatchId}` : null) ||
+    // CoD is live on BOTH Kalshi and Polymarket, so without this branch the
+    // same match's two platform rows never dedupe -- they read as two separate
+    // propositions and both survive. The prefix is the same auto-increment
+    // collision guard the other three titles carry.
+    (row.codMatchId ? `cod:${row.fixtureKey ?? row.codMatchId}` : null);
   if (gameId) return `${gameId}|${row.marketType}|${row.team ?? ""}|${row.line ?? ""}|${row.side ?? ""}`;
   // `sport` scopes the FUTURES fallback too (real risk unique to esports:
   // the 3 titles reuse the same market_type string, e.g. "tournament_winner",
@@ -2108,7 +2120,7 @@ export function buildSoccerRecommendedBets(
  * differs slightly per title (e.g. series_handicap only exists for
  * Valorant) -- see each title's own GAME_MARKET_TYPES in its router. */
 function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: string; source: "kalshi" | "polymarket"; kelly_fraction: number | null; suggested_stake_dollars: number | null; suggested_stake_units: number | null; stake_pool: "weekly" | "futures" | null; team: string | null; line: number | null; side: string | null; match_date: string | null; estimated_start_time: string | null; implied_prob: number | null; model_prob: number | null; edge: number | null; volume: number | null; match_label?: string | null; group_label?: string | null; event_name?: string | null }>(
-  sport: "valorant" | "cs2" | "lol",
+  sport: "valorant" | "cs2" | "lol" | "cod",
   markets: M[],
   matchIdOf: (m: M) => number | null,
   ladderTypes: Set<string>,
@@ -2245,6 +2257,7 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
 const VALORANT_LADDER_TYPES = new Set(["series_total", "series_handicap"]);
 const CS2_LADDER_TYPES = new Set(["series_total"]);
 const LOL_LADDER_TYPES = new Set(["series_total"]);
+const COD_LADDER_TYPES = new Set(["series_total"]);
 
 /** Valorant's own recommended-bets builder -- gets its own independent
  * bankroll pool as of 2026-07-20 (see settings.py::
@@ -2292,6 +2305,27 @@ export function buildLolRecommendedBets(
 ): RecommendedBetsResult {
   return buildEsportsTitleRecommendedBets(
     "lol", markets, (m) => m.lol_match_id, LOL_LADDER_TYPES,
+    weeklyPoolDollars, futuresPoolDollars, lockedWeeklyDollars, lockedFuturesDollars
+  );
+}
+
+/** CoD's own recommended-bets builder. series_total is the only ladder type --
+ * Polymarket lists "O/U N.5 Games" at several lines on one match, and those
+ * rungs are the same real proposition. Kalshi lists match winner only.
+ *
+ * CoD has NO futures pool: neither platform lists CoD futures, so
+ * DEFAULT_COD_FUTURES_SUBPOOL_PCT is 0 and the futures branch is inert. Passing
+ * the futures pool through anyway keeps the signature identical to its
+ * siblings rather than making CoD the one that needs special-casing. */
+export function buildCodRecommendedBets(
+  markets: CodMarketRow[],
+  weeklyPoolDollars: number,
+  futuresPoolDollars: number,
+  lockedWeeklyDollars = 0,
+  lockedFuturesDollars = 0
+): RecommendedBetsResult {
+  return buildEsportsTitleRecommendedBets(
+    "cod", markets, (m) => m.cod_match_id, COD_LADDER_TYPES,
     weeklyPoolDollars, futuresPoolDollars, lockedWeeklyDollars, lockedFuturesDollars
   );
 }

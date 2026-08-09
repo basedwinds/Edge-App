@@ -177,16 +177,11 @@ function navItems(sport: string) {
   // Placed Bets, and CLV-enabled Calibration were all wired up -- esports
   // now gets the exact same 5-page set as NFL/NBA/MLB/Tennis/Soccer (only
   // MMA is deliberately missing Futures, see below).
-  // Call of Duty has ONLY a Dashboard so far -- its Recommended/Placed/
-  // Calibration pages are not built, and Kalshi lists no CoD futures at all.
-  // Returning early instead of pushing the shared five is deliberate: a nav
-  // link to a route that does not exist renders a blank page, which reads as
-  // the app being broken rather than as a feature not being built yet. Delete
-  // this branch when those pages land.
-  if (sport === "cod") {
-    return { sportItems: items, sharedItems: shared };
-  }
-  if (sport !== "mma") {
+  // CoD joins mma in having NO Futures page -- neither Kalshi nor Polymarket
+  // lists a single CoD futures market, so the tab would always be empty. Its
+  // Recommended/Placed/Calibration pages exist and are pushed below with
+  // everything else.
+  if (sport !== "mma" && sport !== "cod") {
     items.push({ to: `${prefix}/futures`, label: "Futures", icon: Trophy, end: false });
   }
   items.push(

@@ -269,6 +269,13 @@ class SettingsOut(BaseModel):
     # f1/nascar/irl share one allocation, now split weekly/futures like every
     # other sport. racing_pool_dollars was MISSING entirely, so racing was
     # invisible to anything reading per-sport pool totals.
+    # CoD was priced, staked and settling while being entirely absent from this
+    # response -- the frontend could not read its pool at all. Same omission
+    # class as racing_pool_dollars just above.
+    cod_allocation_pct: float
+    cod_pool_dollars: float
+    cod_weekly_pool_dollars: float
+    cod_futures_pool_dollars: float
     racing_pool_dollars: float
     racing_weekly_pool_dollars: float
     racing_futures_pool_dollars: float
@@ -391,6 +398,9 @@ def _build_settings_out(
     racing_weekly_pool_dollars: float,  # precomputed by the caller (needs the session)
     racing_futures_pool_dollars: float,
     *,
+    cod_allocation_pct: float,
+    cod_weekly_pool_dollars: float,
+    cod_futures_pool_dollars: float,
     # KEYWORD-ONLY on purpose. The rest of this signature is positional across
     # 28 params and has already been mis-shifted once (see _read_all's note), so
     # anything added here is added in the one form that cannot shift the others.
@@ -501,6 +511,10 @@ def _build_settings_out(
         lol_pool_dollars=lol_pool_dollars,
         lol_futures_pool_dollars=lol_futures_pool_dollars,
         lol_weekly_pool_dollars=lol_weekly_pool_dollars,
+        cod_allocation_pct=cod_allocation_pct,
+        cod_pool_dollars=cod_weekly_pool_dollars + cod_futures_pool_dollars,
+        cod_weekly_pool_dollars=cod_weekly_pool_dollars,
+        cod_futures_pool_dollars=cod_futures_pool_dollars,
         racing_pool_dollars=racing_weekly_pool_dollars + racing_futures_pool_dollars,
         racing_weekly_pool_dollars=racing_weekly_pool_dollars,
         racing_futures_pool_dollars=racing_futures_pool_dollars,
@@ -546,6 +560,9 @@ def _read_all(session: Session) -> SettingsOut:
         _get_float(session, MAX_STAKE_FRACTION_KEY, MAX_STAKE_FRACTION),
         _get_float(session, MIN_EDGE_TO_BET_KEY, MIN_EDGE_TO_BET),
         *get_racing_pool_dollars(session),
+        cod_allocation_pct=_get_float(session, COD_ALLOCATION_PCT_KEY, DEFAULT_COD_ALLOCATION_PCT),
+        **dict(zip(("cod_weekly_pool_dollars", "cod_futures_pool_dollars"),
+                   get_cod_pool_dollars(session))),
         total_allocation_pct=_allocation_total(session),
     )
 
