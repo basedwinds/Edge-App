@@ -137,17 +137,52 @@ def refresh_ratings():
     )
 
 
-def resolve_team_name(team: str) -> str:
-    """No-op resolver, kept so callers match the other titles' interface.
+_ALIAS_PATH = Path(__file__).with_name("cod_team_aliases.json")
 
-    CS2 and Valorant need real name resolution because their sources use short
-    display names and shortcodes that split one team's history across spellings.
-    breakingpoint.gg returns the SAME full names the markets use ("OpTic
-    Gaming", "Team Falcons"), so there is nothing to resolve -- and a fuzzy
-    resolver with nothing to fix is a way to introduce a wrong merge, not a
-    safeguard. If a real spelling split ever shows up, fix it here.
+
+def _load_aliases() -> dict[str, str]:
+    try:
+        return {str(k): str(v) for k, v in json.loads(_ALIAS_PATH.read_text(encoding="utf-8")).items()}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        # A broken alias file must not silently price teams off the wrong
+        # history -- fall back to exact names and say so.
+        log.exception("could not read %s -- falling back to exact team names", _ALIAS_PATH.name)
+        return {}
+
+
+TEAM_ALIASES: dict[str, str] = _load_aliases()
+
+
+def resolve_team_name(team: str) -> str:
+    """Redirect an event-specific team name onto the name its history is under.
+
+    THIS WAS A NO-OP AND THE COMMENT EXPLAINING WHY WAS WRONG. It read:
+    "breakingpoint.gg returns the SAME full names the markets use ('OpTic
+    Gaming', 'Team Falcons'), so there is nothing to resolve". Both examples
+    were the bug. The Esports World Cup lists teams under their global org
+    names while the CDL season lists the same rosters as city franchises, and
+    breakingpoint records both, so a top team's history splits in two:
+
+        OpTic Texas          267 matches, rating 1653
+        OpTic Gaming          10 matches, rating 1549  <- what EWC markets ask for
+
+    Pricing an EWC market off the 10-match stub gave a near-default rating, so
+    the model called OpTic vs Heretics a coin flip against a market at 82/18
+    and staked the WRONG SIDE on a phantom +33pp edge.
+
+    The map is DERIVED AND VALIDATED, not hand-written -- see
+    scripts/derive_cod_team_aliases.py, which requires date-disjointness, zero
+    head-to-head, zero same-day appearances and a short handover gap, and which
+    refuses the Falcons family (the org fields concurrent rosters) along with
+    every token collision like "Las Lentejas" vs "Las Vegas Legion".
+
+    Applied on BOTH paths: lookups resolve here, and predict_and_update
+    resolves before rating, so post-rebrand results accumulate onto the
+    canonical name instead of re-splitting the history all over again.
     """
-    return team
+    return TEAM_ALIASES.get(team, team)
 
 
 def get_team_rating(team: str) -> float | None:

@@ -50,6 +50,15 @@ and the only honest next test is the same one CS2 and LoL had to pass:
 backtest against real Kalshi/Polymarket CoD odds. There were no live CoD
 markets during this session's catalog sweeps, so that test is still owed --
 and supply, not accuracy, is what will decide whether CoD ships.
+
+UPDATE 2026-08-09: this harness was measuring a DIFFERENT model than
+production. It read raw source team names while the service resolves aliases,
+so an EWC "OpTic Gaming" scored against a 10-match stub here and against
+OpTic's real 267-match history in the app. Now routed through
+elo_service_cod.resolve_team_name. Re-measured, K=16: accuracy 0.6479 ->
+0.6489 and 2508 -> 2526 scored (merged history clears the warm-up for 18 more
+matches). No metric degraded, and the numbers now describe what actually
+prices.
 ===========================================================================
 """
 from __future__ import annotations
@@ -62,6 +71,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.models.baseline.elo_service_cod import resolve_team_name  # noqa: E402
 
 CACHE = Path(__file__).resolve().parents[2] / "data" / "cod_historical_match_cache.json"
 
@@ -81,7 +92,13 @@ def walk_forward(matches: list[dict], k: float, min_games: int):
     lls, briers, probs = [], [], []
 
     for m in matches:
-        a, b = m["team_a"], m["team_b"]
+        # Resolve through the SERVICE's alias map, not the raw source names.
+        # Without this the harness silently measures a different model than
+        # production ships: the EWC lists teams under org names ("OpTic
+        # Gaming") while the CDL lists city franchises ("OpTic Texas"), so raw
+        # names split one team's history in two and the accuracy reported here
+        # would not describe the thing being staked.
+        a, b = resolve_team_name(m["team_a"]), resolve_team_name(m["team_b"])
         ra, rb = rating[a], rating[b]
         p = expected(ra, rb)
         won = 1 if m["score_a"] > m["score_b"] else 0
