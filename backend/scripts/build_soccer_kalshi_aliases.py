@@ -94,6 +94,21 @@ CUPS = {
     "KXEFLCHAMPIONSHIPGAME": "eng.2",
     "KXLALIGAGAME": "esp.1",
     "KXLIGAPORTUGALGAME": "por.1",
+    # Rated-but-never-listed leagues, wired 2026-08-08. 61% of their fixtures
+    # resolved unaided; these close the rest.
+    #
+    # SP2 is the one to be careful with, and it is a good argument for the
+    # fixture join over any name rule: Kalshi lists "Real Sociedad B" and
+    # "Celta Fortuna", which are RESERVE sides that genuinely play in Segunda.
+    # Both are token-compatible with their first teams, and mapping either one
+    # there would stake money on the wrong club in the wrong division. Only a
+    # real fixture can tell them apart.
+    "KXBELGIANPLGAME": "bel.1",
+    "KXBUNDESLIGA2GAME": "ger.2",
+    "KXEFLL1GAME": "eng.3",
+    "KXLALIGA2GAME": "esp.2",
+    "KXSUPERLIGGAME": "tur.1",
+    "KXSCOTTISHPREMGAME": "sco.1",
 }
 PAIR = re.compile(r"^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner\?|:|$)")
 TICKER_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})")

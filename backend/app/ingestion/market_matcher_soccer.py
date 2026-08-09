@@ -475,6 +475,45 @@ TEAM_ALIASES: dict[str, str] = {
     # than being invented.
     "gamba": "gamba osaka",                     # JPN1
     "machida z": "machida",                     # JPN1
+    # ---- Rated-but-never-listed leagues, wired 2026-08-08 -------------------
+    # B1/D2/E2/SP2/T1/SC0 had ratings all along (added for cups and UEFA) but no
+    # Kalshi series, so 297 open markets sat unpriced. 61% of their fixtures
+    # resolved unaided; these close the rest, all fixture-derived.
+    #
+    # "Real Sociedad B" -> sociedad b is the entry that shows why the join is
+    # worth the trouble. Segunda contains RESERVE sides, and Kalshi lists them
+    # under names token-compatible with their first teams -- any name-similarity
+    # rule maps them to Real Sociedad and stakes money on the wrong club in the
+    # wrong division. The fixture sent it to the reserve club instead. Kalshi's
+    # "Celta Fortuna" (Celta Vigo's reserves) is deliberately ABSENT for the
+    # same reason inverted: no fixture resolved it, so it stays refused rather
+    # than guessed onto Celta.
+    "junin": "sarmiento junin",                 # ARG1
+    "rosario": "rosario central",               # ARG1
+    "la louviere": "raal la louviere",          # B1
+    # Verified by hand against the same join the builder uses, which missed it
+    # only for ordering reasons: the anchor needs one ALREADY-resolved side, and
+    # this fixture's other side ("Zulte Waregem") was itself still unresolved on
+    # that pass. Kalshi "Union Gilloise vs Zulte Waregem" on 2026-08-15 matches
+    # exactly ONE ESPN bel.1 fixture that day, "Union St.-Gilloise vs
+    # Zulte-Waregem". Re-running the builder now would derive it unaided.
+    "union gilloise": "st gilloise",            # B1
+    "leuven": "oudheverlee leuven",             # B1
+    "royal antwerp": "antwerp",                 # B1
+    "royal charleroi": "charleroi",             # B1
+    "st truidense": "st truiden",               # B1
+    "zulte waregem": "waregem",                 # B1
+    "kiel": "holstein kiel",                    # D2
+    "nuremberg": "nurnberg",                    # D2
+    "sheffield wednesday": "sheffield weds",    # E0
+    "milton keynes": "milton keynes dons",      # E1
+    "notts": "notts county",                    # E1
+    "oxford united": "oxford",                  # E1
+    "peterborough": "peterboro",                # E1
+    "heart of midlothian": "hearts",            # SC0
+    "real sociedad b": "sociedad b",            # SP2
+    "basaksehir": "buyuksehyr",                 # T1
+    "kocaeli": "kocaelispor",                   # T1
     # ---- Gaps in LONG-SHIPPED European leagues (2026-08-08) -----------------
     # Found by sweeping EVERY live Kalshi soccer fixture through the production
     # resolver, which had never been done -- previous checks only looked at

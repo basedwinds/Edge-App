@@ -51,6 +51,30 @@ MONEYLINE_SERIES = {
     "ARG1": "KXARGPREMDIVGAME",
     "MEX1": "KXLIGAMXGAME",
     "JPN1": "KXJLEAGUEGAME",
+    # ---- Leagues this app ALREADY RATED but never listed markets for --------
+    # Added 2026-08-08. These six needed no new data, no new model and no new
+    # aliases -- their ratings have been in the pool the whole time. They were
+    # added to support DOMESTIC CUPS and UEFA (a Coppa Italia tie needs Serie B,
+    # a DFB Pokal tie needs 2. Bundesliga, UEFA needs Belgium/Turkey/Scotland),
+    # and nobody went back to ask whether the leagues also traded in their own
+    # right. They do: 297 open markets sitting unpriced behind a missing dict
+    # entry.
+    #
+    # Found by diffing the RATED POOL against this map, which had never been
+    # done -- ten rated leagues had no series here. This is the same drift as
+    # the per-sport futures lists (loaders vs routes); the lesson generalises to
+    # "diff the model's inputs against the ingester's inputs", not just routes.
+    #
+    # G1 (Greece), I2 (Serie B), F2 (Ligue 2) and E3 (League Two) are rated too
+    # but had NO open series at this check -- their seasons have not started.
+    # Deliberately not guessed at: a ticker that 404s is indistinguishable from
+    # an off-season one, so they get added when they are observed live.
+    "B1": "KXBELGIANPLGAME",
+    "D2": "KXBUNDESLIGA2GAME",
+    "E2": "KXEFLL1GAME",
+    "SP2": "KXLALIGA2GAME",
+    "T1": "KXSUPERLIGGAME",
+    "SC0": "KXSCOTTISHPREMGAME",
 }
 
 SPREAD_SERIES = {
@@ -67,6 +91,13 @@ SPREAD_SERIES = {
     "BRA1": "KXBRASILEIROSPREAD",
     "ARG1": "KXARGPREMDIVSPREAD",
     "MEX1": "KXLIGAMXSPREAD",
+    # Only the four with live spread inventory at the 2026-08-08 check. E2/SP2/T1
+    # list GAME markets but ZERO spread and ZERO total, so they are absent here
+    # rather than wired hopefully -- an entry that never resolves is a silent
+    # per-pass fetch that always returns nothing.
+    "B1": "KXBELGIANPLSPREAD",
+    "D2": "KXBUNDESLIGA2SPREAD",
+    "SC0": "KXSCOTTISHPREMSPREAD",
 }
 
 LEAGUE_WINNER_SERIES = {
@@ -122,6 +153,9 @@ TOTAL_SERIES = {
     "BRA1": "KXBRASILEIROTOTAL",
     "ARG1": "KXARGPREMDIVTOTAL",
     "MEX1": "KXLIGAMXTOTAL",
+    "B1": "KXBELGIANPLTOTAL",
+    "D2": "KXBUNDESLIGA2TOTAL",
+    "SC0": "KXSCOTTISHPREMTOTAL",
 }
 
 # BTTS (Both Teams To Score) confirmed live 2026-07-19 with real open
