@@ -25,14 +25,23 @@ from app.db.models import (
     CodMatch, Cs2Match, LolMatch, Market, MlbGame, NbaGame, NflGame, SoccerMatch,
     TennisMatch, ValorantMatch, WnbaGame,
 )
+from app import sports as app_sports
+from app.db import models as _models
 from app.models.clv import _game_is_final, _game_kickoff_dt
 from app.models.staking import has_real_trading
 
+# DERIVED from the sport registry, not hand-listed. CoD was missed in the
+# hand-written version and the scanner reported a silent zero, which reads as
+# "the prices agree" rather than "that sport was never looked at" -- the same
+# failure racing hit before it.
+#
+# A sport appears here only if it declares an entity_model. MMA deliberately
+# does not: a fight card has no single kickoff instant, so it is treated as
+# never-pregame-safe and its markets are conservatively dropped. That exclusion
+# now lives in the registry next to the sport rather than as an absence here.
 _ENTITY_MODEL = {
-    "nfl": NflGame, "nba": NbaGame, "wnba": WnbaGame, "mlb": MlbGame,
-    "tennis": TennisMatch, "soccer": SoccerMatch,
-    "valorant": ValorantMatch, "cs2": Cs2Match, "lol": LolMatch,
-    "cod": CodMatch,
+    key: getattr(_models, model_name)
+    for key, (_col, model_name) in app_sports.ENTITY_SPORTS.items()
 }
 
 
@@ -47,7 +56,15 @@ def _is_pregame(session: Session, entity_id: str) -> bool:
     model = _ENTITY_MODEL.get(sport)
     if model is None:
         return False
-    key = raw if sport in ("nfl", "nba", "wnba", "mlb") else int(raw)
+    # Coerce from the MODEL's own primary-key type, not a hardcoded list of
+    # string-keyed sports. That list would have crashed the moment CFB was
+    # derived in (its id is an ESPN event string, not an int) -- and the whole
+    # point of deriving these lookups is that adding a sport cannot break them.
+    pk_type = model.__table__.primary_key.columns.values()[0].type.python_type
+    try:
+        key = raw if pk_type is str else pk_type(raw)
+    except (TypeError, ValueError):
+        return False
     game = session.get(model, key)
     if game is None or _game_is_final(game):
         return False
@@ -60,39 +77,22 @@ def _is_pregame(session: Session, entity_id: str) -> bool:
 def _entity_id(m: Market, race_canon: dict[int, int] | None = None) -> str | None:
     """This app's canonical per-game/match id for a market, or None for a
     futures/season-long market (no single game). Shared across BOTH platforms
-    for the same game, which is what makes the cross-platform join reliable."""
-    if m.nfl_game_id:
-        return f"nfl:{m.nfl_game_id}"
-    if m.nba_game_id:
-        return f"nba:{m.nba_game_id}"
-    if m.wnba_game_id:
-        return f"wnba:{m.wnba_game_id}"
-    if m.mlb_game_id:
-        return f"mlb:{m.mlb_game_id}"
-    if m.mma_fight_id:
-        return f"mma:{m.mma_fight_id}"
-    if m.tennis_match_id:
-        return f"tennis:{m.tennis_match_id}"
-    if m.soccer_match_id:
-        return f"soccer:{m.soccer_match_id}"
-    if m.valorant_match_id:
-        return f"valorant:{m.valorant_match_id}"
-    if m.cs2_match_id:
-        return f"cs2:{m.cs2_match_id}"
-    if m.lol_match_id:
-        return f"lol:{m.lol_match_id}"
-    # FOURTH instance of the omission this file's racing comment below already
-    # describes, caught before it could report a false zero: CoD carries BOTH
-    # platforms (Kalshi KXCODGAME + Polymarket call-of-duty, priced side by
-    # side at 0.685 vs 0.665 on the same match), so without this branch every
-    # CoD market returned None here and the scanner would have said the prices
-    # agree when it had never looked.
-    #
-    # Unlike racing, no second fix is needed: both CoD pollers bind to the SAME
-    # CodMatch row via market_catalog_cod._match_for_teams, so the two platforms
-    # genuinely share an entity id rather than each minting their own.
-    if m.cod_match_id:
-        return f"cod:{m.cod_match_id}"
+    for the same game, which is what makes the cross-platform join reliable.
+
+    DERIVED from the sport registry. Every sport that declares a game_id_column
+    is covered automatically, so adding a sport cannot silently exclude it from
+    divergence scanning -- which is exactly what happened to racing, and then to
+    CoD, and what CFB was quietly suffering from too (both platforms, 30
+    game-linked markets, in neither of the old hand-written lists).
+
+    Note this is BROADER than _ENTITY_MODEL on purpose: MMA gets an id here but
+    has no entity model, so _is_pregame drops it. Both behaviours are the
+    registry's to state.
+    """
+    for key, column in app_sports.ENTITY_ID_COLUMNS.items():
+        raw = getattr(m, column, None)
+        if raw:
+            return f"{key}:{raw}"
     # RACING WAS MISSING FROM THIS LIST ENTIRELY (added 2026-08-06). Every racing
     # market returned None here, so F1, NASCAR and IndyCar were silently excluded
     # from divergence scanning -- even though F1 has carried BOTH platforms all

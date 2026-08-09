@@ -40,21 +40,35 @@ class Sport:
     #: esports, racing) are excluded on purpose -- their futures are
     #: tournament-scoped and only listed once the event is imminent.
     season_table: tuple[str, str] | None = None
+    #: Name of the app.db.models class holding this sport's real-world event
+    #: (the row game_id_column points at). Stored as a NAME, not the class, so
+    #: this module stays import-free of models -- app.db.models imports the DB
+    #: layer and a real class here would make the registry unimportable from
+    #: anywhere early in startup.
+    #:
+    #: Consumed by cross_platform_divergence, which needs to look the event up
+    #: to decide whether a market is still pre-game. None where the sport has
+    #: no single event model (racing keys by RaceEvent through its own branch).
+    entity_model: str | None = None
 
 
 SPORTS: tuple[Sport, ...] = (
-    Sport("nfl", "NFL", "/markets", "nfl_game_id", True, ("NflGame", "gameday")),
-    Sport("nba", "NBA", "/nba/markets", "nba_game_id", True, ("NbaGame", "gameday")),
-    Sport("wnba", "WNBA", "/wnba/markets", "wnba_game_id", False, ("WnbaGame", "gameday")),
-    Sport("cfb", "College Football", "/cfb/markets", "cfb_game_id", False, ("CfbGame", "gameday")),
-    Sport("mlb", "MLB", "/mlb/markets", "mlb_game_id", True, ("MlbGame", "gameday")),
-    Sport("soccer", "Soccer", "/soccer/markets", "soccer_match_id", True, ("SoccerMatch", "match_date")),
+    Sport("nfl", "NFL", "/markets", "nfl_game_id", True, ("NflGame", "gameday"), entity_model="NflGame"),
+    Sport("nba", "NBA", "/nba/markets", "nba_game_id", True, ("NbaGame", "gameday"), entity_model="NbaGame"),
+    Sport("wnba", "WNBA", "/wnba/markets", "wnba_game_id", False, ("WnbaGame", "gameday"), entity_model="WnbaGame"),
+    Sport("cfb", "College Football", "/cfb/markets", "cfb_game_id", False, ("CfbGame", "gameday"), entity_model="CfbGame"),
+    Sport("mlb", "MLB", "/mlb/markets", "mlb_game_id", True, ("MlbGame", "gameday"), entity_model="MlbGame"),
+    Sport("soccer", "Soccer", "/soccer/markets", "soccer_match_id", True, ("SoccerMatch", "match_date"), entity_model="SoccerMatch"),
+    # MMA has NO entity_model ON PURPOSE. cross_platform_divergence treats it as
+    # never-pregame-safe (a card has no single kickoff instant, the same
+    # exclusion clv.py makes), so it must appear in _entity_id but NOT in
+    # _ENTITY_MODEL. Leaving entity_model unset is what encodes that.
     Sport("mma", "MMA", "/mma/markets", "mma_fight_id", False),
-    Sport("tennis", "Tennis", "/tennis/markets", "tennis_match_id", True),
-    Sport("valorant", "Valorant", "/valorant/markets", "valorant_match_id", True),
-    Sport("cs2", "CS2", "/cs2/markets", "cs2_match_id", True),
-    Sport("lol", "LoL", "/lol/markets", "lol_match_id", True),
-    Sport("cod", "Call of Duty", "/cod/markets", "cod_match_id", True),
+    Sport("tennis", "Tennis", "/tennis/markets", "tennis_match_id", True, entity_model="TennisMatch"),
+    Sport("valorant", "Valorant", "/valorant/markets", "valorant_match_id", True, entity_model="ValorantMatch"),
+    Sport("cs2", "CS2", "/cs2/markets", "cs2_match_id", True, entity_model="Cs2Match"),
+    Sport("lol", "LoL", "/lol/markets", "lol_match_id", True, entity_model="LolMatch"),
+    Sport("cod", "Call of Duty", "/cod/markets", "cod_match_id", True, entity_model="CodMatch"),
     # Racing is one markets endpoint covering f1/irl/nascar, and its rows link by
     # race_event_id through racing_markets' own builder rather than the shared
     # game-id path -- hence no game_id_column here.
@@ -73,6 +87,22 @@ SEASON_TABLES: dict[str, tuple[str, str]] = {
     s.key: s.season_table for s in SPORTS if s.season_table
 }
 
+#: sport key -> (game-id column, event model NAME), for every sport whose
+#: markets tie to one real-world event. cross_platform_divergence derives both
+#: of its per-sport lookups from this instead of hand-listing them -- CoD was
+#: missed in exactly that way and the scanner reported a silent zero.
+ENTITY_SPORTS: dict[str, tuple[str, str]] = {
+    s.key: (s.game_id_column, s.entity_model)
+    for s in SPORTS if s.game_id_column and s.entity_model
+}
+
+#: sport key -> game-id column, for EVERY game-tied sport (broader than
+#: ENTITY_SPORTS: MMA is here but has no entity_model, so it gets a divergence
+#: entity id while still being dropped as never-pregame-safe).
+ENTITY_ID_COLUMNS: dict[str, str] = {
+    s.key: s.game_id_column for s in SPORTS if s.game_id_column
+}
+
 #: Columns that tie a Market/PlacedBet row to a real-world event.
 GAME_ID_COLUMNS: tuple[str, ...] = tuple(s.game_id_column for s in SPORTS if s.game_id_column)
 
@@ -87,6 +117,7 @@ def check_registry_consistency() -> list[str]:
     declared game-id column exists on both Market and PlacedBet."""
     problems: list[str] = []
     try:
+        from app.db import models as models_module
         from app.db.models import Market, PlacedBet
         market_cols = {c.name for c in Market.__table__.columns}
         bet_cols = {c.name for c in PlacedBet.__table__.columns}
@@ -95,6 +126,11 @@ def check_registry_consistency() -> list[str]:
                 problems.append(f"{s.key}: Market has no column {s.game_id_column!r}")
             if s.game_id_column and s.game_id_column not in bet_cols:
                 problems.append(f"{s.key}: PlacedBet has no column {s.game_id_column!r}")
+            # A declared entity_model that does not exist would make the
+            # divergence scanner silently skip the sport -- the exact failure
+            # this registry exists to make loud.
+            if s.entity_model and not hasattr(models_module, s.entity_model):
+                problems.append(f"{s.key}: app.db.models has no {s.entity_model!r}")
     except Exception as exc:  # pragma: no cover - defensive only
         problems.append(f"registry check could not inspect models: {exc}")
     return problems
