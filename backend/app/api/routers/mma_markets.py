@@ -361,7 +361,7 @@ def list_mma_markets(session: Session = Depends(get_session)):
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "mma", m.market_type)
-        stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full)  # every GAME_MARKET_TYPES entry is per-fight, "weekly" pool
+        stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, sport="mma")  # every GAME_MARKET_TYPES entry is per-fight, "weekly" pool
         out.append(
             MmaMarketOut(
                 id=m.id,

@@ -75,6 +75,21 @@ DEFAULT_GAME_EXPOSURE_CAP_PCT = 0.40
 # only ever holds what it actually earns, this just bounds the top.
 DEFAULT_FUTURES_PER_SPORT_CAP_FRACTION = 0.25
 
+# THE GAME SIDE NEEDS THIS TOO (2026-08-09, user's stated goal: "each sport has
+# opportunity in the bankroll to make bets on both games and futures").
+#
+# The futures side has had a per-sport ceiling since it was built. The game side
+# had NONE -- only the global 40%. So one sport could consume the entire game
+# pool and starve every other, which is not hypothetical: MLB alone was carrying
+# $477 of suggested game exposure against an $800 side.
+#
+# Same 0.25 as futures, deliberately: it needs no separate justification, and it
+# means at least four sports can always be fully funded on each side. An equal
+# 1/13 share would be $61 and too tight to place a real bet in -- most sports
+# are not live simultaneously, so the ceiling exists to stop monopolisation, not
+# to pre-divide the pool.
+DEFAULT_GAME_PER_SPORT_CAP_FRACTION = 0.25
+
 # No single TEAM may hold more than this share of the futures side. A BACKSTOP,
 # deliberately loose: 0.075 is $30 at the current bankroll, which is 12 futures
 # bets at the flat $2.50 rung, so it bites only on genuine runaway
@@ -100,6 +115,7 @@ GAME_POOL = "weekly"  # the stored enum value for per-game bets; see staking.py
 # outstanding futures (which therefore has no "futures:<sport>" row of its own)
 # still resolves to the ceiling rather than to "uncapped".
 FUTURES_PER_SPORT_CEILING_KEY = "futures:_ceiling"
+GAME_PER_SPORT_CEILING_KEY = "weekly:_ceiling"
 FUTURES_PER_TEAM_CEILING_KEY = "futures:_team_ceiling"
 
 
@@ -163,6 +179,20 @@ def outstanding_futures_by_sport(session: Session) -> dict[str, float]:
     return {(sport or "unknown"): float(total or 0.0) for sport, total in rows}
 
 
+def outstanding_game_by_sport(session: Session) -> dict[str, float]:
+    """{sport: dollars} of REAL, still-pending placed bets on the GAME side.
+    Mirror of outstanding_futures_by_sport."""
+    rows = (
+        session.query(PlacedBet.sport, func.coalesce(func.sum(PlacedBet.stake_dollars), 0.0))
+        .filter(PlacedBet.paper == False,  # noqa: E712
+                PlacedBet.status == "pending",
+                func.coalesce(PlacedBet.stake_pool, GAME_POOL) == GAME_POOL)
+        .group_by(PlacedBet.sport)
+        .all()
+    )
+    return {(sport or "unknown"): float(total or 0.0) for sport, total in rows}
+
+
 def outstanding_futures_by_team(session: Session) -> dict[tuple[str, str], float]:
     """{(sport, team): dollars} of REAL, still-pending placed FUTURES bets.
 
@@ -205,6 +235,13 @@ def capacity(session: Session, bankroll: float, futures_pct: float, game_pct: fl
     # Per-TEAM headroom, keyed "futures:<sport>:<team>". Scoped by sport as well
     # as team so two different sports' "ATL" (the Braves and the Falcons, both
     # live on the board right now) do not share one ceiling.
+    # Per-sport GAME headroom, keyed "weekly:<sport>" -- the mirror of the
+    # futures ceiling above, so neither side can be monopolised by one sport.
+    game_per_sport_ceiling = bankroll * game_pct * DEFAULT_GAME_PER_SPORT_CAP_FRACTION
+    caps[GAME_PER_SPORT_CEILING_KEY] = game_per_sport_ceiling
+    for sport, spent in outstanding_game_by_sport(session).items():
+        caps[f"{GAME_POOL}:{sport}"] = max(0.0, game_per_sport_ceiling - spent)
+
     per_team_ceiling = bankroll * futures_pct * DEFAULT_FUTURES_PER_TEAM_CAP_FRACTION
     caps[FUTURES_PER_TEAM_CEILING_KEY] = per_team_ceiling
     for (sport, team), spent in outstanding_futures_by_team(session).items():
@@ -256,15 +293,24 @@ def remaining_for_unit_scale(unit_scale: float, sport: str | None = None,
     number -- the binding constraint is whichever is tighter. It is OPTIONAL by
     design: a futures caller that doesn't pass it still gets the global cap, so
     a router nobody remembered to update degrades to the previous, safe
-    behaviour instead of going uncapped. The game side has no per-sport ceiling
-    (game bets recycle their capital in days; the concentration risk the
-    ceiling addresses is specific to season-long positions).
+    behaviour instead of going uncapped. The GAME side now has its own per-sport
+    ceiling as well -- see DEFAULT_GAME_PER_SPORT_CAP_FRACTION for why the
+    earlier "game bets recycle, so concentration does not matter" reasoning was
+    wrong in practice.
     """
     with _lock:
         if not _snapshot:
             return None
         if unit_scale == 1.0:
-            return _snapshot.get(GAME_POOL)
+            overall_game = _snapshot.get(GAME_POOL)
+            if sport is None:
+                return overall_game
+            limits = [x for x in (overall_game,) if x is not None]
+            per_sport_game = _snapshot.get(f"{GAME_POOL}:{sport}",
+                                           _snapshot.get(GAME_PER_SPORT_CEILING_KEY))
+            if per_sport_game is not None:
+                limits.append(per_sport_game)
+            return min(limits) if limits else None
         overall = _snapshot.get(FUTURES_POOL)
         if sport is None:
             return overall
