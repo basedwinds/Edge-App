@@ -123,7 +123,12 @@ export function SoccerRecommended() {
         total cross-sport bankroll, all in one pool for now (no futures market is built yet). This app's own
         fresh backtest found the market beats this attack/defense Poisson baseline in every European league
         tested — it's a mechanical filter on unvalidated model output (model_validated: false everywhere),
-        not a claim that any of these beat the market. Sort by any column; use the info button for the
+        not a claim that any of these beat the market. Home advantage is one shared constant for 25 of the
+        26 leagues, which was checked rather than assumed: measured on 2019-onward matches only, the shared
+        constant is unbiased almost everywhere (pooled +0.2pp). Brazil&rsquo;s Série A is the single
+        exception and carries its own fitted term, having stayed tilted the same way in every window
+        tested and improved on held-out seasons. MLS looked similar but got worse out of sample, so it
+        was rejected and keeps the shared constant. Sort by any column; use the info button for the
         reasoning behind the number.
       </p>
 

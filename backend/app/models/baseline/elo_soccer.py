@@ -48,8 +48,13 @@ constants (see backtest_moneyline_soccer.py's own module docstring for the
 full per-league numbers)."""
 from __future__ import annotations
 
+import json
+import logging
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
+
+log = logging.getLogger("elo_soccer")
 
 BASE_GOALS_PER_TEAM = 1.35  # rough prior (commonly-published European top-flight average), overridden by the running empirical mean below almost immediately
 K_ATTACK = 0.03
@@ -57,6 +62,35 @@ K_DEFENSE = 0.03
 HOME_ADVANTAGE_LOG = 0.20
 SEASON_REGRESSION = 1.0 / 3.0  # fraction of the way back to league-average between seasons -- same constant/rationale as elo.py's NFL SEASON_REGRESSION (squads turn over every transfer window, not a fresh derivation for soccer specifically). NOT included in the 2026-07-19 grid search (only affects the between-season carryover, not scored by this app's own walk-forward Brier the same direct way K/home-advantage are) -- still a borrowed starting point, flagged honestly.
 MAX_GOALS = 10  # joint distribution grid cap per side -- P(11+ goals) is negligible for any real team-strength gap this rating produces
+
+# PER-LEAGUE home advantage overrides, fitted and held-out-validated by
+# scripts/fit_soccer_home_advantage.py. A league absent from this file uses
+# HOME_ADVANTAGE_LOG above, which the fit script's era table shows is already
+# unbiased on modern football -- the file is deliberately near-empty, and that
+# emptiness is the RESULT, not a gap. Do not hand-edit it; re-run the fitter.
+_HOME_ADVANTAGE_PATH = Path(__file__).with_name("soccer_home_advantage.json")
+
+
+def _load_home_advantage() -> dict[str, float]:
+    try:
+        raw = json.loads(_HOME_ADVANTAGE_PATH.read_text(encoding="utf-8"))
+        return {str(k): float(v) for k, v in raw.items()}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        # A malformed override file must not silently re-tilt every league --
+        # fall back to the validated global constant and say so.
+        log.exception("could not read %s -- falling back to the global home advantage", _HOME_ADVANTAGE_PATH.name)
+        return {}
+
+
+HOME_ADVANTAGE_BY_LEAGUE: dict[str, float] = _load_home_advantage()
+
+
+def home_advantage_for_league(league: str | None) -> float:
+    """The home term to build a league's rating state with. Falls back to the
+    global constant for every league without a validated override."""
+    return HOME_ADVANTAGE_BY_LEAGUE.get(league or "", HOME_ADVANTAGE_LOG)
 
 
 def _poisson_pmf(k: int, lam: float) -> float:
@@ -87,6 +121,14 @@ class SoccerRatingState:
     goals_sum: float = 0.0  # running total goals scored (both sides, every match) -- for the walk-forward league-average prior
     goals_n: int = 0  # running total team-match observations backing goals_sum
     current_season: str | None = None
+    # PER-LEAGUE home advantage, defaulting to the global grid-searched value.
+    # Home advantage genuinely differs by country and a single constant left 17
+    # of 28 leagues systematically tilted (Greece and Brazil by +6.3pp, Japan
+    # -2.5pp the other way) -- see scripts/audit_soccer_leagues.py. Carried on
+    # the STATE rather than passed to predict_match because there is already one
+    # state per league, so it needs no call-site changes and cannot be forgotten
+    # by a caller.
+    home_log: float = HOME_ADVANTAGE_LOG
 
     def get_attack(self, team: str) -> float:
         return self.attack_log.get(team, 0.0)
@@ -224,7 +266,7 @@ def predict_match(state: SoccerRatingState, home_team: str, away_team: str) -> M
     # noise-level model would produce, which is what made this a proven sign
     # bug rather than just "no real edge" (2026-07-19).
     avg_goals = state.league_avg_goals()
-    expected_home = avg_goals * math.exp(state.get_attack(home_team) + state.get_concede(away_team) + HOME_ADVANTAGE_LOG)
+    expected_home = avg_goals * math.exp(state.get_attack(home_team) + state.get_concede(away_team) + state.home_log)
     expected_away = avg_goals * math.exp(state.get_attack(away_team) + state.get_concede(home_team))
     grid = _build_grid(expected_home, expected_away)
     return MatchGoalDistribution(expected_home_goals=expected_home, expected_away_goals=expected_away, grid=grid)

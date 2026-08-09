@@ -34,7 +34,14 @@ import logging
 
 from app.ingestion import soccer_data
 from app.ingestion.market_matcher_soccer import canonical_team_key
-from app.models.baseline.elo_soccer import MatchGoalDistribution, SoccerRatingState, predict_and_update, predict_half, predict_match
+from app.models.baseline.elo_soccer import (
+    MatchGoalDistribution,
+    SoccerRatingState,
+    home_advantage_for_league,
+    predict_and_update,
+    predict_half,
+    predict_match,
+)
 
 log = logging.getLogger("elo_service_soccer")
 
@@ -70,7 +77,14 @@ def refresh_ratings():
     last_played: dict[tuple[str, str], str] = {}
     for m in matches:
         league = m["league"]
-        state = states.setdefault(league, SoccerRatingState())
+        state = states.get(league)
+        if state is None:
+            # Home advantage is per-league where a league earned its own
+            # validated term (elo_soccer.home_advantage_for_league); everything
+            # else gets the global constant. Built HERE, at the one place a
+            # league's state is created, so no caller can construct a state
+            # that silently reverts to the global value.
+            state = states[league] = SoccerRatingState(home_log=home_advantage_for_league(league))
         canonical_match = {
             **m,
             "home_team": canonical_team_key(m["home_team"]),

@@ -77,6 +77,39 @@ THE FIX, and it should be fitted rather than eyeballed: a per-league home
 term, fitted on each league's own residual and validated on held-out seasons
 before shipping. See the task raised from this run.
 ===========================================================================
+RESOLVED 2026-08-09 by scripts/fit_soccer_home_advantage.py -- and finding 2
+above turned out to be MOSTLY WRONG about its own cause. Read this before
+re-raising it.
+
+The per-league tilt is an ERA effect, not a country effect. Home advantage in
+football has declined steadily, and this script pools 33 seasons, so what it
+measured is mostly the 1990s. Bias under the SAME global 0.20 constant, by era:
+
+    1992-1994  +0.0472  z  +8.4     home win 47.9%
+    2001-2003  +0.0312  z  +7.5              46.3%
+    2010-2012  +0.0178  z  +5.3              45.1%
+    2019-2021  -0.0045  z  -1.5              42.9%   <- crowdless COVID seasons
+    2025-2027  +0.0047  z  +1.0              44.0%
+
+Restricted to 2019-onward, only 3 of 26 leagues are tilted (was 17 of 28) and
+the pooled bias is +0.0023. The country ORDERING did not survive either: Greece,
+the most tilted league on full history (+0.0628, z +11.1), is -0.0115 (z -1.0)
+in the modern era, and Serie A flipped sign. So the "the ranking recovers the
+football literature" reading above is retrospectively an artifact of which
+leagues have the most pre-2010 data, not a measurement of national home
+advantage.
+
+WHAT ACTUALLY SHIPPED: exactly ONE league, BRA1 (0.20 -> 0.322), the only one
+tilted in the same direction in every window tested AND passing its own
+held-out check. MLS cleared the fit but was REJECTED on held-out data. Its
+row here is now +0.0260 z +3.9 (was +0.0640 z +9.5) with Brier 0.2420 ->
+0.2386; it does not go to zero on THIS table and should not, because the fit
+targets modern football and this table is dominated by the old high-home-
+advantage era.
+
+So a large full-history bias in the table below is NOT by itself grounds to
+fit that league a constant. Split it by era first.
+===========================================================================
 """
 from __future__ import annotations
 
@@ -120,7 +153,9 @@ def main() -> None:
     rows = []
     for lg, games in by_league.items():
         games.sort(key=lambda m: (m.get("match_date") or "", m.get("home_team") or ""))
-        state = E.SoccerRatingState()
+        # Built the way refresh_ratings() builds it, so this audit measures the
+        # home term a league ACTUALLY ships with rather than the global default.
+        state = E.SoccerRatingState(home_log=E.home_advantage_for_league(lg))
         seen: collections.Counter = collections.Counter()
         resid, briers, lls, actuals, preds = [], [], [], [], []
 
