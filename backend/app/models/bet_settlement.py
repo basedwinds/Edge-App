@@ -58,6 +58,12 @@ AUTO_SETTLE_MARKET_TYPES = {
     # cup + UEFA regulation markets (2026-08-08). cup_advance is deliberately
     # NOT here -- see _SOCCER_GRADERS for why it must stay unsettleable.
     "cup_moneyline_3way", "uefa_moneyline_3way", "cup_total", "uefa_total",
+    # Leagues Cup (2026-08-08). All four are ordinary single-match questions
+    # settled off the regulation score, so they reuse the SAME graders the
+    # league markets use -- there is no new settlement rule here, only new
+    # market_type names pointing at existing logic.
+    "leagues_cup_moneyline_3way", "leagues_cup_total",
+    "leagues_cup_spread", "leagues_cup_btts",
     # mma
     "distance", "rounds", "method_of_finish",
     # esports (cs2/valorant/lol). map_winner grades for LoL + Valorant -- see
@@ -779,6 +785,13 @@ _SOCCER_GRADERS = {
     "uefa_moneyline_3way": _grade_soccer_moneyline_3way,
     "cup_total": _grade_soccer_total,
     "uefa_total": _grade_soccer_total,
+    "leagues_cup_moneyline_3way": _grade_soccer_moneyline_3way,
+    "leagues_cup_total": _grade_soccer_total,
+    # Spread reuses the league grader, which reads bet.team as the favoured
+    # side and bet.line as "wins by more than line" -- exactly the convention
+    # upsert_kalshi_leagues_cup_spread_market writes.
+    "leagues_cup_spread": _grade_soccer_spread,
+    "leagues_cup_btts": _grade_soccer_btts,
     "game_spread": _grade_soccer_spread,
     "game_total": _grade_soccer_total,
     "team_total": _grade_soccer_team_total,

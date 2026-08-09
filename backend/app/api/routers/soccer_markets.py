@@ -55,6 +55,7 @@ from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_m
 from app.models.baseline import elo_service_soccer
 from app.models.cup_match import predict_cup_tie
 from app.models.uefa_match import predict_uefa_match
+from app.models.leagues_cup_match import predict_leagues_cup_match
 from app.models.combine import combine_probability_3way
 from app.models.ladder_sanity import (
     SOCCER_LIVE_TRADING_MIN_PRICE_SWING,
@@ -80,6 +81,8 @@ GAME_MARKET_TYPES = {
     "cup_moneyline_3way", "cup_advance", "cup_total",
     # UEFA club competitions (2026-08-08) -- cross-country, offsets-based.
     "uefa_moneyline_3way", "uefa_total",
+    "leagues_cup_moneyline_3way", "leagues_cup_total",
+    "leagues_cup_spread", "leagues_cup_btts",
 }
 
 # Real threshold-LADDER market types (multiple lines/rungs per real match+
@@ -383,6 +386,78 @@ def _uefa_total_model_prob(market: Market, match: SoccerMatch | None) -> float |
     return pred.prob_total_over(market.line)
 
 
+# --- LEAGUES CUP (2026-08-08) ----------------------------------------------
+# Deliberately NOT folded into the UEFA handlers. predict_leagues_cup_match
+# carries its own fitted MLS/Liga MX offset and its own venue term (~0, because
+# the competition is played at neutral or near-neutral sites); the UEFA path
+# would apply European offsets and a full domestic home advantage instead.
+LEAGUES_CUP_LEAGUES = {"LEAGUES_CUP"}
+LEAGUES_CUP_MARKET_TYPES = {
+    "leagues_cup_moneyline_3way", "leagues_cup_total",
+    "leagues_cup_spread", "leagues_cup_btts",
+}
+
+
+def _leagues_cup_prediction(match: SoccerMatch | None):
+    if match is None or match.league not in LEAGUES_CUP_LEAGUES:
+        return None
+    states = elo_service_soccer._cache.get("states_by_league") or {}
+    resolved = []
+    for name in (match.home_team, match.away_team):
+        league = elo_service_soccer.resolve_league(name)
+        if league is None:
+            return None  # club is not in any league this app rates
+        resolved.append((canonical_team_key(name), league))
+    (hk, hl), (ak, al) = resolved
+    # predict_leagues_cup_match refuses anything that is not a genuine
+    # MLS-vs-Liga MX pairing, including same-league fixtures -- those are
+    # ordinary domestic matches at real venues and must not get the
+    # neutral-venue treatment.
+    return predict_leagues_cup_match(hk, hl, ak, al, states)
+
+
+def _leagues_cup_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _leagues_cup_prediction(match)
+    if pred is None:
+        return None
+    return {"home": pred.prob_home_win, "draw": pred.prob_draw,
+            "away": pred.prob_away_win}.get(market.side, lambda: None)()
+
+
+def _leagues_cup_total_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _leagues_cup_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    return pred.prob_total_over(market.line)
+
+
+def _leagues_cup_spread_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    """P(<team> wins by MORE than line).
+
+    Uses the SAME two expressions as _game_spread_model_prob rather than
+    re-deriving them: Kalshi's line is a positive "wins by more than X", while
+    prob_home_spread_cover's own convention is a negative line for the favoured
+    side, so the home case negates and the away case is the COMPLEMENT of the
+    mirrored line. Writing the away case as prob_home_spread_cover(line) without
+    the complement looks symmetric and is wrong -- it answers "did the home team
+    fail to lose by more than X", which is a different question."""
+    pred = _leagues_cup_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    if market.side == "home":
+        return pred.distribution.prob_home_spread_cover(-market.line)
+    if market.side == "away":
+        return 1.0 - pred.distribution.prob_home_spread_cover(market.line)
+    return None
+
+
+def _leagues_cup_btts_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _leagues_cup_prediction(match)
+    if pred is None:
+        return None
+    return pred.distribution.prob_btts()
+
+
 def _cup_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
     pred = _cup_prediction(match)
     if pred is None:
@@ -420,6 +495,10 @@ def cup_model_note(match: SoccerMatch | None) -> str | None:
 _MODEL_PROB_DISPATCH = {
     "uefa_moneyline_3way": lambda m, match, news: _uefa_moneyline_model_prob(m, match),
     "uefa_total": lambda m, match, news: _uefa_total_model_prob(m, match),
+    "leagues_cup_moneyline_3way": lambda m, match, news: _leagues_cup_moneyline_model_prob(m, match),
+    "leagues_cup_total": lambda m, match, news: _leagues_cup_total_model_prob(m, match),
+    "leagues_cup_spread": lambda m, match, news: _leagues_cup_spread_model_prob(m, match),
+    "leagues_cup_btts": lambda m, match, news: _leagues_cup_btts_model_prob(m, match),
     "cup_moneyline_3way": lambda m, match, news: _cup_moneyline_model_prob(m, match),
     "cup_advance": lambda m, match, news: _cup_advance_model_prob(m, match),
     "cup_total": lambda m, match, news: _cup_total_model_prob(m, match),
@@ -658,6 +737,23 @@ def list_soccer_markets(session: Session = Depends(get_session)):
             # _model_prob runs. Resolve each club's real league instead.
             return any(elo_service_soccer.resolve_league(n) is None
                        for n in (match.home_team, match.away_team))
+        if match.league in LEAGUES_CUP_LEAGUES:
+            # THIRD instance of the same trap (UEFA above, cups below), caught
+            # here before it shipped: "LEAGUES_CUP" is a competition, not a
+            # rating pool, so the per-league count at the bottom reads zero for
+            # both clubs and rejects all 420 rows before _model_prob runs. The
+            # tell is that every row comes back with "no tracked match history"
+            # while the clubs themselves resolve perfectly -- which is exactly
+            # what this returned on the first end-to-end run.
+            #
+            # Requiring MLS/MEX1 specifically (not merely "some league") also
+            # makes the gate agree with predict_leagues_cup_match, which refuses
+            # anything outside that pair. A gate looser than the model would
+            # just move the refusal one step later.
+            return any(
+                elo_service_soccer.resolve_league(name) not in ("MLS", "MEX1")
+                for name in (match.home_team, match.away_team)
+            )
         if match.league in CUP_TIERS:
             # A cup tie's league is the COMPETITION ("COPPA_ITALIA"), which has
             # no rating pool by design, so the per-league count below would read

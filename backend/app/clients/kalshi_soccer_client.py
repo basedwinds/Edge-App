@@ -1327,6 +1327,129 @@ UEFA_COMPETITIONS = {
 }
 
 
+# ---- Leagues Cup (MLS vs Liga MX), added 2026-08-08 ------------------------
+# Kept SEPARATE from UEFA_COMPETITIONS on purpose. The shape is the same
+# (cross-league, one match, moneyline + total + spread + BTTS) but the MODEL is
+# not: models/leagues_cup_match.py carries its own fitted offsets AND its own
+# venue term (+0.0071, essentially neutral -- the early editions were played
+# entirely in the US/Canada). Routing these rows through the UEFA handler would
+# price them with European offsets and a full domestic home advantage, both
+# wrong. See leagues_cup_match.py's docstring.
+#
+# Confirmed live 2026-08-08 -- and the label shape differs from the domestic
+# cups in a way that matters: there is NO "Reg Time: " prefix here, labels are
+# plain "Tie" / "Miami" / "Monterrey" and match the event title's own short
+# names. The prefix strip is still applied so that a future format change
+# cannot silently drop every row.
+LEAGUES_CUP = {
+    "name": "Leagues Cup",
+    "moneyline": "KXLEAGUESCUPGAME",
+    "total": "KXLEAGUESCUPTOTAL",
+    "spread": "KXLEAGUESCUPSPREAD",
+    "btts": "KXLEAGUESCUPBTTS",
+}
+
+
+def _leagues_cup_row(ev: dict, m: dict, home: str, away: str, **extra) -> dict:
+    row = {
+        "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
+        "competition": "leagues_cup", "competition_name": LEAGUES_CUP["name"],
+        "home_team": home, "away_team": away,
+        "ticker": m["ticker"], "estimated_start_time": m.get("occurrence_datetime"),
+        "yes_bid": _to_float(m.get("yes_bid_dollars")), "yes_ask": _to_float(m.get("yes_ask_dollars")),
+        "last_price": _to_float(m.get("last_price_dollars")), "volume": _to_float(m.get("volume_fp")),
+        "status": m.get("status"),
+    }
+    row.update(extra)
+    return row
+
+
+def _leagues_cup_events(series: str):
+    """(event, home, away) for each parseable open event of a Leagues Cup
+    series. Skips anything whose title does not give a clean pair rather than
+    guessing at the sides."""
+    for ev in get_open_events(series):
+        teams = _cup_pair(ev.get("title", ""))
+        if teams is None:
+            continue
+        try:
+            markets = get_markets_for_event(ev["event_ticker"])
+        except Exception:
+            continue
+        yield ev, teams[0], teams[1], markets
+
+
+def get_leagues_cup_moneyline_markets() -> list[dict]:
+    """3-way regulation moneyline."""
+    rows = []
+    for ev, home, away, markets in _leagues_cup_events(LEAGUES_CUP["moneyline"]):
+        for m in markets:
+            label = _REG_TIME_PREFIX.sub("", (m.get("yes_sub_title") or "").strip())
+            if label.lower() == "tie":
+                side, team = "draw", None
+            elif label == home:
+                side, team = "home", home
+            elif label == away:
+                side, team = "away", away
+            else:
+                continue  # never guess which club an unrecognised label means
+            rows.append(_leagues_cup_row(ev, m, home, away, side=side, team=team))
+    return rows
+
+
+def get_leagues_cup_total_markets() -> list[dict]:
+    """Over/under total goals in regulation."""
+    rows = []
+    for ev, home, away, markets in _leagues_cup_events(LEAGUES_CUP["total"]):
+        for m in markets:
+            mt = re.search(r"([\d.]+)", m.get("yes_sub_title") or m.get("title") or "")
+            if not mt:
+                continue
+            try:
+                line = float(mt.group(1))
+            except ValueError:
+                continue
+            rows.append(_leagues_cup_row(ev, m, home, away, line=line, side="over"))
+    return rows
+
+
+def get_leagues_cup_spread_markets() -> list[dict]:
+    """Goal handicap. Sub-title is "<Team> wins by more than X.5 goals", so the
+    team is read from the label and the line from the number -- the same
+    approach as the league spread reader."""
+    rows = []
+    for ev, home, away, markets in _leagues_cup_events(LEAGUES_CUP["spread"]):
+        for m in markets:
+            sub = (m.get("yes_sub_title") or "").strip()
+            mt = re.match(r"^(.*?)\s+wins by more than\s+([\d.]+)\s+goals?", sub)
+            if not mt:
+                continue
+            label, raw_line = mt.group(1).strip(), mt.group(2)
+            if label == home:
+                side, team = "home", home
+            elif label == away:
+                side, team = "away", away
+            else:
+                continue
+            try:
+                line = float(raw_line)
+            except ValueError:
+                continue
+            rows.append(_leagues_cup_row(ev, m, home, away, line=line, side=side, team=team))
+    return rows
+
+
+def get_leagues_cup_btts_markets() -> list[dict]:
+    """Both teams to score."""
+    rows = []
+    for ev, home, away, markets in _leagues_cup_events(LEAGUES_CUP["btts"]):
+        for m in markets:
+            if "both teams to score" not in (m.get("yes_sub_title") or "").lower():
+                continue
+            rows.append(_leagues_cup_row(ev, m, home, away, side="yes"))
+    return rows
+
+
 def _uefa_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **extra) -> dict:
     row = {
         "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),

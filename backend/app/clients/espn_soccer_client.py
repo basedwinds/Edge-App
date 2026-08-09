@@ -95,7 +95,13 @@ LEAGUE_CODES = {
     # respectively in a one-month window. Poland and Switzerland were REFUSED
     # at this step (no feed / zero events), which is why they are absent from
     # football_data_client.EXTRA_DIVISIONS too.
-    "SWE1": "swe.1", "NOR1": "nor.1", "DNK1": "den.1", "CHN1": "chn.1",     # Brasileirao Serie A
+    "SWE1": "swe.1", "NOR1": "nor.1", "DNK1": "den.1", "CHN1": "chn.1",
+    # Leagues Cup, 2026-08-08. Present so its bets can SETTLE -- this dict is
+    # what refresh_soccer_results iterates, so a competition missing from it
+    # produces markets that stay pending forever. The slug is "concacaf.
+    # leagues.cup" (dots, not underscores); "concacaf.leagues_cup" and
+    # "usa.leagues_cup" both 400.
+    "LEAGUES_CUP": "concacaf.leagues.cup",     # Brasileirao Serie A
     "ARG1": "arg.1",     # Liga Profesional
     "MEX1": "mex.1",     # Liga MX
     "JPN1": "jpn.1",     # J1 League

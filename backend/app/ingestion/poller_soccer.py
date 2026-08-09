@@ -646,7 +646,8 @@ def run_full_refresh_soccer():
     # and Kalshi 429s are already visible in this app's logs), so it is the most
     # likely thing in this function to throw. A new, optional market family must
     # never be able to take settlement down with it.
-    for name, fn in (("cup", refresh_kalshi_cup_markets), ("uefa", refresh_kalshi_uefa_markets)):
+    for name, fn in (("cup", refresh_kalshi_cup_markets), ("uefa", refresh_kalshi_uefa_markets),
+                     ("leagues cup", refresh_kalshi_leagues_cup_markets)):
         _t0 = time.monotonic()
         try:
             fn()
@@ -767,4 +768,52 @@ def refresh_kalshi_uefa_markets():
         finally:
             session.close()
     log.info("kalshi uefa markets refreshed: %s", counts)
+    return counts
+
+
+def refresh_kalshi_leagues_cup_markets():
+    """Leagues Cup (MLS vs Liga MX). Separate entrypoint and separate league
+    code from UEFA, because the two use DIFFERENT fitted offsets and different
+    venue terms -- see models/leagues_cup_match.py.
+
+    All four listed series are ingested (moneyline / total / spread / BTTS);
+    every one of them is a single-match question the goal distribution can
+    answer. There is no ADVANCE series to worry about, unlike the domestic cups.
+    """
+    batches = [
+        (kalshi_soccer_client.get_leagues_cup_moneyline_markets(),
+         market_catalog_soccer.upsert_kalshi_leagues_cup_moneyline_market, "leagues_cup_moneyline"),
+        (kalshi_soccer_client.get_leagues_cup_total_markets(),
+         market_catalog_soccer.upsert_kalshi_leagues_cup_total_market, "leagues_cup_total"),
+        (kalshi_soccer_client.get_leagues_cup_spread_markets(),
+         market_catalog_soccer.upsert_kalshi_leagues_cup_spread_market, "leagues_cup_spread"),
+        (kalshi_soccer_client.get_leagues_cup_btts_markets(),
+         market_catalog_soccer.upsert_kalshi_leagues_cup_btts_market, "leagues_cup_btts"),
+    ]
+    counts: dict[str, int] = {}
+    league = market_catalog_soccer.LEAGUES_CUP_LEAGUE_CODE
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            match_id_by_tie: dict[tuple, int | None] = {}
+            for rows, upsert, label in batches:
+                n = 0
+                for row in rows:
+                    # Kickoff day, NOT a scrape stamp -- see the comment on the
+                    # league path in refresh_kalshi_soccer_markets.
+                    date = (row.get("estimated_start_time") or "")[:10] or None
+                    key = (league, canonical_team_key(row["home_team"]),
+                           canonical_team_key(row["away_team"]), date or "")
+                    if key not in match_id_by_tie:
+                        match = market_catalog_soccer.find_or_create_upcoming_match(
+                            session, league, row["home_team"], row["away_team"], date)
+                        session.flush()
+                        match_id_by_tie[key] = match.id if match is not None else None
+                    upsert(session, row, match_id_by_tie[key])
+                    n += 1
+                counts[label] = n
+            session.commit()
+        finally:
+            session.close()
+    log.info("kalshi leagues cup markets refreshed: %s", counts)
     return counts

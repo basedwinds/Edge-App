@@ -493,6 +493,26 @@ TEAM_ALIASES: dict[str, str] = {
     "shenzhen peng city": "shenzhen xinpengcheng",  # CHN1
     "wuhan three towns fc": "wuhan three towns",    # CHN1
     "zhejiang prof": "zhejiang professional",   # CHN1
+    # ---- Leagues Cup (2026-08-08) ------------------------------------------
+    # THE ONE GENUINE CROSS-COUNTRY NAME COLLISION found so far, and worth
+    # spelling out because the collision sweep that clears every other alias
+    # does NOT clear this one. Kalshi's Leagues Cup "Guadalajara" is Chivas of
+    # Mexico, but the bare key "guadalajara" is already owned in the rated pool
+    # by CD Guadalajara of SPAIN, which is why resolve_league returned SP2 and
+    # the fixture was refused rather than priced. Refusing was correct: pricing
+    # a Mexican club off a Spanish second-division rating is the exact class of
+    # error this project keeps guarding against.
+    #
+    # The alias is still safe to add, because of how it FAILS. TEAM_ALIASES is
+    # global, so a Spanish Segunda listing for "Guadalajara" would also be sent
+    # to "guadalajara chivas" -- but that key does not exist in the SP2 pool, so
+    # such a row would be REFUSED, not mispriced. A refusal is recoverable; a
+    # wrong rating staked with real money is not.
+    #
+    # Checked before adding: no live SP2 listing normalizes to "guadalajara"
+    # (CD Guadalajara is well below Segunda now, and the pool entry is
+    # historical). Revisit if they are ever promoted back.
+    "guadalajara": "guadalajara chivas",        # MEX1 (Leagues Cup)
     "randers": "randers fc",                    # DNK1
     # "Copenhagen" is forced -- exactly one candidate in the entire 26-league
     # pool. "Broendby" is the transliteration case again and NO token rule
