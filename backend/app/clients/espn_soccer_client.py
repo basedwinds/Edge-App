@@ -284,6 +284,78 @@ def parse_final_results(raw_events: list[dict]) -> list[dict]:
     return out
 
 
+# ESPN's status.type.state, which is the coarse three-way we actually want.
+# "in" covers every in-play variant (STATUS_IN_PROGRESS, STATUS_FIRST_HALF,
+# STATUS_HALFTIME, ...) without this having to enumerate them, and enumerating
+# them is precisely how a new one gets missed.
+_LIVE_STATE = "in"
+_DONE_STATE = "post"
+
+
+def parse_kickoffs(raw_events: list[dict]) -> list[dict]:
+    """Real kickoff time and in-play state for EVERY event on the scoreboard,
+    not just finished ones.
+
+    REAL BUG THIS EXISTS FOR (user-reported 2026-08-09, a live match offered as
+    a bet). Nuremberg vs Dresden was recommended -- $10 on Dresden away at 0.15
+    -- while the match was live at 45'+2' with Dresden already 1-0 down. The
+    "edge" of +15.5pp was an artifact of comparing a PRE-MATCH model
+    probability against a LIVE price.
+
+    Kalshi was the source of the error and it was not stale data on our side:
+    Kalshi's own occurrence_datetime for that event said 2026-08-09T14:30:00Z
+    against a real 11:30Z kickoff, and its expected_expiration_time said 14:30Z
+    too -- so the usual "prefer expected_expiration_time" workaround could not
+    have caught it either. Every D2 fixture that day carried the same wrong
+    time.
+
+    Both live guards then failed, for different reasons:
+      * the start-time guard could not fire, because the time it was handed was
+        three hours in the future;
+      * the trading-based guard (looks_already_live_by_trading) only fires at an
+        EXTREME price -- it is built to catch a DECIDED match (0.02/0.98), and a
+        1-0 game at 0.15 is merely in progress. Correct by design, silent here.
+
+    ESPN is the authority on when a match actually kicked off, this app already
+    trusts it for settlement, and the poller ALREADY fetches this exact payload
+    for results -- so correcting the start time costs no extra request. That is
+    why the fix belongs here rather than in another platform workaround.
+
+    Returns the same team-name/date shape parse_final_results does, so the
+    caller can reuse the alias-joining it already has.
+    """
+    out = []
+    for e in raw_events:
+        comps = e.get("competitions") or []
+        if not comps:
+            continue
+        comp = comps[0]
+        competitors = comp.get("competitors") or []
+        home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+        away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+        if home is None or away is None:
+            continue
+        home_name = (home.get("team") or {}).get("displayName")
+        away_name = (away.get("team") or {}).get("displayName")
+        if not home_name or not away_name:
+            continue
+        kickoff = e.get("date")  # ISO-8601 UTC, e.g. "2026-08-09T11:30Z"
+        if not kickoff:
+            continue
+        state = (((comp.get("status") or {}).get("type") or {}).get("state") or "").lower()
+        out.append({
+            "home_team": home_name,
+            "away_team": away_name,
+            "match_date": kickoff[:10],
+            "kickoff": kickoff,
+            "state": state,
+            "is_live": state == _LIVE_STATE,
+            "is_done": state == _DONE_STATE,
+            "event_id": e.get("id"),
+        })
+    return out
+
+
 def fetch_half_time_goals(league: str, event_id: str) -> tuple[int, int] | None:
     """(home_goals_ht, away_goals_ht) for one finished match, or None.
 

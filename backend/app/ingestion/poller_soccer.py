@@ -12,6 +12,7 @@ from app.db.models import Market, SoccerMatch
 from app.ingestion import market_catalog_soccer
 from app.ingestion.poller_lock import db_write_lock
 from app.ingestion.market_matcher_soccer import canonical_team_key, kalshi_match_suffix, team_names_match
+from app.ingestion.start_times import should_update_start
 from app.models import playoff_sim_service_mls
 from app.models.baseline import elo_service_soccer
 from app.models.news_adjustment.injury_rules_soccer import compute_injury_adjustment
@@ -122,7 +123,25 @@ def refresh_soccer_results():
             len(missing), ", ".join(f"{lg} ({n} matches)" for lg, n in sorted(missing.items())),
         )
 
+    def _differs_materially(current: str | None, incoming: str) -> bool:
+        """True when the two stamps are a genuinely different moment.
+
+        A missing current value counts (there is nothing to compare, and having
+        a real kickoff beats having none). One minute of tolerance absorbs
+        formatting and rounding without hiding anything: the errors this exists
+        for are hours wide, not seconds.
+        """
+        if not current:
+            return True
+        try:
+            a = datetime.datetime.fromisoformat(current.replace("Z", "+00:00"))
+            b = datetime.datetime.fromisoformat(incoming.replace("Z", "+00:00"))
+        except ValueError:
+            return current != incoming
+        return abs((a - b).total_seconds()) > 60
+
     results_by_league: dict[str, list[dict]] = {}
+    kickoffs_by_league: dict[str, list[dict]] = {}
     for league, match_ids in by_league_ids.items():
         # oldest date computed from the SAME read_session's rows above,
         # captured before that session closed -- recomputed here from
@@ -142,6 +161,9 @@ def refresh_soccer_results():
         oldest = min(league_dates) - datetime.timedelta(days=1)
         raw = espn_soccer_client.fetch_scoreboard(league, oldest, today + datetime.timedelta(days=1))
         results_by_league[league] = espn_soccer_client.parse_final_results(raw)
+        # Same payload, no extra request -- see parse_kickoffs' docstring for the
+        # live-match bug this closes.
+        kickoffs_by_league[league] = espn_soccer_client.parse_kickoffs(raw)
 
     # Match rows to results, and fetch half-time goals, with NO session open --
     # `unresolved` is still a live Python list and both steps are pure functions
@@ -149,12 +171,50 @@ def refresh_soccer_results():
     # out here matters: they are one HTTP call each, and this file's own
     # docstring is about not holding a connection across slow network I/O.
     by_match_id: dict[int, dict] = {}
+    kickoff_fixes: dict[int, str] = {}
     for league, match_ids in by_league_ids.items():
         results = results_by_league.get(league, [])
+        kickoffs = kickoffs_by_league.get(league, [])
         wanted = set(match_ids)
         for match in unresolved:
             if match.id not in wanted:
                 continue
+
+            # CORRECT THE KICKOFF FROM ESPN before anything else. The platform's
+            # own occurrence_datetime is not reliable: for Nuremberg vs Dresden
+            # (2026-08-09) Kalshi said 14:30Z against a real 11:30Z kickoff, and
+            # a live 1-0 match was offered as a bet because the start-time guard
+            # was handed a time three hours in the future. See
+            # espn_soccer_client.parse_kickoffs.
+            #
+            # Joined on TEAMS with the same one-day date tolerance the results
+            # matcher uses, because ESPN dates a late kickoff on the next UTC day.
+            kmatch = [
+                k for k in kickoffs
+                if team_names_match(k["home_team"], match.home_team)
+                and team_names_match(k["away_team"], match.away_team)
+            ]
+            real_day = _real_match_date(match)
+            if real_day is not None:
+                kmatch = [
+                    k for k in kmatch
+                    if abs((datetime.date.fromisoformat(k["match_date"]) - real_day).days) <= 1
+                ]
+            if kmatch:
+                espn_kick = kmatch[0]["kickoff"]
+                # Compare INSTANTS, not strings. ESPN writes "2026-08-09T17:00Z"
+                # where the platform wrote "2026-08-09T17:00:00Z" -- the same
+                # moment in two formats. A string comparison treats every such
+                # row as a correction, which would rewrite it and log a warning
+                # on every single poll cycle, forever, burying the handful of
+                # real three-hour errors this exists to surface.
+                if espn_kick and _differs_materially(match.estimated_start_time, espn_kick):
+                    # should_update_start still applies: it refuses only the move
+                    # that orphans a played match (past -> future). Pulling a
+                    # start time EARLIER, this fix's whole purpose, always passes.
+                    if should_update_start(match.estimated_start_time, espn_kick,
+                                           match.match_date):
+                        kickoff_fixes[match.id] = espn_kick
             # Match on TEAMS first, then take the nearest date within a day --
             # do NOT require match_date to be equal.
             #
@@ -194,6 +254,26 @@ def refresh_soccer_results():
         try:
             updated = ht = 0
             total = sum(len(v) for v in by_league_ids.values())
+
+            # Kickoff corrections first, and separately from results: a LIVE
+            # match has no result to write, and it is precisely the live ones
+            # this needs to reach.
+            corrected = 0
+            for match_id, kick in kickoff_fixes.items():
+                match = session.get(SoccerMatch, match_id)
+                if match is None:
+                    continue
+                log.warning(
+                    "soccer kickoff corrected from ESPN: match %d %s vs %s -- platform said %s, "
+                    "ESPN says %s. A start time later than reality is what lets a LIVE match be "
+                    "recommended.",
+                    match.id, match.home_team, match.away_team,
+                    match.estimated_start_time, kick,
+                )
+                match.estimated_start_time = kick
+                corrected += 1
+            if corrected:
+                log.info("soccer: %d kickoff time(s) corrected from ESPN", corrected)
             for match_id, found in by_match_id.items():
                 match = session.get(SoccerMatch, match_id)
                 if match is None:
