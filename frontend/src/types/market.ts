@@ -197,6 +197,40 @@ export interface Cs2MarketRow {
   stake_pool: "weekly" | "futures" | null;
 }
 
+export interface CodMarketRow {
+  id: number;
+  /** Kalshi lists ONLY match winner for CoD -- no spread, totals, per-map or
+   *  futures series exist (checked live via the /series index). Named
+   *  "series_winner" to match the other esports titles rather than inventing a
+   *  fifth spelling of the same concept. */
+  market_type: "series_winner";
+  source: "kalshi";
+  team: string | null;
+  match_label: string | null; // "{team_a} vs {team_b}"
+  cod_match_id: number | null;
+  event_name: string | null;
+  match_date: string | null;
+  estimated_start_time: string | null;
+  best_of: number | null;
+  /** Reported by breakingpoint.gg itself, not inferred from a clock. CoD is the
+   *  only sport here with a first-class live flag; the row is refused pricing
+   *  when true. */
+  is_live: boolean;
+  implied_prob: number | null;
+  yes_bid: number | null;
+  yes_ask: number | null;
+  last_price: number | null;
+  volume: number | null;
+  model_prob: number | null;
+  model_validated: boolean;
+  edge: number | null;
+  no_baseline_reason: string | null;
+  kelly_fraction: number | null;
+  suggested_stake_dollars: number | null;
+  suggested_stake_units: number | null;
+  stake_pool: "weekly" | null;
+}
+
 export interface LolMarketRow {
   id: number;
   market_type: "map_winner" | "series_total" | "tournament_winner";

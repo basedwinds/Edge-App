@@ -29,7 +29,7 @@ import logging
 from sqlalchemy.orm import Session, object_session
 
 from app.db.models import (
-    CfbGame, Cs2Match, LolMap, LolMatch, Market, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
+    CfbGame, CodMatch, Cs2Match, LolMap, LolMatch, Market, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
     RaceEvent, SoccerMatch, TennisMatch, ValorantMap, ValorantMatch, WnbaGame,
 )
 
@@ -124,6 +124,8 @@ def _get_game(session: Session, bet: PlacedBet):
         return session.get(Cs2Match, bet.cs2_match_id) if bet.cs2_match_id else None
     if bet.sport == "lol":
         return session.get(LolMatch, bet.lol_match_id) if bet.lol_match_id else None
+    if bet.sport == "cod":
+        return session.get(CodMatch, bet.cod_match_id) if bet.cod_match_id else None
     if bet.sport in ("f1", "irl", "nascar"):
         return session.get(RaceEvent, bet.race_event_id) if bet.race_event_id else None
     return session.get(NflGame, bet.nfl_game_id) if bet.nfl_game_id else None
@@ -138,7 +140,16 @@ def _game_is_final(bet: PlacedBet, game) -> bool:
         return game.winner_key is not None
     if bet.sport == "mma":
         return game.winner_id is not None
-    if bet.sport in ("cs2", "valorant", "lol"):
+    if bet.sport in ("cs2", "valorant", "lol", "cod"):
+        # CoD joins this branch rather than getting its own: CodMatch stores the
+        # same "team_a"/"team_b" winner as the other three, so _esports_side and
+        # _grade_esports_series_winner already handle it unchanged. Reusing the
+        # shared shape is deliberate -- a fourth near-identical grader is how one
+        # of them ends up not getting a fix the others got.
+        #
+        # NOT gated on is_live. A live match has winner=None and so is not final
+        # here anyway; a match that has finished but whose is_live flag has not
+        # yet been cleared by the next poll must still settle.
         return game.winner is not None
     if bet.sport in ("f1", "irl", "nascar"):
         # RaceEvent.result_json is populated by the racing results scraper once
@@ -981,7 +992,7 @@ def _pick_grader(bet: PlacedBet, market_type: "str | None" = None):
     mt = market_type or bet.market_type
     if bet.sport == "mma":
         return _MMA_GRADERS.get(mt)
-    if bet.sport in ("cs2", "valorant", "lol"):
+    if bet.sport in ("cs2", "valorant", "lol", "cod"):
         return _ESPORTS_GRADERS.get(mt)
     if bet.sport == "tennis":
         return _TENNIS_GRADERS.get(mt)
@@ -995,7 +1006,7 @@ def _pick_grader(bet: PlacedBet, market_type: "str | None" = None):
 def _settlement_note(bet: PlacedBet, game) -> str:
     if bet.sport == "soccer":
         return f"auto-settled: final score {game.away_team} {game.away_goals_ft} @ {game.home_team} {game.home_goals_ft}"
-    if bet.sport in ("cs2", "valorant", "lol"):
+    if bet.sport in ("cs2", "valorant", "lol", "cod"):
         win = game.team_a if game.winner == "team_a" else game.team_b
         return f"auto-settled: {game.team_a} {game.maps_won_a}-{game.maps_won_b} {game.team_b} (winner {win})"
     if bet.sport == "mma":

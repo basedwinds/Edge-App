@@ -26,7 +26,7 @@
  *  no game-id field. That is why this list is broader than SPORTS. */
 export const SPORT_KEYS = [
   "nfl", "nba", "wnba", "cfb", "mlb", "soccer", "mma", "tennis",
-  "valorant", "cs2", "lol", "f1", "irl", "nascar",
+  "valorant", "cs2", "lol", "cod", "f1", "irl", "nascar",
 ] as const;
 
 export type SportKey = (typeof SPORT_KEYS)[number];
@@ -73,6 +73,7 @@ export interface GameIdFields {
   valorantMatchId?: number | null;
   cs2MatchId?: number | null;
   lolMatchId?: number | null;
+  codMatchId?: number | null;
 }
 
 export const SPORTS: SportMeta[] = [
@@ -87,6 +88,9 @@ export const SPORTS: SportMeta[] = [
   { key: "valorant", label: "Valorant", routePrefix: "/valorant", gameIdField: "valorantMatchId", prefixGameId: true, hasFuturesPage: true },
   { key: "cs2", label: "CS2", routePrefix: "/cs2", gameIdField: "cs2MatchId", prefixGameId: true, hasFuturesPage: true },
   { key: "lol", label: "LoL", routePrefix: "/lol", gameIdField: "lolMatchId", prefixGameId: true, hasFuturesPage: true },
+  // hasFuturesPage false: Kalshi lists no CoD futures at all (KXCODGAME is
+  // match-winner only), so a Futures tab here would always be empty.
+  { key: "cod", label: "Call of Duty", routePrefix: "/cod", gameIdField: "codMatchId", prefixGameId: true, hasFuturesPage: false },
 ];
 
 /** Which sport a pathname belongs to, or null. Replaces the hand-written

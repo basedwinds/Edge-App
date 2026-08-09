@@ -55,6 +55,7 @@ import { ValorantFutures } from "./pages/ValorantFutures";
 import { ValorantRecommended } from "./pages/ValorantRecommended";
 import { ValorantPlaced } from "./pages/ValorantPlaced";
 import { ValorantCalibration } from "./pages/ValorantCalibration";
+import { Cod } from "./pages/Cod";
 import { Cs2 } from "./pages/Cs2";
 import { Cs2Futures } from "./pages/Cs2Futures";
 import { Cs2Recommended } from "./pages/Cs2Recommended";
@@ -120,6 +121,7 @@ function App() {
         <Route path="/valorant/recommended" element={<ValorantRecommended />} />
         <Route path="/valorant/placed" element={<ValorantPlaced />} />
         <Route path="/valorant/calibration" element={<ValorantCalibration />} />
+        <Route path="/cod" element={<Cod />} />
         <Route path="/cs2" element={<Cs2 />} />
         <Route path="/cs2/futures" element={<Cs2Futures />} />
         <Route path="/cs2/recommended" element={<Cs2Recommended />} />

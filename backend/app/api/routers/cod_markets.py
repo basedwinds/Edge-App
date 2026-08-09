@@ -60,6 +60,13 @@ LIVE_REASON = (
     "PRE-match probability, so comparing it to a live price measures the "
     "score, not an edge."
 )
+# _already_started covers finished matches too, and telling a user a decided
+# match is "in progress" is just wrong -- the two states are distinguished so
+# the row explains itself accurately.
+DECIDED_REASON = (
+    "Not priced: this match has finished. Any remaining price is the market "
+    "settling, not an opportunity."
+)
 NO_BASELINE_REASON = (
     "Not priced: at least one team has fewer than the minimum real settled "
     "series needed for a trustworthy rating."
@@ -171,6 +178,8 @@ def list_cod_markets(session: Session = Depends(get_session)):
         reason = None
         if match is None:
             reason = UNBOUND_REASON
+        elif match.winner is not None:
+            reason = DECIDED_REASON
         elif _already_started(match, now):
             reason = LIVE_REASON
         else:

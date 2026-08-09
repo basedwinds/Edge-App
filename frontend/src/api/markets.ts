@@ -1,6 +1,7 @@
 import { apiGet, apiPost, apiPut, apiDelete } from "./client";
 import { gameIdForRow } from "../lib/sports";
-import type { CfbMarketRow, Cs2MarketRow, FuturesMarketRow, GameMarketRow, LolMarketRow, MarketRow, MlbMarketRow, MmaMarketRow, NbaMarketRow, SoccerMarketRow, TennisMarketRow, ValorantMarketRow, WnbaMarketRow } from "../types/market";
+import type { CfbMarketRow, CodMarketRow,
+  Cs2MarketRow, FuturesMarketRow, GameMarketRow, LolMarketRow, MarketRow, MlbMarketRow, MmaMarketRow, NbaMarketRow, SoccerMarketRow, TennisMarketRow, ValorantMarketRow, WnbaMarketRow } from "../types/market";
 import type { SportKey } from "../lib/sports";
 
 /** Season-readiness config from the backend (same rule the Discord alerts use).
@@ -114,6 +115,10 @@ export async function fetchValorantFutures(): Promise<FuturesMarketRow[]> {
 
 export async function fetchCs2Markets(): Promise<Cs2MarketRow[]> {
   return apiGet<Cs2MarketRow[]>("/cs2/markets");
+}
+
+export async function fetchCodMarkets(): Promise<CodMarketRow[]> {
+  return apiGet<CodMarketRow[]>("/cod/markets");
 }
 
 export async function fetchCs2Futures(): Promise<FuturesMarketRow[]> {
@@ -329,6 +334,9 @@ const REASONING_PREFIX: Record<SportKey, string> = {
   valorant: "/valorant",
   cs2: "/cs2",
   lol: "/lol",
+  // CoD has no /reasoning endpoint yet -- the prefix is correct for when
+  // one lands, and the row simply has no reasoning link until then.
+  cod: "/cod",
   // The three racing series share one backend router.
   f1: "/racing",
   irl: "/racing",

@@ -39,6 +39,7 @@ const SPORT_GROUPS: { label: string; sports: { key: string; label: string; to: s
       { key: "cs2", label: "CS2", to: "/cs2" },
       { key: "valorant", label: "Valorant", to: "/valorant" },
       { key: "lol", label: "LoL", to: "/lol" },
+      { key: "cod", label: "Call of Duty", to: "/cod" },
     ],
   },
   {
@@ -163,7 +164,7 @@ function navItems(sport: string) {
       sharedItems: shared,
     };
   }
-  const prefix = sport === "nba" ? "/nba" : sport === "mlb" ? "/mlb" : sport === "mma" ? "/mma" : sport === "tennis" ? "/tennis" : sport === "soccer" ? "/soccer" : sport === "valorant" ? "/valorant" : sport === "cs2" ? "/cs2" : sport === "lol" ? "/lol" : "";
+  const prefix = sport === "nba" ? "/nba" : sport === "mlb" ? "/mlb" : sport === "mma" ? "/mma" : sport === "tennis" ? "/tennis" : sport === "soccer" ? "/soccer" : sport === "valorant" ? "/valorant" : sport === "cs2" ? "/cs2" : sport === "lol" ? "/lol" : sport === "cod" ? "/cod" : "";
   const items = [{ to: prefix || "/", label: "Dashboard", icon: LayoutDashboard, end: true }];
   // Valorant/CS2/LoL (2026-07-19) each get their own markets Dashboard.
   // Recommended became a per-title route as of 2026-07-20, once each title
@@ -176,6 +177,15 @@ function navItems(sport: string) {
   // Placed Bets, and CLV-enabled Calibration were all wired up -- esports
   // now gets the exact same 5-page set as NFL/NBA/MLB/Tennis/Soccer (only
   // MMA is deliberately missing Futures, see below).
+  // Call of Duty has ONLY a Dashboard so far -- its Recommended/Placed/
+  // Calibration pages are not built, and Kalshi lists no CoD futures at all.
+  // Returning early instead of pushing the shared five is deliberate: a nav
+  // link to a route that does not exist renders a blank page, which reads as
+  // the app being broken rather than as a feature not being built yet. Delete
+  // this branch when those pages land.
+  if (sport === "cod") {
+    return { sportItems: items, sharedItems: shared };
+  }
   if (sport !== "mma") {
     items.push({ to: `${prefix}/futures`, label: "Futures", icon: Trophy, end: false });
   }
