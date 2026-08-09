@@ -22,7 +22,7 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from app.db.models import (
-    Cs2Match, LolMatch, Market, MlbGame, NbaGame, NflGame, SoccerMatch,
+    CodMatch, Cs2Match, LolMatch, Market, MlbGame, NbaGame, NflGame, SoccerMatch,
     TennisMatch, ValorantMatch, WnbaGame,
 )
 from app.models.clv import _game_is_final, _game_kickoff_dt
@@ -32,6 +32,7 @@ _ENTITY_MODEL = {
     "nfl": NflGame, "nba": NbaGame, "wnba": WnbaGame, "mlb": MlbGame,
     "tennis": TennisMatch, "soccer": SoccerMatch,
     "valorant": ValorantMatch, "cs2": Cs2Match, "lol": LolMatch,
+    "cod": CodMatch,
 }
 
 
@@ -80,6 +81,18 @@ def _entity_id(m: Market, race_canon: dict[int, int] | None = None) -> str | Non
         return f"cs2:{m.cs2_match_id}"
     if m.lol_match_id:
         return f"lol:{m.lol_match_id}"
+    # FOURTH instance of the omission this file's racing comment below already
+    # describes, caught before it could report a false zero: CoD carries BOTH
+    # platforms (Kalshi KXCODGAME + Polymarket call-of-duty, priced side by
+    # side at 0.685 vs 0.665 on the same match), so without this branch every
+    # CoD market returned None here and the scanner would have said the prices
+    # agree when it had never looked.
+    #
+    # Unlike racing, no second fix is needed: both CoD pollers bind to the SAME
+    # CodMatch row via market_catalog_cod._match_for_teams, so the two platforms
+    # genuinely share an entity id rather than each minting their own.
+    if m.cod_match_id:
+        return f"cod:{m.cod_match_id}"
     # RACING WAS MISSING FROM THIS LIST ENTIRELY (added 2026-08-06). Every racing
     # market returned None here, so F1, NASCAR and IndyCar were silently excluded
     # from divergence scanning -- even though F1 has carried BOTH platforms all

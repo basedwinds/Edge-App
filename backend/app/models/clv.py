@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.data.mlb_ballparks import TEAM_TZ
-from app.db.models import CfbGame, Cs2Match, LolMatch, MmaFight, MarketSnapshot, MlbGame, NbaGame, NflGame, PlacedBet, RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame
+from app.db.models import CfbGame, CodMatch, Cs2Match, LolMatch, MmaFight, MarketSnapshot, MlbGame, NbaGame, NflGame, PlacedBet, RaceEvent, SoccerMatch, TennisMatch, ValorantMatch, WnbaGame
 
 
 def _implied_prob(snap: MarketSnapshot | None) -> float | None:
@@ -123,6 +123,19 @@ def _cs2_kickoff_utc(match: Cs2Match) -> datetime.datetime | None:
         return None
 
 
+def _cod_kickoff_utc(match: "CodMatch") -> datetime.datetime | None:
+    """CoD's own version. CodMatch.estimated_start_time comes from
+    breakingpoint.gg, which also reports match status directly -- but this
+    helper answers "when", not "has it started", so it reads the timestamp the
+    same way its siblings do."""
+    if not match.estimated_start_time:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(match.estimated_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
 def _lol_kickoff_utc(match: LolMatch) -> datetime.datetime | None:
     """See _valorant_kickoff_utc's own docstring -- LoL's own version,
     LolMatch.estimated_start_time is Leaguepedia's real Cargo DateTime_UTC
@@ -181,6 +194,8 @@ def _game_kickoff_dt(game) -> datetime.datetime | None:
         return _cs2_kickoff_utc(game)
     if isinstance(game, LolMatch):
         return _lol_kickoff_utc(game)
+    if isinstance(game, CodMatch):
+        return _cod_kickoff_utc(game)
     if isinstance(game, MmaFight):
         return _mma_kickoff_utc(game)
     if isinstance(game, RaceEvent):
@@ -206,7 +221,7 @@ def _game_is_final(game) -> bool:
         return game.winner_key is not None
     if isinstance(game, SoccerMatch):
         return game.result_ft is not None
-    if isinstance(game, (ValorantMatch, Cs2Match, LolMatch)):
+    if isinstance(game, (ValorantMatch, Cs2Match, LolMatch, CodMatch)):
         return game.winner is not None
     # MmaFight has no home_score, so it must be handled before the fallback
     # below -- winner_id is its null-until-fought result field.
