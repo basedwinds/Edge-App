@@ -67,6 +67,33 @@ CUPS = {
     "KXCOPPAITALIAADVANCE": "ita.coppa_italia",
     "KXDFBPOKALGAME": "ger.dfb_pokal",
     "KXDFBPOKALADVANCE": "ger.dfb_pokal",
+    # LEAGUES, added 2026-08-08. The same anchored join works for a league
+    # fixture as for a cup tie, and the non-European leagues need it badly:
+    # Kalshi uses NICKNAMES the football-data feed never uses. J-League listed
+    # "Frontale" (Kawasaki Frontale), "Tokyo V" (Tokyo Verdy) and "V-Varen"
+    # against football-data's "fc tokyo" / "gamba osaka" -- zero overlap, so
+    # 0 of 36 markets priced. Liga MX and Argentina were partial for the same
+    # reason. This is the same class as the cup gap, one league further out.
+    "KXBRASILEIROGAME": "bra.1",
+    "KXARGPREMDIVGAME": "arg.1",
+    "KXLIGAMXGAME": "mex.1",
+    "KXJLEAGUEGAME": "jpn.1",
+    # Long-shipped European leagues, added 2026-08-08 after a full-catalog
+    # resolution sweep found gaps nobody had looked for. These were never
+    # audited this way: the leagues "worked", so their few unresolvable names
+    # went unnoticed -- including Nottingham Forest and Athletic Bilbao, which
+    # are not obscure. A league being live is not evidence that every club in
+    # it resolves.
+    #
+    # Athletic Bilbao is also the reason this runs through the builder at all
+    # rather than being typed in: forced-uniqueness is NOT enough for "Bilbao",
+    # which is token-compatible with BOTH "ath bilbao" (SP1) and the reserve
+    # side "ath bilbao b" (SP2). Two candidates means the safe answer is to let
+    # a real fixture pick, not to reason about which one Kalshi "must" mean.
+    "KXEPLGAME": "eng.1",
+    "KXEFLCHAMPIONSHIPGAME": "eng.2",
+    "KXLALIGAGAME": "esp.1",
+    "KXLIGAPORTUGALGAME": "por.1",
 }
 PAIR = re.compile(r"^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner\?|:|$)")
 TICKER_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})")
@@ -125,7 +152,7 @@ def main() -> None:
                 continue
             a, b = mt.group(1).strip(), mt.group(2).strip()
             kalshi_fx[(slug, d, a, b)] = (slug, d, a, b)
-    print(f"{len(kalshi_fx)} distinct Kalshi cup fixtures")
+    print(f"{len(kalshi_fx)} distinct Kalshi fixtures")
 
     # ---- gather ESPN fixtures for the same windows -----------------------
     espn_fx: dict[str, list] = collections.defaultdict(list)
@@ -146,11 +173,15 @@ def main() -> None:
             except (KeyError, IndexError, ValueError):
                 continue
             espn_fx[slug].append((d, names[0], names[1]))
-    print(f"{sum(len(v) for v in espn_fx.values())} ESPN cup fixtures in the same windows\n")
+    print(f"{sum(len(v) for v in espn_fx.values())} ESPN fixtures in the same windows\n")
 
     inferred: dict[str, set] = collections.defaultdict(set)
+    orphans: list[tuple] = []   # fixtures where NEITHER side resolves -- stage 2
     for slug, d, a, b in kalshi_fx.values():
         ka, kb = resolve_kalshi(a), resolve_kalshi(b)
+        if ka is None and kb is None:
+            orphans.append((slug, d, a, b))
+            continue
         if (ka is None) == (kb is None):
             continue  # need exactly one resolved side to anchor on
         anchor, unknown_name = (ka, b) if ka else (kb, a)
@@ -169,6 +200,59 @@ def main() -> None:
         if target is None:
             continue  # opponent isn't rated either; nothing to map to
         inferred[unknown_name].add(target)
+
+    # ---- STAGE 2: PAIR BOOTSTRAP -----------------------------------------
+    # Stage 1 needs one KNOWN side to anchor on. That is fine for a cup, where
+    # the Serie A club is always already rated -- but it cannot start a league
+    # where NO club has ever been seen. The J-League is exactly that: Kalshi
+    # lists "Tokyo V vs Frontale", "V-Varen vs Kyoto Sanga", and football-data's
+    # JPN.csv says "fc tokyo" / "gamba osaka". Neither side resolves, every
+    # fixture is skipped, and stage 1 produced 0 of 36.
+    #
+    # So bootstrap the PAIR instead of one side. Token-prefix compatibility
+    # proposes candidates ("Frontale" could be ESPN's "Kawasaki Frontale";
+    # "Tokyo V" could be "Tokyo Verdy"), and then the FIXTURE decides: keep the
+    # assignment only if exactly ONE ESPN fixture within +/-1 day pairs a
+    # candidate-for-A against a candidate-for-B. The string never decides
+    # anything on its own -- it only narrows the search, and a fixture that
+    # admits two readings is dropped rather than guessed. That distinction is
+    # the whole reason this is safe where similarity scoring was not: the
+    # Rangers->Angers class of error cannot survive a real-fixture check.
+    def tokens(name: str) -> list[str]:
+        return [t for t in re.split(r"[^a-z0-9]+", canonical_team_key(name)) if t]
+
+    def compatible(kalshi_name: str, espn_name: str) -> bool:
+        kt, et = tokens(kalshi_name), tokens(espn_name)
+        if not kt or not et:
+            return False
+        # every Kalshi token must prefix some ESPN token (or the reverse), so
+        # "frontale" fits "kawasaki frontale" and "tokyo v" fits "tokyo verdy",
+        # while "tokyo v" does NOT fit "fc tokyo".
+        fwd = all(any(e.startswith(k) for e in et) for k in kt)
+        rev = all(any(k.startswith(e) for k in kt) for e in et)
+        return fwd or rev
+
+    boot = 0
+    for slug, d, a, b in orphans:
+        hits = []
+        for ed, en1, en2 in espn_fx.get(slug, []):
+            if abs((ed - d).days) > 1:
+                continue
+            for x, y in ((en1, en2), (en2, en1)):
+                if compatible(a, x) and compatible(b, y):
+                    hits.append((x, y))
+        # dedupe symmetric duplicates before judging uniqueness
+        hits = list({(x, y) for x, y in hits})
+        if len(hits) != 1:
+            continue
+        x, y = hits[0]
+        rx, ry = resolve_espn(x), resolve_espn(y)
+        if rx is None or ry is None:
+            continue  # can't map onto a rating we don't have
+        inferred[a].add(rx)
+        inferred[b].add(ry)
+        boot += 1
+    print(f"stage 2 bootstrapped {boot} of {len(orphans)} both-sides-unknown fixtures\n")
 
     aliases, unresolved = {}, []
     claims: dict[str, str] = {}

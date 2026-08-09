@@ -381,6 +381,128 @@ TEAM_ALIASES: dict[str, str] = {
     "sittard": "for sittard",
     "ga eagles": "go ahead eagles",
     "sparta": "sparta rotterdam",
+    # ---- Brazil / Argentina / Mexico / Japan (2026-08-08) --------------------
+    # DERIVED, NOT TYPED. Every entry below comes from
+    # scripts/build_soccer_kalshi_aliases.py, which infers a Kalshi name only
+    # by joining real FIXTURES (date + club pair) against ESPN, never by
+    # comparing strings. Its output was 46 aliases with 0 unresolved.
+    #
+    # WHY THIS BATCH EXISTS. The four extra-format leagues were wired up and
+    # then priced badly or not at all -- BRA1 64 of 163, ARG1 22 of 78,
+    # MEX1 9 of 36, and JAPAN 0 of 36. The clubs that DID price were simply the
+    # ones Kalshi happens to spell exactly as football-data does (Palmeiras,
+    # Corinthians, Boca Juniors, River Plate). Everything else was invisible.
+    # The J-League was a total blank because Kalshi lists NICKNAMES that share
+    # no token with football-data's names at all: "Frontale" for Kawasaki
+    # Frontale, "Marinos" for Yokohama F. Marinos, "V-Varen" for V-Varen
+    # Nagasaki.
+    #
+    # WHY THE BUILDER NEEDED A SECOND STAGE FOR JAPAN. Its original join
+    # anchors on one ALREADY-RATED side and reads the opponent off the unique
+    # ESPN fixture. That cannot bootstrap a league where NO club is known yet,
+    # which is why Japan produced nothing on the first pass. Stage 2 proposes
+    # candidates by token-prefix and then makes the FIXTURE decide, keeping an
+    # assignment only when exactly one ESPN fixture within +/-1 day pairs a
+    # candidate-for-A against a candidate-for-B. The string only narrows the
+    # search; it never settles anything.
+    #
+    # THE PROOF THAT THIS IS NOT FUZZY MATCHING: "Tokyo" and "Tokyo V" resolve
+    # SEPARATELY and correctly, to "fc tokyo" and "verdy" -- two different real
+    # clubs in one city whose names differ by a single character. Similarity
+    # scoring collapses that pair; the fixture join does not. (Same reason the
+    # earlier Rangers->Angers 0.92 and Espanyol->Barcelona errors cannot recur.)
+    #
+    # AMBIGUITY WAS CHECKED, NOT ASSUMED. The alias table is GLOBAL, so a bare
+    # name that means different clubs in different countries would misroute --
+    # "America" is Club America in Mexico but there is also America-MG in
+    # Brazil, and "Botafogo" is Botafogo-RJ here but Botafogo-SP also exists.
+    # Every key below was swept against live Kalshi listings across all soccer
+    # series: each appears under EXACTLY ONE division, none ambiguous. Kalshi
+    # spells the Brazilian club "America MG", which normalizes distinctly and
+    # is unaffected. Re-run that sweep if a promotion brings a colliding club
+    # into a rated division.
+    "argentinos juniors": "argentinos jrs",     # ARG1
+    "barracas": "barracas central",             # ARG1
+    "belgrano de cordoba": "belgrano",          # ARG1
+    "estudiantes la plata": "estudiantes lp",   # ARG1
+    "gimnasia la plata": "gimnasia lp",         # ARG1
+    "independiente avellaneda": "independiente",  # ARG1
+    "instituto cordoba": "instituto",           # ARG1
+    "mendoza": "gimnasia mendoza",              # ARG1
+    "racing avellaneda": "racing club",         # ARG1
+    "riestra": "dep riestra",                   # ARG1
+    "rivadavia": "ind rivadavia",               # ARG1
+    "san lorenzo de almagro": "san lorenzo",    # ARG1
+    "union santa fe": "union de santa fe",      # ARG1
+    "atletico mineiro": "atleticomg",           # BRA1
+    "botafogo": "botafogo rj",                  # BRA1
+    "chapecoense": "chapecoensesc",             # BRA1
+    "flamengo": "flamengo rj",                  # BRA1
+    "paranaense": "athleticopr",                # BRA1
+    "vasco da gama": "vasco",                   # BRA1
+    "america": "club america",                  # MEX1
+    "leon": "club leon",                        # MEX1
+    "pumas unam": "unam pumas",                 # MEX1
+    "san luis": "atl san luis",                 # MEX1
+    "tigres": "tigres uanl",                    # MEX1
+    "tijuana de caliente": "club tijuana",      # MEX1
+    "avispa": "avispa fukuoka",                 # JPN1
+    "cerezo": "cerezo osaka",                   # JPN1
+    "fagiano o": "okayama",                     # JPN1
+    "frontale": "kawasaki frontale",            # JPN1
+    "hiroshima": "sanfrecce hiroshima",         # JPN1
+    "kashima": "kashima antlers",               # JPN1
+    "kashiwa": "kashiwa reysol",                # JPN1
+    "kobe": "vissel kobe",                      # JPN1
+    "kyoto sanga": "kyoto",                     # JPN1
+    "marinos": "yokohama f marinos",            # JPN1
+    "nagoya": "nagoya grampus",                 # JPN1
+    "shimizu": "shimizu spulse",                # JPN1
+    "tokyo": "fc tokyo",                        # JPN1
+    "tokyo v": "verdy",                         # JPN1
+    "urawa": "urawa reds",                      # JPN1
+    "vvaren": "vvaren nagasaki",                # JPN1
+    # These last two are held to a WEAKER standard than everything above, and
+    # the difference is recorded rather than hidden. No fixture join can reach
+    # them: both were listed against Mito HollyHock and JEF United Chiba, which
+    # are J2 clubs absent from football-data's J1 file, so there is no rated
+    # opponent to anchor on and no ESPN j1 fixture to match. What was checked
+    # instead is FORCED UNIQUENESS -- each name is token-prefix compatible with
+    # exactly ONE club out of all 1,245 rated across all 23 leagues, so there is
+    # no second candidate to have chosen wrongly between. The same probe returns
+    # ZERO candidates for "Mito H" and "United Chiba", which is the correct
+    # answer for them: they are genuinely unrateable and stay refused rather
+    # than being invented.
+    "gamba": "gamba osaka",                     # JPN1
+    "machida z": "machida",                     # JPN1
+    # ---- Gaps in LONG-SHIPPED European leagues (2026-08-08) -----------------
+    # Found by sweeping EVERY live Kalshi soccer fixture through the production
+    # resolver, which had never been done -- previous checks only looked at
+    # leagues being added. These three had been silently unpriceable the whole
+    # time, and two of them are first-division regulars, not obscurities.
+    #
+    # "Bilbao" is the one that justifies the whole fixture-join apparatus. It is
+    # token-compatible with TWO rated clubs, "ath bilbao" (SP1) and the reserve
+    # side "ath bilbao b" (SP2), so no uniqueness rule can settle it and any
+    # reasoning about which one Kalshi "obviously" means is exactly the kind of
+    # plausible guess that has misfired here before. A real La Liga fixture
+    # picked the first team; nothing was assumed.
+    "bilbao": "ath bilbao",                     # SP1
+    "nottingham": "nottingham forest",          # E0
+    "west bromwich": "west bromwich albion",    # E1
+    # NOT added: Liga Portugal's "Viseu". Academico de Viseu is a second-tier
+    # club and football-data's P1 file does not carry it, so it has no rating to
+    # map onto -- the same correct refusal as Japan's Mito HollyHock. Adding
+    # Liga Portugal 2 is the only thing that would fix it.
+    # Cup-market gaps the same builder found in already-rated divisions. These
+    # are why Coppa Italia / DFB Pokal ties read as "unrateable": the second-tier
+    # club was rated all along, under a different spelling.
+    "hellas verona": "verona",                  # I1
+    "entella": "virtus entella",                # I2
+    "stabia": "juve stabia",                    # I2
+    "sudtirol bolzano": "sudtirol",             # I2
+    "munster": "preuen munster",                # D2
+    "rostock": "hansa rostock",                 # D2
 }
 
 

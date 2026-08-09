@@ -329,8 +329,31 @@ def refresh_kalshi_soccer_markets():
                     match_id_by_event[event_ticker] = None
                     continue
                 first = event_rows[0]
+                # PASS THE KICKOFF DAY. Omitting it made find_or_create_upcoming_match
+                # fall back to stamping the SCRAPE date, and that scrape date is then
+                # read downstream as if it were the fixture date. /soccer/markets
+                # treats "match_date < today" as proof a match has already been played
+                # and drops the row -- so every Kalshi-sourced fixture went invisible
+                # as soon as the date rolled over, no matter how far in the future its
+                # actual kickoff was.
+                #
+                # It rolled over EARLIER than a local clock suggests, which is why this
+                # looked intermittent rather than broken: the stamp is local
+                # date.today() but the route compares against UTC, so from early
+                # evening in a US timezone onward the two disagree by a day and the
+                # whole Kalshi-only half of soccer blanks out. Measured live at 20:23
+                # local on 2026-08-08 -- local said 08-08, UTC said 08-09, and all 174
+                # Brazil / 88 Argentina / 49 Mexico / 36 Japan markets were dropped
+                # with 0 of them actually decided. E0/F1/I1/N1 were hit too; they are
+                # simply between seasons so nobody noticed.
+                #
+                # The cup path below already did this (date = start[:10]) and cups
+                # priced fine all along, which is the clearest evidence this was the
+                # missing argument and not a modelling problem.
+                start_day = (first.get("estimated_start_time") or "")[:10] or None
                 match = market_catalog_soccer.find_or_create_upcoming_match(
                     session, first["division"], first["home_team"], first["away_team"],
+                    start_day,
                 )
                 market_catalog_soccer.update_match_estimated_start_time(match, first.get("estimated_start_time"))
                 match_id = match.id if match else None

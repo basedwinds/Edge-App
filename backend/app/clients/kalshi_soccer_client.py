@@ -44,6 +44,13 @@ MONEYLINE_SERIES = {
     "E1": "KXEFLCHAMPIONSHIPGAME",
     "P1": "KXLIGAPORTUGALGAME",
     "N1": "KXEREDIVISIEGAME",
+    # Non-European leagues (2026-08-08), ratings sourced from football-data's
+    # "extra" format -- see football_data_client.EXTRA_DIVISIONS. Verified live:
+    # 63 / 48 / 39 / 36 open game markets respectively.
+    "BRA1": "KXBRASILEIROGAME",
+    "ARG1": "KXARGPREMDIVGAME",
+    "MEX1": "KXLIGAMXGAME",
+    "JPN1": "KXJLEAGUEGAME",
 }
 
 SPREAD_SERIES = {
@@ -56,6 +63,10 @@ SPREAD_SERIES = {
     "E1": "KXEFLCHAMPIONSHIPSPREAD",
     "P1": "KXLIGAPORTUGALSPREAD",
     "N1": "KXEREDIVISIESPREAD",
+    # J-League has no spread/total series listed as of 2026-08-08.
+    "BRA1": "KXBRASILEIROSPREAD",
+    "ARG1": "KXARGPREMDIVSPREAD",
+    "MEX1": "KXLIGAMXSPREAD",
 }
 
 LEAGUE_WINNER_SERIES = {
@@ -108,6 +119,9 @@ TOTAL_SERIES = {
     "E1": "KXEFLCHAMPIONSHIPTOTAL",
     "P1": "KXLIGAPORTUGALTOTAL",
     "N1": "KXEREDIVISIETOTAL",
+    "BRA1": "KXBRASILEIROTOTAL",
+    "ARG1": "KXARGPREMDIVTOTAL",
+    "MEX1": "KXLIGAMXTOTAL",
 }
 
 # BTTS (Both Teams To Score) confirmed live 2026-07-19 with real open

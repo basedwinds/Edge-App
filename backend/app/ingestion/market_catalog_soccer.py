@@ -114,7 +114,13 @@ def find_or_create_upcoming_match(
                         "creating a new row rather than guessing", home_team_name,
                         away_team_name, len(cands))
 
-    resolved_date = match_date or datetime.date.today().isoformat()
+    # UTC, not local. Callers should pass a real kickoff day and this fallback
+    # should be rare -- but when it fires, the stamp is compared downstream
+    # against a UTC "today" (/soccer/markets drops any match_date before it), so
+    # a LOCAL stamp is a day behind for several hours every evening in a western
+    # timezone and marks a brand-new fixture as already played the moment it is
+    # created. Observed at 20:23 local on 2026-08-08: local 08-08 vs UTC 08-09.
+    resolved_date = match_date or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     source_match_id = f"live:{league}:{home_team_name}:{away_team_name}:{resolved_date}"
     # Same bug fixed in market_catalog_cs2.py 2026-08-02, where it was hit for
     # real: the existence check above reads _load_upcoming_matches(), a snapshot

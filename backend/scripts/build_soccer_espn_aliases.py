@@ -67,6 +67,9 @@ LEAGUES = {
     # the UEFA number: Celtic and Rangers are regular participants and were the
     # clubs the fuzzy matcher infamously tried to map onto Angers and Celta.
     "SC0": "sco.1", "E2": "eng.3", "E3": "eng.4",
+    # Extra-format leagues (2026-08-08). Needed twice over: for this map,
+    # and as the anchor the KALSHI alias builder joins against.
+    "BRA1": "bra.1", "ARG1": "arg.1", "MEX1": "mex.1", "JPN1": "jpn.1",
 }
 # Two full seasons -- more independent fixtures per club, and it covers clubs
 # that were promoted or relegated between them.
