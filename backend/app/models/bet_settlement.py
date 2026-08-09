@@ -70,6 +70,9 @@ AUTO_SETTLE_MARKET_TYPES = {
     "national_spread", "national_btts",
     # mma
     "distance", "rounds", "method_of_finish",
+    # Joint "<fighter> wins by KO" -- its grader requires the backed fighter to
+    # have WON as well as the method to match, which _grade_mma_method does not.
+    "method_of_victory",
     # esports (cs2/valorant/lol). map_winner grades for LoL + Valorant -- see
     # _grade_esports_map_winner; CS2 has no reachable per-map source, and its
     # bets return None (stay pending) rather than being guessed.
@@ -433,6 +436,39 @@ def _grade_mma_method(bet: PlacedBet, fight: MmaFight) -> "str | None":
     cat = "decision" if m.startswith("decision") else "kotko" if ("ko" in m or "tko" in m) else "submission" if "sub" in m else "other"
     side = (bet.side or "").lower()
     want = "kotko" if side in ("ko", "tko", "ko/tko", "kotko") else side
+    return "won" if cat == want else "lost"
+
+
+def _grade_mma_method_of_victory(bet: PlacedBet, fight: MmaFight) -> "str | None":
+    """"<fighter> wins by KO/TKO" -- a JOINT condition, so BOTH halves must hold.
+
+    Deliberately NOT _grade_mma_method, which checks only how the fight ended.
+    Reusing it here would pay out whenever the fight was won by KO REGARDLESS OF
+    BY WHOM -- so a bet on the loser would be booked as a win every time the
+    other fighter scored the knockout. That is a silent wrong-way settlement,
+    not a missing one.
+
+    Follows _grade_mma_moneyline's side-resolution rather than string-comparing
+    names: an unrecognised name returns None and the bet stays visibly pending,
+    instead of falling through to a false loss (the Yadier del Valle case)."""
+    from app.ingestion.market_matcher_mma import resolve_fight_side
+
+    if fight.winner_id is None or not fight.method:
+        return None  # draw / no-contest / unknown method -> not gradeable yet
+    side = resolve_fight_side(bet.team, fight.fighter_a_name, fight.fighter_b_name)
+    if side is None:
+        return None  # can't tell which fighter was backed -> never assume a loss
+    backed_id = fight.fighter_a_id if side == "a" else fight.fighter_b_id
+    if fight.winner_id not in (fight.fighter_a_id, fight.fighter_b_id):
+        return None  # winner isn't either listed fighter -> data problem, stay pending
+    if fight.winner_id != backed_id:
+        return "lost"  # backed fighter lost; how it ended is irrelevant
+    m = fight.method.lower()
+    cat = ("decision" if m.startswith("decision")
+           else "kotko" if ("ko" in m or "tko" in m)
+           else "submission" if "sub" in m else "other")
+    side_wanted = (bet.side or "").lower()
+    want = "kotko" if side_wanted in ("ko", "tko", "ko/tko", "kotko") else side_wanted
     return "won" if cat == want else "lost"
 
 
@@ -823,6 +859,7 @@ _MMA_GRADERS = {
     "distance": _grade_mma_distance,
     "rounds": _grade_mma_rounds,
     "method_of_finish": _grade_mma_method,
+    "method_of_victory": _grade_mma_method_of_victory,
 }
 
 def _grade_esports_map_winner(bet: PlacedBet, match) -> "str | None":

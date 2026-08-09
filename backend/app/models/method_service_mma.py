@@ -117,3 +117,78 @@ def predict_method(
     X = pd.DataFrame([row])[numeric_cols + ["weight_class"]]
     proba = _cache["pipeline"].predict_proba(X)[0]
     return {cls: round(float(p), 4) for cls, p in zip(_cache["classes"], proba)}
+
+# Relative KO tilt toward the UNDERDOG, measured in
+# scripts/check_mma_winner_method_dependence.py over 3,805 UFC fights where both
+# fighters had 3+ prior bouts, using a walk-forward Elo so no fight informs its
+# own prediction.
+#
+# WHY THIS CONSTANT EXISTS AT ALL. method_of_victory asks a JOINT question --
+# "does THIS fighter win, AND by KO" -- while the models here are marginal:
+# P(A wins) from the Elo, P(KO) for the fight from predict_method. Multiplying
+# them assumes method is independent of WHO wins, and it measurably is not
+# (chi-square 19.5 on 2 df, p < 0.001):
+#
+#     method       favourite won   underdog won
+#     KO/TKO               0.316          0.354
+#     Submission           0.197          0.145
+#     Decision             0.487          0.501
+#
+# THE SHAPE IS NOT WHAT THE OBVIOUS GUESS PREDICTS. The intuition going in was
+# "favourites finish more", which would have shown up as a finish-vs-decision
+# gap. It does not: overall finish rate is 0.507 against 0.513 when the
+# favourite wins, a 0.6pp difference worth ignoring. What actually moves is the
+# COMPOSITION of the finish -- underdogs win by KO more often, favourites by
+# submission more often. That fits the mechanism (an underdog's live path is a
+# puncher's chance; a superior grappler can grind to a tap) but it was found by
+# measuring, not by assuming.
+#
+# SIZE, honestly stated. Correcting for it improved held-out log-loss over the
+# 3-way method outcome by only +0.0018 nats/fight (train on the first 70%
+# chronologically, test on the last 30%). That is nearly nothing, because
+# submission is ~17% of outcomes so a large relative shift barely moves an
+# average. In PRICE terms it is not nothing: the KO share moves ~12% in relative
+# terms between the two sides, which on a market priced near 0.10 is a
+# meaningful fraction of the number being traded.
+#
+# So the tilt is applied, but it is a small correction to a marginal model, NOT
+# a validated edge. The 1.122 is P(KO | underdog won) / P(KO | favourite won)
+# from the table above.
+UNDERDOG_KO_TILT = 1.122
+
+
+def predict_method_of_victory(
+    fighter_a_id: str, fighter_b_id: str, weight_class: str | None,
+    scheduled_rounds: int | None, p_a_wins: float | None,
+) -> float | None:
+    """P(fighter A wins AND the fight ends by KO/TKO).
+
+    Splits the fight-level P(KO) between the two fighters in proportion to each
+    one's win probability, tilted by UNDERDOG_KO_TILT toward whichever side is
+    the underdog.
+
+    The split is NORMALIZED rather than applied as a raw multiplier, which is
+    what keeps it honest: P(A wins by KO) + P(B wins by KO) reconstructs the
+    fight's own P(KO) exactly. A raw multiplier would not -- it would quietly
+    create or destroy probability mass, so the two fighters' prices would stop
+    summing to the fight's KO price and the error would grow with how lopsided
+    the fight is.
+
+    None whenever any input is missing, rather than a guess."""
+    if p_a_wins is None or not (0.0 < p_a_wins < 1.0):
+        return None
+    probs = predict_method(fighter_a_id, fighter_b_id, weight_class, scheduled_rounds)
+    if not probs:
+        return None
+    p_ko = probs.get("kotko")
+    if p_ko is None:
+        return None
+
+    p_b_wins = 1.0 - p_a_wins
+    # The underdog carries the tilt; the favourite is the reference side.
+    w_a = UNDERDOG_KO_TILT if p_a_wins < p_b_wins else 1.0
+    w_b = UNDERDOG_KO_TILT if p_b_wins < p_a_wins else 1.0
+    denom = p_a_wins * w_a + p_b_wins * w_b
+    if denom <= 0:
+        return None
+    return p_ko * (p_a_wins * w_a) / denom

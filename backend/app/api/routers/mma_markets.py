@@ -144,6 +144,38 @@ def _moneyline_model_prob(market: Market, fight: MmaFight | None) -> float | Non
     return round(p, 4) if p is not None else None
 
 
+def _method_of_victory_model_prob(market: Market, fight: MmaFight | None) -> float | None:
+    """P(THIS fighter wins AND by KO/TKO) -- a joint, unlike method_of_finish,
+    which asks only whether the FIGHT ends that way.
+
+    Polymarket lists only the KO variant per fighter (verified live: all 60 open
+    rows carry side="kotko" with a team), so submission-by-fighter is not a case
+    that needs handling; an unexpected side returns None rather than being
+    quietly treated as KO.
+
+    The joint is NOT P(A wins) x P(KO). That product assumes method is
+    independent of who wins, which was measured and rejected -- see
+    method_service_mma.UNDERDOG_KO_TILT for the table and the held-out numbers.
+    predict_method_of_victory splits the fight's KO mass between the two
+    fighters instead, so the pair still sums to the fight's own P(KO)."""
+    if fight is None or market.team is None:
+        return None
+    if market.side != "kotko":
+        return None
+    side = resolve_fight_side(market.team, fight.fighter_a_name, fight.fighter_b_name)
+    if side == "a":
+        fighter_id, opponent_id = fight.fighter_a_id, fight.fighter_b_id
+    elif side == "b":
+        fighter_id, opponent_id = fight.fighter_b_id, fight.fighter_a_id
+    else:
+        return None  # name doesn't pick out exactly one side -- don't guess
+    p_win = elo_service_mma.get_fight_win_prob(fighter_id, opponent_id)
+    p = method_service_mma.predict_method_of_victory(
+        fighter_id, opponent_id, fight.weight_class, fight.scheduled_rounds, p_win,
+    )
+    return round(p, 4) if p is not None else None
+
+
 @router.get("/markets", response_model=list[MmaMarketOut])
 def list_mma_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport == "mma", Market.market_type.in_(GAME_MARKET_TYPES)).all()
@@ -302,6 +334,8 @@ def list_mma_markets(session: Session = Depends(get_session)):
             model_prob = _distance_model_prob(fight)  # market.side is always "yes" (see market_catalog_mma.py) -- no complement needed
         elif m.market_type == "method_of_finish":
             model_prob = _method_model_prob(fight, m.side)
+        elif m.market_type == "method_of_victory":
+            model_prob = _method_of_victory_model_prob(m, fight)
         elif m.market_type == "rounds":
             model_prob = _rounds_model_prob(fight, m.side, m.line)
         else:
