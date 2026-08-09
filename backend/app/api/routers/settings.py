@@ -20,7 +20,7 @@ DEFAULT_BANKROLL = 1000.0
 BANKROLL_UNITS_KEY = "bankroll_units"
 DEFAULT_BANKROLL_UNITS = 200.0
 NFL_ALLOCATION_PCT_KEY = "nfl_allocation_pct"
-DEFAULT_NFL_ALLOCATION_PCT = 0.15
+DEFAULT_NFL_ALLOCATION_PCT = 0.06
 FUTURES_SUBPOOL_PCT_KEY = "futures_subpool_pct"
 DEFAULT_FUTURES_SUBPOOL_PCT = 0.30
 
@@ -29,7 +29,7 @@ DEFAULT_FUTURES_SUBPOOL_PCT = 0.30
 # NFL (15% allocation, 30/70 futures/weekly split) via AskUserQuestion,
 # rather than assuming parity.
 NBA_ALLOCATION_PCT_KEY = "nba_allocation_pct"
-DEFAULT_NBA_ALLOCATION_PCT = 0.15
+DEFAULT_NBA_ALLOCATION_PCT = 0.06
 NBA_FUTURES_SUBPOOL_PCT_KEY = "nba_futures_subpool_pct"
 DEFAULT_NBA_FUTURES_SUBPOOL_PCT = 0.30
 
@@ -41,7 +41,7 @@ DEFAULT_NBA_FUTURES_SUBPOOL_PCT = 0.30
 # separate bankroll pass (WNBA measured the same modest no-average-edge as the
 # NBA, so it warrants NBA-style, not zero, treatment).
 WNBA_ALLOCATION_PCT_KEY = "wnba_allocation_pct"
-DEFAULT_WNBA_ALLOCATION_PCT = 0.15
+DEFAULT_WNBA_ALLOCATION_PCT = 0.06
 # CFB starts at the same 6% tier as the other seasonal non-core sports. It has
 # NO forward-CLV history yet (the season starts late August), so this is a prior,
 # not evidence -- revisit at the early-September re-decide alongside mma/cs2.
@@ -58,7 +58,7 @@ DEFAULT_CFB_FUTURES_SUBPOOL_PCT = 0.15
 # now staked (paper) like the others, but its models are unbacktested so it
 # defaults lighter. 2026-07-24.
 RACING_ALLOCATION_PCT_KEY = "racing_allocation_pct"
-DEFAULT_RACING_ALLOCATION_PCT = 0.04
+DEFAULT_RACING_ALLOCATION_PCT = 0.06
 WNBA_FUTURES_SUBPOOL_PCT_KEY = "wnba_futures_subpool_pct"
 DEFAULT_WNBA_FUTURES_SUBPOOL_PCT = 0.0
 
@@ -67,7 +67,7 @@ DEFAULT_WNBA_FUTURES_SUBPOOL_PCT = 0.0
 # NFL/NBA (15% allocation, 30/70 futures/weekly split) via AskUserQuestion,
 # rather than assuming parity.
 MLB_ALLOCATION_PCT_KEY = "mlb_allocation_pct"
-DEFAULT_MLB_ALLOCATION_PCT = 0.15
+DEFAULT_MLB_ALLOCATION_PCT = 0.06
 MLB_FUTURES_SUBPOOL_PCT_KEY = "mlb_futures_subpool_pct"
 DEFAULT_MLB_FUTURES_SUBPOOL_PCT = 0.30
 
@@ -79,7 +79,7 @@ DEFAULT_MLB_FUTURES_SUBPOOL_PCT = 0.30
 # per-fight markets across 6 market types at once, so nearly all the real
 # opportunity here is per-fight, not futures.
 MMA_ALLOCATION_PCT_KEY = "mma_allocation_pct"
-DEFAULT_MMA_ALLOCATION_PCT = 0.15
+DEFAULT_MMA_ALLOCATION_PCT = 0.06
 MMA_FUTURES_SUBPOOL_PCT_KEY = "mma_futures_subpool_pct"
 DEFAULT_MMA_FUTURES_SUBPOOL_PCT = 0.15
 
@@ -93,7 +93,7 @@ DEFAULT_MMA_FUTURES_SUBPOOL_PCT = 0.15
 # tournament-winner futures rows), so nearly all the real opportunity here
 # is still per-match, not futures.
 TENNIS_ALLOCATION_PCT_KEY = "tennis_allocation_pct"
-DEFAULT_TENNIS_ALLOCATION_PCT = 0.15
+DEFAULT_TENNIS_ALLOCATION_PCT = 0.06
 TENNIS_FUTURES_SUBPOOL_PCT_KEY = "tennis_futures_subpool_pct"
 DEFAULT_TENNIS_FUTURES_SUBPOOL_PCT = 0.15
 
@@ -106,7 +106,7 @@ DEFAULT_TENNIS_FUTURES_SUBPOOL_PCT = 0.15
 # currently lands in the per-match pool regardless of this default, same as
 # Tennis's own initial state.
 SOCCER_ALLOCATION_PCT_KEY = "soccer_allocation_pct"
-DEFAULT_SOCCER_ALLOCATION_PCT = 0.15
+DEFAULT_SOCCER_ALLOCATION_PCT = 0.06
 SOCCER_FUTURES_SUBPOOL_PCT_KEY = "soccer_futures_subpool_pct"
 DEFAULT_SOCCER_FUTURES_SUBPOOL_PCT = 0.15
 
@@ -124,17 +124,17 @@ DEFAULT_SOCCER_FUTURES_SUBPOOL_PCT = 0.15
 # acknowledged this and said the split may be adjusted again later, so
 # don't read the 15%/15% numbers below as a settled, final call.
 VALORANT_ALLOCATION_PCT_KEY = "valorant_allocation_pct"
-DEFAULT_VALORANT_ALLOCATION_PCT = 0.15
+DEFAULT_VALORANT_ALLOCATION_PCT = 0.06
 VALORANT_FUTURES_SUBPOOL_PCT_KEY = "valorant_futures_subpool_pct"
 DEFAULT_VALORANT_FUTURES_SUBPOOL_PCT = 0.15
 
 CS2_ALLOCATION_PCT_KEY = "cs2_allocation_pct"
-DEFAULT_CS2_ALLOCATION_PCT = 0.15
+DEFAULT_CS2_ALLOCATION_PCT = 0.06
 CS2_FUTURES_SUBPOOL_PCT_KEY = "cs2_futures_subpool_pct"
 DEFAULT_CS2_FUTURES_SUBPOOL_PCT = 0.15
 
 LOL_ALLOCATION_PCT_KEY = "lol_allocation_pct"
-DEFAULT_LOL_ALLOCATION_PCT = 0.15
+DEFAULT_LOL_ALLOCATION_PCT = 0.06
 LOL_FUTURES_SUBPOOL_PCT_KEY = "lol_futures_subpool_pct"
 DEFAULT_LOL_FUTURES_SUBPOOL_PCT = 0.15
 
@@ -143,12 +143,18 @@ DEFAULT_LOL_FUTURES_SUBPOOL_PCT = 0.15
 # that introspection exists precisely so adding a sport cannot be forgotten in
 # one place and remembered in another.
 #
-# Deliberately smaller than the 0.15 the established titles carry: CoD is new,
-# its model has NOT been backtested against real market odds, and it ships
-# model_validated: false. A new sport should not open on the same allocation as
-# one with a settled record.
+# EQUALIZED at 0.06 with every other sport (user decision, 2026-08-09): 13
+# sports x 6% = 78%, the same total as before CoD was added, just evenly split
+# instead of the 6.4/6.0/4.0 mix that had accumulated.
+#
+# Equal rather than edge-weighted on purpose: the real tracker's per-sport
+# confidence intervals all span zero, so any ranking would be fitting noise.
+#
+# WORTH KNOWING: this gives CoD the same share as sports with a settled record,
+# even though its model is unbacktested and ships model_validated: false. That
+# was the explicit call; flagged here rather than quietly re-lowered.
 COD_ALLOCATION_PCT_KEY = "cod_allocation_pct"
-DEFAULT_COD_ALLOCATION_PCT = 0.04
+DEFAULT_COD_ALLOCATION_PCT = 0.06
 COD_FUTURES_SUBPOOL_PCT_KEY = "cod_futures_subpool_pct"
 # Zero: Kalshi lists no CoD futures at all (checked live -- KXCODGAME is
 # match-winner only, and the two Esports World Cup series are empty stubs).
