@@ -475,6 +475,38 @@ TEAM_ALIASES: dict[str, str] = {
     # than being invented.
     "gamba": "gamba osaka",                     # JPN1
     "machida z": "machida",                     # JPN1
+    # ---- Sweden / Norway / Denmark / China (2026-08-08) ---------------------
+    # Fourth batch through build_soccer_kalshi_aliases.py, all fixture-derived.
+    # Two recurring shapes: a suffix football-data drops ("BK Hacken" -> hacken,
+    # "Dalian Yingbo FC" -> dalian yingbo) and Kalshi's ASCII transliteration of
+    # a Scandinavian vowel ("Tromsoe" -> tromso, "Lillestroem" -> lillestrom,
+    # "Vasteraas" -> vasteras sk), which no accent-folding rule catches because
+    # the letter is already spelled out.
+    #
+    # "Shenzhen Peng City" -> shenzhen xinpengcheng is a real club RENAME, not a
+    # spelling variant, and is exactly the kind of mapping that cannot be
+    # derived from the strings at all -- only a shared fixture connects them.
+    "chongqing tonglianglong fc": "chongqing tonglianglong",  # CHN1
+    "dalian yingbo fc": "dalian yingbo",        # CHN1
+    "henan": "henan songshan longmen",          # CHN1
+    "qingdao west coast fc": "qingdao west coast",  # CHN1
+    "shenzhen peng city": "shenzhen xinpengcheng",  # CHN1
+    "wuhan three towns fc": "wuhan three towns",    # CHN1
+    "zhejiang prof": "zhejiang professional",   # CHN1
+    "randers": "randers fc",                    # DNK1
+    # "Copenhagen" is forced -- exactly one candidate in the entire 26-league
+    # pool. "Broendby" is the transliteration case again and NO token rule
+    # reaches it, since "broendby" is not a prefix of "brondby"; it was verified
+    # against the fixture instead (Kalshi "Horsens vs Broendby" on 2026-08-09
+    # matches exactly one ESPN den.1 tie, "AC Horsens vs Brondby IF").
+    "copenhagen": "fc copenhagen",              # DNK1
+    "broendby": "brondby",                      # DNK1
+    "lillestroem": "lillestrom",                # NOR1
+    "sarpsborg": "sarpsborg 08",                # NOR1
+    "tromsoe": "tromso",                        # NOR1
+    "bk hacken": "hacken",                      # SWE1
+    "malmo": "malmo ff",                        # SWE1
+    "vasteraas": "vasteras sk",                 # SWE1
     # ---- Rated-but-never-listed leagues, wired 2026-08-08 -------------------
     # B1/D2/E2/SP2/T1/SC0 had ratings all along (added for cups and UEFA) but no
     # Kalshi series, so 297 open markets sat unpriced. 61% of their fixtures

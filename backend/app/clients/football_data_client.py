@@ -250,6 +250,25 @@ EXTRA_DIVISIONS = {
     "ARG1": ("ARG", "Liga Profesional", "Argentina - Liga Profesional"),
     "MEX1": ("MEX", "Liga MX", "Mexico - Liga MX"),
     "JPN1": ("JPN", "J1 League", "Japan - J1 League"),
+    # Added 2026-08-08. Each has live Kalshi inventory AND an ESPN feed; that
+    # second condition is what admitted them, see below.
+    "SWE1": ("SWE", "Allsvenskan", "Sweden - Allsvenskan"),
+    "NOR1": ("NOR", "Eliteserien", "Norway - Eliteserien"),
+    "DNK1": ("DNK", "Superliga", "Denmark - Superliga"),
+    "CHN1": ("CHN", "Super League", "China - Super League"),
+    # DELIBERATELY ABSENT: Poland (Ekstraklasa, 66 open Kalshi markets) and
+    # Switzerland (Super League, 52). Both have plenty of football-data history
+    # and real Kalshi supply, so they look like the four above -- but ESPN has
+    # NO Ekstraklasa feed at all (every slug variant 400s) and its sui.1
+    # endpoint returns 200 with zero events.
+    #
+    # That is disqualifying rather than cosmetic, because ESPN is what SETTLES
+    # a soccer bet: espn_soccer_client.LEAGUE_CODES decides which leagues
+    # refresh_soccer_results fetches at all, and a league missing from it can
+    # never resolve. Shipping these two would mint markets whose bets sit
+    # pending forever -- precisely the failure that left 20 Maritimo bets stuck
+    # on a finished match. Pricing a market this app cannot settle is worse than
+    # not listing it.
 }
 
 

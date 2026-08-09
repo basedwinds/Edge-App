@@ -70,6 +70,7 @@ LEAGUES = {
     # Extra-format leagues (2026-08-08). Needed twice over: for this map,
     # and as the anchor the KALSHI alias builder joins against.
     "BRA1": "bra.1", "ARG1": "arg.1", "MEX1": "mex.1", "JPN1": "jpn.1",
+    "SWE1": "swe.1", "NOR1": "nor.1", "DNK1": "den.1", "CHN1": "chn.1",
 }
 # Two full seasons -- more independent fixtures per club, and it covers clubs
 # that were promoted or relegated between them.

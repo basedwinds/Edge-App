@@ -109,6 +109,14 @@ CUPS = {
     "KXLALIGA2GAME": "esp.2",
     "KXSUPERLIGGAME": "tur.1",
     "KXSCOTTISHPREMGAME": "sco.1",
+    # New countries, 2026-08-08. Poland and Switzerland are absent on purpose:
+    # ESPN publishes no Ekstraklasa feed and returns zero Swiss events, so there
+    # is nothing to join against -- which is the same reason they were refused
+    # for pricing at all (their bets could never settle).
+    "KXALLSVENSKANGAME": "swe.1",
+    "KXELITESERIENGAME": "nor.1",
+    "KXDENSUPERLIGAGAME": "den.1",
+    "KXCHNSLGAME": "chn.1",
 }
 PAIR = re.compile(r"^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner\?|:|$)")
 TICKER_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})")

@@ -75,6 +75,15 @@ MONEYLINE_SERIES = {
     "SP2": "KXLALIGA2GAME",
     "T1": "KXSUPERLIGGAME",
     "SC0": "KXSCOTTISHPREMGAME",
+    # ---- New countries, 2026-08-08 -----------------------------------------
+    # Same extra-format pattern as BRA1/ARG1/MEX1/JPN1. Admitted only because
+    # each has BOTH football-data history and a live ESPN feed -- Poland (66
+    # open markets) and Switzerland (52) were rejected on the ESPN half, since
+    # without it their bets could never settle. See EXTRA_DIVISIONS.
+    "SWE1": "KXALLSVENSKANGAME",
+    "NOR1": "KXELITESERIENGAME",
+    "DNK1": "KXDENSUPERLIGAGAME",
+    "CHN1": "KXCHNSLGAME",
 }
 
 SPREAD_SERIES = {
@@ -98,6 +107,10 @@ SPREAD_SERIES = {
     "B1": "KXBELGIANPLSPREAD",
     "D2": "KXBUNDESLIGA2SPREAD",
     "SC0": "KXSCOTTISHPREMSPREAD",
+    "SWE1": "KXALLSVENSKANSPREAD",
+    "NOR1": "KXELITESERIENSPREAD",
+    "DNK1": "KXDENSUPERLIGASPREAD",
+    "CHN1": "KXCHNSLSPREAD",
 }
 
 LEAGUE_WINNER_SERIES = {
@@ -156,6 +169,10 @@ TOTAL_SERIES = {
     "B1": "KXBELGIANPLTOTAL",
     "D2": "KXBUNDESLIGA2TOTAL",
     "SC0": "KXSCOTTISHPREMTOTAL",
+    "SWE1": "KXALLSVENSKANTOTAL",
+    "NOR1": "KXELITESERIENTOTAL",
+    "DNK1": "KXDENSUPERLIGATOTAL",
+    "CHN1": "KXCHNSLTOTAL",
 }
 
 # BTTS (Both Teams To Score) confirmed live 2026-07-19 with real open

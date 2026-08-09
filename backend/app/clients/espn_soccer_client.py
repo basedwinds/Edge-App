@@ -90,7 +90,12 @@ LEAGUE_CODES = {
     "E3": "eng.4",       # League Two
     # Extra-format leagues, added with the parser. Verified live:
     # bra.1 40 events, arg.1 78, mex.1 33, jpn.1 40 in August 2026.
-    "BRA1": "bra.1",     # Brasileirao Serie A
+    "BRA1": "bra.1",
+    # 2026-08-08: verified live before wiring -- 37/28/28/39 events
+    # respectively in a one-month window. Poland and Switzerland were REFUSED
+    # at this step (no feed / zero events), which is why they are absent from
+    # football_data_client.EXTRA_DIVISIONS too.
+    "SWE1": "swe.1", "NOR1": "nor.1", "DNK1": "den.1", "CHN1": "chn.1",     # Brasileirao Serie A
     "ARG1": "arg.1",     # Liga Profesional
     "MEX1": "mex.1",     # Liga MX
     "JPN1": "jpn.1",     # J1 League
