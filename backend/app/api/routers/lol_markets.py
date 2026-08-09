@@ -34,7 +34,9 @@ from app.db.models import LolMatch, Market, MarketSnapshot
 from app.ingestion import market_catalog_lol
 from app.ingestion.market_matcher_lol import team_names_match
 from app.models.baseline import elo_service_lol
-from app.models.esports_tournament_pricing import price_tournament_winners, skip_reason
+from app.models.esports_tournament_pricing import (
+    is_competition_outcome, price_tournament_winners, skip_reason,
+)
 from app.models.ladder_sanity import futures_group_decided, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
 from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars

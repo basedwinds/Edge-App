@@ -32,7 +32,9 @@ from app.db.models import Cs2Match, Market, MarketSnapshot
 from app.ingestion import market_catalog_cs2
 from app.ingestion.market_matcher_cs2 import team_names_match
 from app.models.baseline import elo_service_cs2
-from app.models.esports_tournament_pricing import price_tournament_winners, skip_reason
+from app.models.esports_tournament_pricing import (
+    is_competition_outcome, price_tournament_winners, skip_reason,
+)
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import futures_group_decided, CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time

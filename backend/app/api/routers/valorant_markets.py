@@ -44,7 +44,9 @@ from app.models.baseline import elo_service_valorant
 import logging
 
 from app.clients import vlr_client
-from app.models.esports_tournament_pricing import find_event_path, price_tournament_winners, skip_reason
+from app.models.esports_tournament_pricing import (
+    find_event_path, is_competition_outcome, price_tournament_winners, skip_reason,
+)
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import (
     futures_group_decided,
