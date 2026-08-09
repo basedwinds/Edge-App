@@ -15,6 +15,7 @@ from app.ingestion.poller_tennis import run_full_refresh_tennis
 from app.ingestion.poller_mma import run_full_refresh_mma
 from app.ingestion.poller_soccer import run_full_refresh_soccer
 from app.ingestion.poller_valorant import run_full_refresh_valorant
+from app.ingestion.poller_cod import run_full_refresh_cod
 from app.ingestion.poller_cs2 import run_full_refresh_cs2
 from app.ingestion.poller_lol import run_full_refresh_lol
 from app.ingestion.poller_racing import run_full_refresh_racing
@@ -334,6 +335,26 @@ def start():
         minutes=5,
         id="full_refresh_cs2",
         next_run_time=base_tick + timedelta(seconds=7 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # Call of Duty. Registered HERE and not only in main.py's startup timer
+    # list -- those timers fire once per process, so without this CoD would
+    # refresh at boot and then never again, which is the "dead scheduler job"
+    # shape this app has already shipped once.
+    #
+    # next_run_time is set explicitly for the same reason: a job added without
+    # one does not fire at all here.
+    #
+    # Slot 15 because 0-14 are taken. breakingpoint.gg is a small site and this
+    # is a 5-minute cadence, so cod_data paces itself internally too -- the
+    # Liquipedia ban earlier today is the standing reminder of what a shared
+    # host costs when a poller is impolite.
+    scheduler.add_job(
+        run_full_refresh_cod,
+        "interval",
+        minutes=5,
+        id="full_refresh_cod",
+        next_run_time=base_tick + timedelta(seconds=15 * JOB_STAGGER_SECONDS),
         replace_existing=True,
     )
     # LoL's own Leaguepedia Cargo API applies a real rate limit to anonymous
