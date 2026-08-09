@@ -880,6 +880,18 @@ _SOCCER_LEAGUE_NAME = {
     "F1": "Ligue 1", "MLS": "MLS", "P1": "Liga Portugal", "N1": "Eredivisie",
     "E1": "EFL Championship", "SP2": "La Liga 2", "I2": "Serie B", "D2": "2. Bundesliga",
     "F2": "Ligue 2",
+    # 2026-08-09. Kept in step with the frontend's own SOCCER_LEAGUE_LABEL --
+    # a division missing from either map renders as its raw code ("BRA1"), and
+    # this map had fallen 14 divisions and 9 competitions behind.
+    "B1": "Belgian Pro League", "T1": "Turkish Super Lig", "G1": "Greek Super League",
+    "SC0": "Scottish Premiership", "E2": "EFL League One", "E3": "EFL League Two",
+    "BRA1": "Brasileirao", "ARG1": "Liga Profesional", "MEX1": "Liga MX",
+    "JPN1": "J1 League", "SWE1": "Allsvenskan", "NOR1": "Eliteserien",
+    "DNK1": "Danish Superliga", "CHN1": "Chinese Super League",
+    "COPPA_ITALIA": "Coppa Italia", "DFB_POKAL": "DFB Pokal", "EFL_CUP": "EFL Cup",
+    "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
+    "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
+    "LEAGUES_CUP": "Leagues Cup",
 }
 
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",

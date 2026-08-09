@@ -522,6 +522,13 @@ export async function resolveFlaggedCatalogEntry(id: number): Promise<{ status: 
 // 2026-08-07, none of which were ever added here -- so an EFL Championship bet
 // has been reading "E1" and a Liga Portugal one "P1". N1 (Eredivisie) added the
 // same day would have joined them.
+// 2026-08-09: brought back in step with the backend after a large expansion --
+// the gap this comment warned about had reopened and grown. Fourteen divisions
+// and nine competitions were rendering as raw codes ("BRA1", "SWE1",
+// "LEAGUES_CUP"), which is the same defect described above, just at scale.
+// Anything added to football_data_client.DIVISIONS/EXTRA_DIVISIONS, or any new
+// competition league code, needs an entry here AND in the backend's own
+// _SOCCER_LEAGUE_NAME.
 const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "E0": "EPL", "SP1": "La Liga", "I1": "Serie A", "D1": "Bundesliga", "F1": "Ligue 1",
   "P1": "Liga Portugal",
@@ -529,6 +536,19 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "E1": "EFL Championship", "SP2": "La Liga 2", "I2": "Serie B",
   "D2": "2. Bundesliga", "F2": "Ligue 2",
   "MLS": "MLS",
+  // Added for cups/UEFA, then given their own league markets 2026-08-08.
+  "B1": "Belgian Pro League", "T1": "Turkish Super Lig", "G1": "Greek Super League",
+  "SC0": "Scottish Premiership", "E2": "EFL League One", "E3": "EFL League Two",
+  // Non-European leagues (football-data "extra" format).
+  "BRA1": "Brasileirao", "ARG1": "Liga Profesional", "MEX1": "Liga MX",
+  "JPN1": "J1 League", "SWE1": "Allsvenskan", "NOR1": "Eliteserien",
+  "DNK1": "Danish Superliga", "CHN1": "Chinese Super League",
+  // Competitions. These are stored as the LEAGUE on their fixtures (so a cup
+  // tie can never join a domestic round-robin), so they surface here too.
+  "COPPA_ITALIA": "Coppa Italia", "DFB_POKAL": "DFB Pokal", "EFL_CUP": "EFL Cup",
+  "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
+  "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
+  "LEAGUES_CUP": "Leagues Cup",
 };
 
 // Fallback series names for racing. Only used when the backend hasn't supplied

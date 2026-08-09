@@ -56,6 +56,21 @@ const GAME_MARKET_TYPE_LABELS: Record<string, string> = {
   second_half_total: "2H Total",
   second_half_team_total: "2H Team Total",
   second_half_btts: "2H BTTS",
+  // Competition variants (cups 2026-08-08, Leagues Cup 2026-08-09). These are
+  // the SAME real questions as the league market types above -- they only carry
+  // separate market_type strings so each can be routed to its own model (cup
+  // bridge / UEFA offsets / MLS-Liga MX offset). Without entries here they
+  // rendered as raw strings like "uefa_moneyline_3way" and "leagues_cup_btts",
+  // which is what a user actually saw on the Recommended table.
+  cup_moneyline_3way: "Moneyline",
+  cup_total: "Total",
+  cup_advance: "To Advance",
+  uefa_moneyline_3way: "Moneyline",
+  uefa_total: "Total",
+  leagues_cup_moneyline_3way: "Moneyline",
+  leagues_cup_total: "Total",
+  leagues_cup_spread: "Spread",
+  leagues_cup_btts: "BTTS",
   // Esports (Valorant/CS2/LoL) -- fell through to the raw market_type
   // string until now (found live 2026-07-20 while adding real coverage for
   // all 3 titles' own KXGAME series winner tickers), same wording as each
@@ -164,6 +179,7 @@ export function describePick(row: PickLike): string {
   // fields, not team/line/side; half-spread doesn't match the plain
   // "spread"-prefix check below since its market_type string is
   // "first_half_spread"/"second_half_spread", not "spread_...").
+  if (marketType === "leagues_cup_btts") return "Both teams to score";
   if (marketType === "btts" || marketType === "first_half_btts" || marketType === "second_half_btts") {
     const halfNote = marketType === "first_half_btts" ? " (1st half)" : marketType === "second_half_btts" ? " (2nd half)" : "";
     return `Both teams to score${halfNote}`;
@@ -173,6 +189,19 @@ export function describePick(row: PickLike): string {
     return row.correctScoreHome != null && row.correctScoreAway != null
       ? `${row.correctScoreHome} - ${row.correctScoreAway}`
       : "—";
+  }
+  // Cup/UEFA/Leagues Cup moneylines are ordinary 3-way picks; they settle on
+  // regulation, which the label above already conveys via the market-type name.
+  if (marketType === "cup_moneyline_3way" || marketType === "uefa_moneyline_3way"
+      || marketType === "leagues_cup_moneyline_3way") {
+    return side === "draw" ? "Draw" : (team ?? "—");
+  }
+  if ((marketType === "cup_total" || marketType === "uefa_total"
+       || marketType === "leagues_cup_total") && line !== null) {
+    return `Over ${line} goals`;
+  }
+  if (marketType === "leagues_cup_spread" && line !== null && team) {
+    return `${team} wins by ${Math.ceil(line)}+ goals`;
   }
   if (marketType === "moneyline_3way" || marketType === "first_half_winner" || marketType === "second_half_winner") {
     const halfNote = marketType === "first_half_winner" ? " (1st half)" : marketType === "second_half_winner" ? " (2nd half)" : "";
