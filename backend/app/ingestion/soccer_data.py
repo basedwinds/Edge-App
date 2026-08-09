@@ -19,6 +19,8 @@ market_catalog_soccer.py -- same split as TennisMatch's real usage: the DB
 tracks live state, the JSON cache is the training set)."""
 from __future__ import annotations
 
+from app.ingestion import international_data
+
 import json
 import re
 import unicodedata
@@ -188,7 +190,14 @@ def load_matches() -> list[dict]:
     I1/D1/F1/MLS) gets its own rating pool at the service layer, but this
     function returns everything together since that's the natural
     checkpoint-and-resume unit at the cache layer, same as tennis_data.py."""
-    matches = load_football_data_matches() + load_espn_mls_matches()
+    # Competitive internationals join the stream tagged "INTL" (2026-08-09).
+    # National teams only ever play each other, so the per-league pooling this
+    # function feeds is exactly right for them rather than a compromise -- and
+    # routing them through here means ratings, resolve_league and every pricing
+    # path work with no parallel service. Empty when the cache has not been
+    # built, which degrades to "no INTL ratings" instead of breaking the rest.
+    matches = (load_football_data_matches() + load_espn_mls_matches()
+               + international_data.load_matches())
     matches.sort(key=lambda m: (m["match_date"], m["league"], m["source_match_id"]))
     return matches
 
