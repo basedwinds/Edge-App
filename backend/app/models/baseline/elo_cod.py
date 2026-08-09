@@ -36,6 +36,24 @@ BASE_RATING = 1500.0
 # See module docstring: flat accuracy across 16..40, log-loss best mid-range.
 K_TEAM = 24.0
 
+# FIRST-LISTED ADVANTAGE, the CoD equivalent of home-field advantage.
+#
+# FOUND BY MEASUREMENT, not assumed (scripts/test_cod_extra_signals.py). Over
+# 2,840 walk-forward-scored matches, team_a won 56.09% while the model predicted
+# 53.19% -- a systematic +2.90pp bias, z = +3.29. breakingpoint.gg lists the
+# higher-seeded / first-named side as team1, so this is a real positional effect
+# the symmetric Elo had no way to express.
+#
+# FITTED, not guessed: a grid over 0..40 Elo minimises log-loss at 10
+# (0.6343 vs 0.6361 at zero) and drives the mean residual from +0.0290 to
+# +0.0056. Accuracy rises 0.6405 -> 0.6440. The curve has a smooth interior
+# minimum rather than a knife edge, so the value is not balanced on one point.
+#
+# The gain is modest and that is the honest description. It matters more for a
+# PRICE than for picking a side: an uncorrected 2.9pp bias is a systematic
+# mispricing of every match in the same direction.
+FIRST_LISTED_ADV = 10.0
+
 # How far a single series may move a rating. Same guard the other titles use --
 # one blowout against a badly-mismatched opponent should not relocate a team.
 RATING_CLAMP = 800.0
@@ -120,7 +138,7 @@ class SeriesDistribution:
 
 
 def predict_series(state: CodEloState, team_a: str, team_b: str, best_of: int) -> SeriesDistribution:
-    map_p = map_win_prob(state.get(team_a), state.get(team_b))
+    map_p = map_win_prob(state.get(team_a) + FIRST_LISTED_ADV, state.get(team_b))
     return SeriesDistribution(map_p=map_p, best_of=best_of,
                               dist=series_score_distribution(map_p, best_of))
 
@@ -159,7 +177,10 @@ def predict_and_update(state: CodEloState, match: dict) -> float | None:
         return None
     best_of = match.get("best_of") or 5
     ra, rb = state.get(team_a), state.get(team_b)
-    series_p = series_p_from_map_p(map_win_prob(ra, rb), best_of)
+    # The advantage is applied to the PREDICTION only, never carried into the
+    # stored rating -- otherwise a team would accumulate strength purely from
+    # being listed first, which is a property of the fixture, not the team.
+    series_p = series_p_from_map_p(map_win_prob(ra + FIRST_LISTED_ADV, rb), best_of)
 
     winner = match.get("winner")
     if winner is None:
