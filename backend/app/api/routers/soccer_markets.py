@@ -50,6 +50,7 @@ from app.clients import kalshi_soccer_client
 from app.clients.football_data_client import PROMOTION_SOURCE_DIVISION
 from app.db.database import get_session
 from app.db.models import Market, MarketSnapshot, SoccerMatch, SoccerNewsAdjustmentCache
+from app.ingestion import soccer_data
 from app.ingestion.market_catalog_soccer import get_soccer_news_adjustment_cache, soccer_news_cache_to_pydantic
 from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_match
 from app.models.baseline import elo_service_soccer
@@ -65,7 +66,7 @@ from app.models.ladder_sanity import (
 )
 from app.models.news_adjustment.schema import NewsAdjustment
 from app.models import playoff_sim_service_mls
-from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season
+from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season, current_season_table
 from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -865,6 +866,15 @@ _MARKET_TYPE_LABEL_TO_DIVISION.update({
 # from playoff_sim_service_mls instead, below.
 _MLS_PLAYOFF_MARKET_TYPES = ("mls_cup_winner", "mls_conference_winner")
 
+MID_SEASON_SIM_NOTE = (
+    "Mid-season estimate: this league is already part-way through its season, so the "
+    "simulation starts from the current table and plays out only the remaining fixtures. "
+    "That path is new and has never been checked against a finished season. It also holds "
+    "each team's strength fixed, which makes it more confident than a market that prices in "
+    "the chance a side improves or collapses -- expect it to overstate the leader and "
+    "understate everyone chasing."
+)
+
 MLS_BRACKET_APPROXIMATE_NOTE = (
     "Approximate: this price comes from a playoff bracket simulation that has never been "
     "checked against real results. MLS's current format has only one completed postseason in "
@@ -938,6 +948,7 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             by_league.setdefault(division, []).append(m)
 
     sim_by_league: dict[str, SeasonSimResult | None] = {}
+    mid_season_divisions: set[str] = set()
     for division, league_markets in by_league.items():
         state = elo_service_soccer.get_rating_state(division)
         if state is None:
@@ -946,8 +957,20 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         second_tier_division = PROMOTION_SOURCE_DIVISION.get(division)
         second_tier_state = elo_service_soccer.get_rating_state(second_tier_division) if second_tier_division else None
         canonical_teams = list({canonical_team_key(m.team) for m in league_markets if m.team})
+        # SEED FROM THE REAL TABLE. Without this the sim runs a fresh season from
+        # zero, which is only correct between seasons -- it silently discards
+        # every point already banked. Harmless for the five European leagues
+        # while they are on their summer break (current_season_table returns
+        # empty for them and the call behaves exactly as before), and badly
+        # wrong for a calendar-year league: Brazil was 20.5 of 38 rounds in when
+        # this was added, with Palmeiras 8 points clear, and the old call
+        # modelled that as level.
+        starting_table, played_pairs = current_season_table(division, soccer_data.load_matches())
+        if played_pairs:
+            mid_season_divisions.add(division)
         sim_by_league[division] = simulate_season(
             state, canonical_teams, division, n_simulations=3000, second_tier_state=second_tier_state,
+            starting_table=starting_table, played_pairs=played_pairs,
         )
 
     # One cached simulation prices every MLS Cup and conference-bracket row (see
@@ -1045,6 +1068,14 @@ def list_soccer_futures(session: Session = Depends(get_session)):
     for row in out:
         if row.market_type in _MLS_PLAYOFF_MARKET_TYPES:
             row.model_note = f"{row.model_note or ''} {MLS_BRACKET_APPROXIMATE_NOTE}".strip()
+    # Same posture as the MLS bracket above and CFB's approximate markets:
+    # labelled rather than suppressed, and judged on results. Applied per
+    # DIVISION rather than per market_type because "league_winner" is shared by
+    # eight leagues, only some of which are mid-season at any given moment --
+    # and which ones changes with the calendar, so this cannot be a static list.
+    for row in out:
+        if _futures_division(row) in mid_season_divisions:
+            row.model_note = f"{row.model_note or ''} {MID_SEASON_SIM_NOTE}".strip()
 
     out.sort(key=lambda m: (m.group_label or "", -(m.implied_prob or 0)))
     return out

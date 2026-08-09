@@ -140,6 +140,23 @@ LEAGUE_WINNER_SERIES = {
     "E1": ("KXEFLCHAMPIONSHIP", "EFL Championship Winner"),
     "P1": ("KXLIGAPORTUGAL", "Liga Portugal Champion"),
     "N1": ("KXEREDIVISIE", "Eredivisie Champion"),
+    # Added 2026-08-09, and ONLY these two of the three leagues that have live
+    # winner futures. Both are straight double round-robins decided on the final
+    # table, which is exactly what simulate_season models.
+    #
+    # They are also both MID-SEASON (Brazil 20.5 of 38 rounds, China 20.5 of
+    # 30), which is why they could not be wired until simulate_season learned to
+    # start from the real table -- before that it would have simulated a fresh
+    # season and thrown away an 8-point lead.
+    "BRA1": ("KXBRASILEIRO", "Brasileirao Champion"),
+    "CHN1": ("KXCHNSL", "Chinese Super League Champion"),
+    # DELIBERATELY NOT WIRED: Liga MX (KXLIGAMX, 36 open markets, the biggest of
+    # the three). Its markets ask "Will <team> win the Liga MX Clausura?" and
+    # the Clausura is decided by the LIGUILLA -- an 8-team knockout playoff --
+    # not by the regular-season table. simulate_season would answer a different
+    # question than the one being traded, and answer it confidently. This is the
+    # same reason MLS Cup is excluded (see _MLS_PLAYOFF_MARKET_TYPES); pricing
+    # it needs a bracket model, not a table model.
 }
 # A dedicated "KXEPLTOP4"-style series per league (KXEPLTOP4, KXLALIGATOP4,
 # etc) exists but had ZERO open events on Kalshi as of 2026-07-19 --

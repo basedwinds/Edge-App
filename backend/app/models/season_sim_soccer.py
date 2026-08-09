@@ -63,10 +63,12 @@ been found in this app's own data."""
 from __future__ import annotations
 
 import bisect
+import datetime
 import math
 import random
 from dataclasses import dataclass, field
 
+from app.ingestion.market_matcher_soccer import canonical_team_key
 from app.models.baseline.elo_soccer import MAX_GOALS, SoccerRatingState, predict_match
 
 # Standard FIFA/UEFA-style tiebreak used (in some exact form) by every one
@@ -242,6 +244,59 @@ class SeasonSimResult:
     n_simulations: int = 0
 
 
+# Leagues whose season runs inside ONE calendar year. Everything else is the
+# European August-May shape. This matters because the cached `season` field is
+# derived with the European rule and therefore labels a Brazilian match played
+# in August 2026 as season "2026-2027", which would split one real season in
+# half. The date window below is derived per league instead of trusting it.
+CALENDAR_YEAR_LEAGUES = frozenset({"BRA1", "CHN1", "JPN1", "NOR1", "SWE1", "MLS", "MEX1"})
+
+
+def current_season_table(league: str, matches, today=None):
+    """(starting_table, played_pairs) for the season IN PROGRESS.
+
+    starting_table maps team -> (points, goals_for, goals_against); played_pairs
+    holds the (home, away) orderings already contested, so simulate_season knows
+    not to resample them. Returns empty structures when the league is between
+    seasons, which makes the caller behave exactly as it did before.
+
+    Teams are canonicalized here so the keys match the ones the simulation and
+    the market rows use -- passing raw feed spellings would silently seed zero
+    points for clubs that actually have some, which is worse than not seeding at
+    all because it looks like it worked."""
+    today = today or datetime.date.today()
+    if league in CALENDAR_YEAR_LEAGUES:
+        lo, hi = datetime.date(today.year, 1, 1), datetime.date(today.year, 12, 31)
+    else:
+        start_year = today.year if today.month >= 7 else today.year - 1
+        lo, hi = datetime.date(start_year, 7, 1), datetime.date(start_year + 1, 6, 30)
+
+    table: dict[str, list[int]] = {}
+    played: set[tuple[str, str]] = set()
+    for m in matches:
+        if m.get("league") != league or m.get("home_goals_ft") is None:
+            continue
+        try:
+            d = datetime.date.fromisoformat(str(m.get("match_date"))[:10])
+        except (ValueError, TypeError):
+            continue
+        if not (lo <= d <= hi):
+            continue
+        h = canonical_team_key(m["home_team"])
+        a = canonical_team_key(m["away_team"])
+        hg, ag = int(m["home_goals_ft"]), int(m["away_goals_ft"])
+        played.add((h, a))
+        for team, gf, ga in ((h, hg, ag), (a, ag, hg)):
+            row = table.setdefault(team, [0, 0, 0])
+            row[1] += gf
+            row[2] += ga
+            if gf > ga:
+                row[0] += 3
+            elif gf == ga:
+                row[0] += 1
+    return {t: (v[0], v[1], v[2]) for t, v in table.items()}, played
+
+
 def simulate_season(
     state: SoccerRatingState,
     teams: list[str],
@@ -249,6 +304,8 @@ def simulate_season(
     n_simulations: int = 3000,
     seed: int | None = None,
     second_tier_state: SoccerRatingState | None = None,
+    starting_table: dict[str, tuple[int, int, int]] | None = None,
+    played_pairs: set[tuple[str, str]] | None = None,
 ) -> SeasonSimResult:
     """Monte Carlo double round-robin -- every team plays every other team
     home AND away exactly once (see module docstring on why this is the
@@ -297,10 +354,25 @@ def simulate_season(
 
     sim_state = _SimState(state)
 
+    # MID-SEASON. Anything already played is a FACT, not something to resample:
+    # its pairing is dropped from the simulation and its real result is carried
+    # in via starting_table instead. Both default to empty, which reproduces the
+    # original pre-season behaviour exactly.
+    #
+    # WHY THIS IS NEEDED AT ALL, given the module docstring argues gameweek order
+    # is irrelevant: that argument holds for a season simulated from ZERO, where
+    # every fixture is still to come. It silently stops holding the moment a ball
+    # is kicked. Simulating a fresh 38-round season in August for a league that
+    # has played 20 rounds throws away the table -- a runaway leader is modelled
+    # as level with everyone. Measured 2026-08-09: Brasileirao was 20.5 of 38
+    # rounds in (54%) and the Chinese Super League 20.5 of 30 (68%), which is
+    # what surfaced this. The five original European leagues hid it because they
+    # were between seasons every time this code had been exercised.
+    played = played_pairs or set()
     pairings: dict[tuple[str, str], tuple[list[tuple[int, int]], list[float]]] = {}
     for home in teams:
         for away in teams:
-            if home == away:
+            if home == away or (home, away) in played:
                 continue
             dist = predict_match(sim_state, home, away)  # type: ignore[arg-type]
             pairings[(home, away)] = _cumulative_weights(dist.grid)
@@ -319,7 +391,12 @@ def simulate_season(
     half_size = len(teams) // 2
 
     for _ in range(n_simulations):
-        results = {t: TeamSeasonResult(team=t) for t in teams}
+        results = {}
+        for t in teams:
+            pts, gf, ga = (starting_table or {}).get(t, (0, 0, 0))
+            r = TeamSeasonResult(team=t)
+            r.points, r.goals_for, r.goals_against = pts, gf, ga
+            results[t] = r
         for (home, away), (outcomes, cum_weights) in pairings.items():
             idx = bisect.bisect_left(cum_weights, rng.random() * cum_weights[-1])
             idx = min(idx, len(outcomes) - 1)
