@@ -470,6 +470,41 @@ class Cs2Map(Base):
     winner = Column(String, nullable=True)
 
 
+class CodMatch(Base):
+    """One Call of Duty series -- parallel to Cs2Match/ValorantMatch/LolMatch,
+    sourced from breakingpoint.gg's tRPC API (see
+    scripts/build_cod_match_cache_bp.py and app/ingestion/cod_data.py).
+
+    NOT Liquipedia, deliberately. The first CoD crawler used Liquipedia and got
+    this app's IP banned site-wide, which took live CS2 fixture ingestion down
+    with it. breakingpoint.gg is also the better source on its merits: JSON
+    rather than wikitext, REAL team names rather than "tx"/"mia" shortcodes
+    (so market joins need no shortcode-resolution step at all), best_of and the
+    winner supplied directly, and a status-counts endpoint that states the
+    expected total so a truncated crawl is detectable.
+
+    There is no CodMap sibling. Kalshi's KXCODGAME lists match_winner only --
+    no per-map markets exist to price, and the model's per-map probability is
+    the same number for every map anyway (see elo_cod.SeriesDistribution.
+    prob_map_n_win_a), which is the flaw already gated in the other titles."""
+
+    __tablename__ = "cod_matches"
+    __table_args__ = (UniqueConstraint("source", "source_match_id", name="uq_cod_source_match"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String, nullable=False)  # "breakingpoint" or "live:..."
+    source_match_id = Column(String, nullable=False)
+    event_name = Column(String, nullable=True)  # nullable: live rows are seen before their event is named
+    match_date = Column(String, nullable=False)  # ISO date
+    estimated_start_time = Column(String, nullable=True)
+    team_a = Column(String, nullable=False)
+    team_b = Column(String, nullable=False)
+    best_of = Column(Integer, nullable=True)  # real value from the source; CDL is Bo5, Esports World Cup Bo7
+    maps_won_a = Column(Integer, nullable=True)
+    maps_won_b = Column(Integer, nullable=True)
+    winner = Column(String, nullable=True)  # "team_a" | "team_b" | null
+
+
 class LolMatch(Base):
     """One League of Legends esports series (Bo1/Bo3/Bo5) -- parallel to
     Cs2Match/ValorantMatch, sourced from Leaguepedia's Cargo API (see
