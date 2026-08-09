@@ -82,6 +82,55 @@ def _is_single_event(label: str, field_size: int) -> bool:
     return 2 <= field_size <= _MAX_SINGLE_EVENT_FIELD
 
 
+# Group labels this model must NOT price, matched case-insensitively as
+# substrings of the market's group_label.
+#
+# REAL BUG THIS FIXES, reported by a user 2026-08-09 who could not find any
+# information online about a "VCT Partnership 2026 EMEA: Team Falcons" pick the
+# app had recommended. They were right to be suspicious. The market is real, but
+# it is Polymarket's "VCT Partnership 2027: EMEA" -- a question about which orgs
+# RIOT WILL GRANT a franchise slot to, whose field includes FC Barcelona,
+# Joblife, Stallions, Pcific and Fokus. It is a business decision, not a
+# bracket, and no amount of match history predicts it.
+#
+# Because the row carried market_type "tournament_winner", this model priced it
+# as though the field were playing a tournament: Team Falcons came out at 0.682
+# against a market price of 0.25, a +43pp "edge" that was the single largest in
+# the block and got staked. The model was not wrong about Falcons being a strong
+# Valorant team; it was answering a different question entirely.
+#
+# The same misclassification covers several other Polymarket novelty markets --
+# player pentakills, soloqueue challenges, roster-change news, shortest-game
+# props and power-ranking publications -- roughly 350 rows across the three
+# titles, all being scored by a bracket simulator.
+#
+# EXCLUSION FAILS SAFE, which is why a substring list is acceptable here when
+# this project normally distrusts them: a false match leaves a market UNPRICED
+# and therefore unstakeable, while a false miss prices a business decision as a
+# bracket. The asymmetry runs the opposite way to team-name aliasing, where a
+# wrong match silently stakes money on the wrong entity.
+NON_COMPETITION_LABEL_MARKERS = (
+    "partnership",      # franchise/slot allocation, decided by the publisher
+    "roster change",    # transfer news
+    "will leave",       # transfer news
+    "power rankings",   # a published ranking, not a result
+    "solo q",           # soloqueue ladder, not team play
+    "soloq",
+    "shortest",         # shortest-game novelty prop
+    "to penta",         # individual player feat
+    "player to",        # individual player feat
+)
+
+
+def is_competition_outcome(group_label: str | None) -> bool:
+    """False for markets that are not a team competition result at all.
+
+    Deliberately conservative in the safe direction -- see
+    NON_COMPETITION_LABEL_MARKERS."""
+    label = (group_label or "").lower()
+    return not any(marker in label for marker in NON_COMPETITION_LABEL_MARKERS)
+
+
 def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_OF,
                              trials: int = DEFAULT_TRIALS, event_state_for=None) -> dict[int, float]:
     """Returns {market_id: model_prob} for the tournament_winner markets it can
@@ -90,8 +139,16 @@ def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_O
     whose tournament is a season-long aggregate (not a single bracket), or in a
     <2-rated-team field, are simply absent from the result."""
     by_tournament: dict[str, list] = defaultdict(list)
+    skipped_labels: set[str] = set()
     for m in markets:
-        by_tournament[m.group_label or ""].append(m)
+        label = m.group_label or ""
+        if not is_competition_outcome(label):
+            skipped_labels.add(label)
+            continue  # not a bracket -- see NON_COMPETITION_LABEL_MARKERS
+        by_tournament[label].append(m)
+    if skipped_labels:
+        log.info("esports futures: not pricing %d non-competition group(s): %s",
+                 len(skipped_labels), ", ".join(sorted(skipped_labels)[:6]))
 
     def win_prob_fn(a: str, b: str) -> float | None:
         dist = elo_service.get_series_distribution(a, b, best_of)

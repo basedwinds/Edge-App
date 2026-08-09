@@ -32,7 +32,7 @@ from app.db.models import Cs2Match, Market, MarketSnapshot
 from app.ingestion import market_catalog_cs2
 from app.ingestion.market_matcher_cs2 import team_names_match
 from app.models.baseline import elo_service_cs2
-from app.models.esports_tournament_pricing import price_tournament_winners
+from app.models.esports_tournament_pricing import is_competition_outcome, price_tournament_winners
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import futures_group_decided, CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
@@ -79,6 +79,14 @@ GAME_MARKET_TYPES = {"map_winner", "series_winner", "series_handicap", "series_t
 NO_BASELINE_REASON = (
     "No baseline yet -- this market's model is still being built and validated against this app's "
     "own historical data, not shipped as a guessed number."
+)
+
+NON_COMPETITION_REASON = (
+    "Not priced: this is not a team-competition result. Polymarket lists it under the same "
+    "market type as a tournament winner, but the question is a franchise/partnership slot, a "
+    "roster or transfer announcement, an individual player feat, a soloqueue ladder or a "
+    "novelty stat -- none of which a match-history model can speak to. Left unpriced on "
+    "purpose rather than scored by a bracket simulator that would answer a different question."
 )
 
 COLD_START_CAVEAT = (
@@ -233,7 +241,14 @@ def list_cs2_futures(session: Session = Depends(get_session)):
                 line_move_pp=None,
                 group_settled=_settled,
                 group_winner=_winner_by_group.get(m.group_label or "") if _settled else None,
-                model_note=TOURNAMENT_SIM_NOTE if model_prob is not None else None,
+                model_note=(
+                    TOURNAMENT_SIM_NOTE if model_prob is not None
+                    # Explain the blank rather than leaving it mysterious: a user
+                    # who sees an empty model column has no way to tell "not
+                    # modelled yet" from "deliberately out of scope".
+                    else NON_COMPETITION_REASON if not is_competition_outcome(m.group_label)
+                    else None
+                ),
             )
         )
     out.sort(key=lambda m: (m.group_label or "", -(m.model_prob or 0), m.team or ""))
@@ -432,7 +447,11 @@ def list_cs2_markets(session: Session = Depends(get_session)):
         snap = snapshots_by_market.get(m.id)
         implied = _implied_prob(snap)
         model_prob = _game_model_prob(m, match) if m.market_type in GAME_MARKET_TYPES else None
-        no_baseline_reason = None if model_prob is not None else NO_BASELINE_REASON
+        no_baseline_reason = (
+            None if model_prob is not None
+            else NON_COMPETITION_REASON if not is_competition_outcome(getattr(m, 'group_label', None))
+            else NO_BASELINE_REASON
+        )
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "cs2", m.market_type)
