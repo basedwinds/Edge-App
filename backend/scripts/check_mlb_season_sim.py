@@ -63,10 +63,29 @@ not broken and is not fabricating structure; it does NOT say there is an edge
 in the 726 markets. That still needs a backtest against real Kalshi/Polymarket
 futures prices, which is a different and harder test.
 
-NOT SCORED: pennant and World Series. The schedule cache holds regular-season
-games only, so postseason truth is not derivable from it. Those two are the
-higher-value legs of the board and remain unvalidated -- closing that needs a
-postseason results source.
+ALL FOUR LEGS NOW SCORE (postseason cache added 2026-08-09):
+
+    PRESEASON   pennant       Brier 0.0605 vs 0.0622   LogL 0.2367 vs 0.2449
+                World Series  Brier 0.0315 vs 0.0322   LogL 0.1433 vs 0.1461
+    MIDSEASON   pennant       Brier 0.0537 vs 0.0622   LogL 0.1869 vs 0.2449
+                World Series  Brier 0.0293 vs 0.0322   LogL 0.1136 vs 0.1461
+
+READ THE MARGINS, NOT JUST THE VERDICT. Division and playoff are beaten
+decisively (division Brier 0.0841 vs 0.1600 at midseason -- nearly half). But
+PRESEASON pennant beats the prior by 0.0017 Brier and World Series by 0.0007.
+That is a real but very thin edge over "every team equally likely".
+
+This is not a defect, it is the shape of the question. A 12-team bracket of
+best-of-5s and best-of-7s is mostly variance, so even a good regular-season
+model can barely separate championship probabilities before a season starts.
+The margin roughly doubles by midseason, which is what should happen.
+
+THE PRACTICAL CONSEQUENCE: the sim's skill is concentrated in the legs that
+resolve on 162 games (division, playoff berth) and nearly absent in the legs
+that resolve on a short bracket (pennant, World Series). Those deep legs are
+also where the longest prices live. Treat a large model-vs-market disagreement
+on a World Series leg with far more suspicion than the same disagreement on a
+division leg -- the model has demonstrably less to say there.
 
 EXCLUSIONS, both deliberate: 2020 (900 games, the COVID-shortened season, too
 different in shape to score against a 162-game prior) and 2016 at the
@@ -92,6 +111,7 @@ from app.models import season_sim_mlb  # noqa: E402
 TEAM_DIVISION = {t: d for d, members in DIVISIONS.items() for t in members}
 
 CACHE = Path(__file__).resolve().parents[2] / "data" / "mlb_schedule_cache.json"
+POST_CACHE = Path(__file__).resolve().parents[2] / "data" / "mlb_postseason_cache.json"
 
 N_TRIALS = 2000
 MIDSEASON_GAMES = 81  # half a 162-game schedule, per team
@@ -118,6 +138,31 @@ def load_seasons() -> dict[int, list[dict]]:
         by_season[int(g["season"])].append(g)
     for season in by_season:
         by_season[season].sort(key=lambda g: (g.get("gameday") or "", g.get("id") or ""))
+    return dict(by_season)
+
+
+def load_postseason() -> dict[int, dict[str, dict[str, int]]]:
+    """{season: {team: {"pennant": 0/1, "championship": 0/1}}}, from real
+    postseason games. Empty when the cache is absent -- those two legs are then
+    simply not scored, rather than being guessed."""
+    if not POST_CACHE.exists():
+        return {}
+    rows = json.loads(POST_CACHE.read_text(encoding="utf-8"))
+    by_season: dict[int, dict[str, dict[str, int]]] = collections.defaultdict(dict)
+    per_series: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
+    for r in rows:
+        # Series winner = whoever won the most games of that series type in
+        # that league-half. Derived from real per-game winners rather than a
+        # champions table, so it cannot drift out of step with the schedule.
+        key = (r["season"], r["game_type"], tuple(sorted((r["home_team"], r["away_team"]))))
+        per_series[key][r["winner"]] += 1
+    for (season, gtype, _pair), wins in per_series.items():
+        champ = wins.most_common(1)[0][0]
+        entry = by_season[season].setdefault(champ, {"pennant": 0, "championship": 0})
+        if gtype == "L":
+            entry["pennant"] = 1
+        elif gtype == "W":
+            entry["championship"] = 1
     return dict(by_season)
 
 
@@ -234,6 +279,7 @@ def score(cutoff_name: str, seasons: dict[int, list[dict]], midseason: bool) -> 
 
         sim = season_sim_mlb.run_simulation(ratings, sim_input, n_trials=N_TRIALS, seed=season)
         truth = actual_outcomes(games)
+        post = POSTSEASON.get(season, {})
         seasons_used.append(season)
 
         for team, real in truth.items():
@@ -242,6 +288,10 @@ def score(cutoff_name: str, seasons: dict[int, list[dict]], midseason: bool) -> 
                 continue
             rows.append(("division_pct", probs.get("division_pct", 0.0), real["division"]))
             rows.append(("playoff_pct", probs.get("playoff_pct", 0.0), real["playoff"]))
+            if post:
+                pt = post.get(team, {"pennant": 0, "championship": 0})
+                rows.append(("pennant_pct", probs.get("pennant_pct", 0.0), pt["pennant"]))
+                rows.append(("championship_pct", probs.get("championship_pct", 0.0), pt["championship"]))
 
     if not rows:
         print(f"{cutoff_name}: no scorable seasons")
@@ -263,7 +313,13 @@ def score(cutoff_name: str, seasons: dict[int, list[dict]], midseason: bool) -> 
         print(f"{label:18s}{len(sub):5d}{sb:11.4f}{ub:12.4f}{sl:10.4f}{ul:11.4f}{verdict:>12s}")
 
 
+POSTSEASON: dict[int, dict[str, dict[str, int]]] = {}
+
+
 def main() -> None:
+    global POSTSEASON
+    POSTSEASON = load_postseason()
+    print(f'postseason truth loaded for {len(POSTSEASON)} seasons')
     if not CACHE.exists():
         print(f"no schedule cache at {CACHE}")
         return
