@@ -561,19 +561,38 @@ def update_settings(body: SettingsIn, session: Session = Depends(get_session)):
     return _read_all(session)
 
 
-_ALL_ALLOCATION_KEYS = [
-    (NFL_ALLOCATION_PCT_KEY, DEFAULT_NFL_ALLOCATION_PCT),
-    (NBA_ALLOCATION_PCT_KEY, DEFAULT_NBA_ALLOCATION_PCT),
-    (WNBA_ALLOCATION_PCT_KEY, DEFAULT_WNBA_ALLOCATION_PCT),
-    (CFB_ALLOCATION_PCT_KEY, DEFAULT_CFB_ALLOCATION_PCT),
-    (MLB_ALLOCATION_PCT_KEY, DEFAULT_MLB_ALLOCATION_PCT),
-    (MMA_ALLOCATION_PCT_KEY, DEFAULT_MMA_ALLOCATION_PCT),
-    (TENNIS_ALLOCATION_PCT_KEY, DEFAULT_TENNIS_ALLOCATION_PCT),
-    (SOCCER_ALLOCATION_PCT_KEY, DEFAULT_SOCCER_ALLOCATION_PCT),
-    (VALORANT_ALLOCATION_PCT_KEY, DEFAULT_VALORANT_ALLOCATION_PCT),
-    (CS2_ALLOCATION_PCT_KEY, DEFAULT_CS2_ALLOCATION_PCT),
-    (LOL_ALLOCATION_PCT_KEY, DEFAULT_LOL_ALLOCATION_PCT),
-]
+# Built by INTROSPECTION, not by hand. Every "<sport>_allocation_pct" setting
+# defined in this module is picked up automatically, paired with its
+# DEFAULT_<SPORT>_ALLOCATION_PCT.
+#
+# REAL BUG THIS FIXES (2026-08-09). The list was maintained manually and
+# racing_allocation_pct was never added to it, so the over-allocation guard
+# summed 0.700 while the true total across all sports was 0.740 -- it was
+# scaling against a number 4 points short of reality.
+#
+# Harmless the day it was found (both figures sit under 100%, so the scale was
+# 1.0 either way) and precisely the kind of latent gap that only bites later:
+# the guard exists for the case where allocations grow past the bankroll, which
+# is exactly when a missing sport would let real exposure exceed 100% while the
+# guard reported it as safe. Adding a sport is also the moment nobody remembers
+# to update a hand-maintained list.
+#
+# Same drift this app has now hit four times in one day -- rated leagues absent
+# from the ingester's series map, a futures nav gated on a stale fact, three
+# routers each re-deriving their own skip reasons, and this. Deriving the list
+# is the version that cannot drift again.
+def _discover_allocation_keys() -> list[tuple[str, float]]:
+    out: list[tuple[str, float]] = []
+    for name, key in list(globals().items()):
+        if not name.endswith("ALLOCATION_PCT_KEY") or not isinstance(key, str):
+            continue
+        default = globals().get("DEFAULT_" + name[: -len("_KEY")])
+        if isinstance(default, (int, float)):
+            out.append((key, float(default)))
+    return sorted(out)
+
+
+_ALL_ALLOCATION_KEYS = _discover_allocation_keys()
 
 
 def _scale_for_total(total_allocation_pct: float) -> float:
