@@ -400,7 +400,10 @@ def list_racing_markets(session: Session = Depends(get_session)):
     # Racing is now STAKED (paper) like every other sport -- size each edged
     # market off the racing pool via the shared staking layer. model_validated
     # is still False, so this is a paper stake for CLV, same as everything here.
-    pool = get_racing_pool_dollars(session)
+    # Split pool, same as every other sport. Season titles are futures
+    # positions and must not draw from the per-race pool -- they were, which is
+    # also why racing's portfolio ceiling came out 1.28x everyone else's.
+    weekly_pool, futures_pool = get_racing_pool_dollars(session)
     unit_dollars = get_unit_dollars(session)
     fractional_kelly, max_stake_fraction, min_edge_to_bet = get_staking_params(session)
     staking_mode, flat_marginal, flat_full = get_flat_params(session)
@@ -437,7 +440,13 @@ def list_racing_markets(session: Session = Depends(get_session)):
             # would have booked silently the first time one did.
             _is_champ = row.market_type in CHAMPIONSHIP_MARKET_TYPES
             stake = size_stake_dollars(
-                staking_mode, kelly, pool, row.model_prob, row.implied_prob,
+                # Each side now draws from its OWN pool. Previously both took
+                # the single undivided allocation, which is what gave racing a
+                # portfolio ceiling 1.28x every other sport's -- the whole
+                # allocation counted as "weekly" because nothing was set aside
+                # for futures.
+                staking_mode, kelly, futures_pool if _is_champ else weekly_pool,
+                row.model_prob, row.implied_prob,
                 unit_dollars, flat_marginal, flat_full,
                 unit_scale=FUTURES_UNIT_SCALE if _is_champ else 1.0,
                 min_market_price=FUTURES_MIN_MARKET_PRICE if _is_champ else 0.0,

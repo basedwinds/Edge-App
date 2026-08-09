@@ -57,6 +57,23 @@ DEFAULT_CFB_FUTURES_SUBPOOL_PCT = 0.15
 # Racing (F1/NASCAR/IndyCar share one pool). Small + no futures split -- it's
 # now staked (paper) like the others, but its models are unbacktested so it
 # defaults lighter. 2026-07-24.
+# Racing DOES have real futures -- KXF1 (drivers' champion) and
+# KXF1CONSTRUCTORS, priced by season_championship and already sized with
+# FUTURES_UNIT_SCALE in racing_markets. It simply never had a sub-pool, so all
+# of them drew from the same undivided allocation.
+#
+# THE SIDE EFFECT THAT EXPOSED IT (user-reported 2026-08-09): the frontend's
+# portfolio ceiling is 60% of a sport's WEEKLY pool. With no futures split,
+# racing's whole allocation counted as weekly, so its per-bet ceiling came out
+# at $72 against $56 for every other sport -- 1.28x, purely as an artefact of a
+# missing split. Racing's models are among the LEAST validated in the app
+# (top_n is gated off staking entirely), so it had quietly acquired the highest
+# ceiling of any sport.
+#
+# 0.22 matches what the other multi-market sports carry, rather than inventing
+# a racing-specific number.
+RACING_FUTURES_SUBPOOL_PCT_KEY = "racing_futures_subpool_pct"
+DEFAULT_RACING_FUTURES_SUBPOOL_PCT = 0.22
 RACING_ALLOCATION_PCT_KEY = "racing_allocation_pct"
 DEFAULT_RACING_ALLOCATION_PCT = 0.06
 WNBA_FUTURES_SUBPOOL_PCT_KEY = "wnba_futures_subpool_pct"
@@ -249,7 +266,12 @@ class SettingsOut(BaseModel):
     lol_pool_dollars: float
     lol_futures_pool_dollars: float
     lol_weekly_pool_dollars: float
-    racing_weekly_pool_dollars: float  # f1/nascar/irl share one pool (no futures sub-pool)
+    # f1/nascar/irl share one allocation, now split weekly/futures like every
+    # other sport. racing_pool_dollars was MISSING entirely, so racing was
+    # invisible to anything reading per-sport pool totals.
+    racing_pool_dollars: float
+    racing_weekly_pool_dollars: float
+    racing_futures_pool_dollars: float
     # Sum of every sport's allocation pct. >1.0 means the per-sport pools
     # over-commit the bankroll (if every sport maxed its bets at once you'd
     # stake more than 100%). Surfaced so the over-allocation is visible; the
@@ -367,6 +389,7 @@ def _build_settings_out(
     max_stake_fraction: float,
     min_edge_to_bet: float,
     racing_weekly_pool_dollars: float,  # precomputed by the caller (needs the session)
+    racing_futures_pool_dollars: float,
     *,
     # KEYWORD-ONLY on purpose. The rest of this signature is positional across
     # 28 params and has already been mis-shifted once (see _read_all's note), so
@@ -478,7 +501,9 @@ def _build_settings_out(
         lol_pool_dollars=lol_pool_dollars,
         lol_futures_pool_dollars=lol_futures_pool_dollars,
         lol_weekly_pool_dollars=lol_weekly_pool_dollars,
+        racing_pool_dollars=racing_weekly_pool_dollars + racing_futures_pool_dollars,
         racing_weekly_pool_dollars=racing_weekly_pool_dollars,
+        racing_futures_pool_dollars=racing_futures_pool_dollars,
         total_allocation_pct=round(total_allocation_pct, 4),
     )
 
@@ -520,7 +545,7 @@ def _read_all(session: Session) -> SettingsOut:
         _get_float(session, FRACTIONAL_KELLY_KEY, FRACTIONAL_KELLY),
         _get_float(session, MAX_STAKE_FRACTION_KEY, MAX_STAKE_FRACTION),
         _get_float(session, MIN_EDGE_TO_BET_KEY, MIN_EDGE_TO_BET),
-        get_racing_pool_dollars(session),
+        *get_racing_pool_dollars(session),
         total_allocation_pct=_allocation_total(session),
     )
 
@@ -702,13 +727,24 @@ def get_cfb_pool_dollars(session: Session) -> tuple[float, float]:
     return pool * (1.0 - sub), pool * sub
 
 
-def get_racing_pool_dollars(session: Session) -> float:
-    """Single per-race pool for F1/NASCAR/IndyCar (no futures split -- racing
-    futures aren't modeled). Racing is now staked (paper) like every other
-    sport rather than tracking-only."""
+def get_racing_pool_dollars(session: Session) -> tuple[float, float]:
+    """(weekly, futures) for F1/NASCAR/IndyCar together.
+
+    NOW SPLIT like every other sport. The old docstring said "racing futures
+    aren't modeled" -- that stopped being true when the season-championship
+    model shipped: racing_markets.CHAMPIONSHIP_MARKET_TYPES prices drivers' and
+    constructors' titles and already sizes them with FUTURES_UNIT_SCALE. They
+    were simply drawing from an undivided pool.
+
+    Returning a TUPLE, matching every sibling getter, so racing stops being the
+    one sport that needs special-casing at the call site."""
     bankroll = _get_float(session, BANKROLL_KEY, DEFAULT_BANKROLL)
     racing_allocation_pct = _get_float(session, RACING_ALLOCATION_PCT_KEY, DEFAULT_RACING_ALLOCATION_PCT)
-    return bankroll * racing_allocation_pct * _allocation_scale(session)
+    racing_futures_subpool_pct = _get_float(session, RACING_FUTURES_SUBPOOL_PCT_KEY,
+                                            DEFAULT_RACING_FUTURES_SUBPOOL_PCT)
+    racing_pool = bankroll * racing_allocation_pct * _allocation_scale(session)
+    return (racing_pool * (1.0 - racing_futures_subpool_pct),
+            racing_pool * racing_futures_subpool_pct)
 
 
 def get_mlb_pool_dollars(session: Session) -> tuple[float, float]:
