@@ -344,13 +344,24 @@ def _build_settings_out(
     max_stake_fraction: float,
     min_edge_to_bet: float,
     racing_weekly_pool_dollars: float,  # precomputed by the caller (needs the session)
+    *,
+    # KEYWORD-ONLY on purpose. The rest of this signature is positional across
+    # 28 params and has already been mis-shifted once (see _read_all's note), so
+    # anything added here is added in the one form that cannot shift the others.
+    #
+    # Passed in rather than summed locally because the caller has the session and
+    # can use _allocation_total(), the SAME derived list the staking guard uses.
+    # Summing it here by hand is what went wrong: the local sum listed ten sports
+    # and silently omitted cfb (6%) and racing (4%).
+    total_allocation_pct: float,
 ) -> SettingsOut:
     unit_dollars = bankroll_dollars / bankroll_units if bankroll_units > 0 else 0.0
-    _bs_scale = _scale_for_total(
-        nfl_allocation_pct + nba_allocation_pct + wnba_allocation_pct + mlb_allocation_pct
-        + mma_allocation_pct + tennis_allocation_pct + soccer_allocation_pct
-        + valorant_allocation_pct + cs2_allocation_pct + lol_allocation_pct
-    )
+    # Same total -> same scale the staking path applies. Previously this was a
+    # second, shorter hand-sum, so /settings could show pools scaled by 1.0 while
+    # staking scaled them by 1/1.08. Both read 1.0 while the true total sat under
+    # 100%, which is why it was invisible: the divergence only appears once
+    # allocations are raised past the bankroll -- precisely when it matters.
+    _bs_scale = _scale_for_total(total_allocation_pct)
     nfl_pool_dollars = bankroll_dollars * nfl_allocation_pct * _bs_scale
     futures_pool_dollars = nfl_pool_dollars * futures_subpool_pct
     weekly_pool_dollars = nfl_pool_dollars * (1.0 - futures_subpool_pct)
@@ -445,12 +456,7 @@ def _build_settings_out(
         lol_futures_pool_dollars=lol_futures_pool_dollars,
         lol_weekly_pool_dollars=lol_weekly_pool_dollars,
         racing_weekly_pool_dollars=racing_weekly_pool_dollars,
-        total_allocation_pct=round(
-            nfl_allocation_pct + nba_allocation_pct + wnba_allocation_pct + mlb_allocation_pct
-            + mma_allocation_pct + tennis_allocation_pct + soccer_allocation_pct
-            + valorant_allocation_pct + cs2_allocation_pct + lol_allocation_pct,
-            4,
-        ),
+        total_allocation_pct=round(total_allocation_pct, 4),
     )
 
 
@@ -492,6 +498,7 @@ def _read_all(session: Session) -> SettingsOut:
         _get_float(session, MAX_STAKE_FRACTION_KEY, MAX_STAKE_FRACTION),
         _get_float(session, MIN_EDGE_TO_BET_KEY, MIN_EDGE_TO_BET),
         get_racing_pool_dollars(session),
+        total_allocation_pct=_allocation_total(session),
     )
 
 
@@ -608,9 +615,22 @@ def _scale_for_total(total_allocation_pct: float) -> float:
     return min(1.0, 1.0 / total_allocation_pct) if total_allocation_pct > 0 else 1.0
 
 
+def _allocation_total(session: Session) -> float:
+    """The one number for "how much of the bankroll is allocated", summed over
+    the DERIVED key list so a newly added sport counts automatically.
+
+    Both the guard and the /settings display read this. They used to compute it
+    separately, and the display's copy was a hand-written ten-sport sum that
+    omitted cfb and racing -- so Settings reported 64% while the guard saw the
+    true 74%. Ten points of phantom headroom is not a rounding difference: a
+    user topping up to what looks like 100% would actually cross it and trip the
+    proportional scale-down, shrinking every sport's pool with no visible
+    cause."""
+    return sum(_get_float(session, key, default) for key, default in _ALL_ALLOCATION_KEYS)
+
+
 def _allocation_scale(session: Session) -> float:
-    total = sum(_get_float(session, key, default) for key, default in _ALL_ALLOCATION_KEYS)
-    return _scale_for_total(total)
+    return _scale_for_total(_allocation_total(session))
 
 
 def get_bankroll(session: Session) -> float:
