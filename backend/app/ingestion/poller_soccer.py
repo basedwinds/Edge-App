@@ -92,8 +92,20 @@ def refresh_soccer_results():
             # today for a match a week out would otherwise look "already
             # played" and be re-fetched pointlessly every cycle.
             match_date = _real_match_date(match)
-            if match_date is None or match_date > today:
+            if match_date is None or match_date > today + datetime.timedelta(days=1):
                 continue  # real match hasn't happened yet, nothing to backfill
+            # TOMORROW is included deliberately, and this is not just slack.
+            # The gate decides using the STORED start, which is the very thing
+            # that may be wrong -- so a match stored a few hours late crosses
+            # midnight UTC, reads as "tomorrow", and is skipped by the only
+            # code that would have corrected it. Measured 2026-08-09:
+            # Bragantino vs Corinthians kicked off 21:30Z but was stored
+            # 00:30Z the next day, so it stayed uncorrected and recommendable
+            # all evening while Bahia and Palmeiras -- same error, same
+            # league, just not over the midnight boundary -- were fixed.
+            # Widening by a day costs nothing: the ESPN window below already
+            # runs to today + 1, and a not-yet-played match simply finds no
+            # result to backfill.
             by_league_ids.setdefault(match.league, []).append(match.id)
     finally:
         read_session.close()
@@ -263,6 +275,15 @@ def refresh_soccer_results():
                 match = session.get(SoccerMatch, match_id)
                 if match is None:
                     continue
+                # Re-check against the row as it is NOW. The decision above was
+                # made from a snapshot taken before the ESPN fetch, and the
+                # market poller can write in that gap -- so without this, a row
+                # already carrying the right time gets "corrected" to the value
+                # it already has and logs a warning about it every cycle,
+                # burying the real ones.
+                if not _differs_materially(match.estimated_start_time, kick):
+                    match.start_time_source = market_catalog_soccer.ESPN_START_SOURCE
+                    continue
                 log.warning(
                     "soccer kickoff corrected from ESPN: match %d %s vs %s -- platform said %s, "
                     "ESPN says %s. A start time later than reality is what lets a LIVE match be "
@@ -271,6 +292,10 @@ def refresh_soccer_results():
                     match.estimated_start_time, kick,
                 )
                 match.estimated_start_time = kick
+                # Tag the provenance, or the next market poll simply writes the
+                # platform's time straight back over this and the correction
+                # never survives a cycle -- which is exactly what was happening.
+                match.start_time_source = market_catalog_soccer.ESPN_START_SOURCE
                 corrected += 1
             if corrected:
                 log.info("soccer: %d kickoff time(s) corrected from ESPN", corrected)

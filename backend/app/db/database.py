@@ -34,7 +34,7 @@ Base = declarative_base()
 
 
 _MISSING_COLUMNS_BY_TABLE = {
-    "soccer_matches": [("first_scorer", "VARCHAR")],
+    "soccer_matches": [("first_scorer", "VARCHAR"), ("start_time_source", "VARCHAR")],
     "nfl_games": [
         ("location", "VARCHAR"), ("stadium", "VARCHAR"), ("surface", "VARCHAR"),
         ("away_score_1h", "INTEGER"), ("home_score_1h", "INTEGER"),

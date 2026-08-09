@@ -147,11 +147,37 @@ def find_or_create_upcoming_match(
     return match
 
 
+ESPN_START_SOURCE = "espn"
+
+
 def update_match_estimated_start_time(match: SoccerMatch | None, estimated_start_time: str | None) -> None:
-    """Same "genuine estimate, always overwrite while upcoming" reasoning as
-    TennisMatch/MmaFight's own estimated_start_time handling."""
-    if match is not None and match.result_ft is None and estimated_start_time:
-        match.estimated_start_time = estimated_start_time
+    """Keep estimated_start_time fresh from the platform while a match is
+    upcoming -- but NEVER over an ESPN kickoff.
+
+    THE BUG THIS CLOSES, user-reported 2026-08-09: two Brasileirao matches were
+    recommended as 6pm fixtures while they were ~55 minutes into play. Every
+    BRA1 match that day was stored +3h late, except the one whose time had come
+    from ESPN:
+
+        Vasco da Gama at Bahia      ESPN 19:00Z (live, 54')   stored 22:00:00Z
+        Internacional at Palmeiras  ESPN 19:00Z (live, 57')   stored 22:00:00Z
+        Mirassol at Cruzeiro        ESPN 14:00Z               stored 14:00Z
+
+    poller_soccer ALREADY corrects kickoffs from ESPN, and it was working. This
+    function then overwrote the correction with the platform's value on the very
+    next poll, unconditionally -- so the fix could never survive a cycle. Two
+    writers racing for one field, which is exactly the note on TennisMatch's own
+    start_time_source ("Both writers running poll is what made matches
+    flicker"); soccer had the same race and no guard.
+
+    A platform's occurrence_datetime is an estimate it never revises. ESPN's is
+    an observation. So ESPN wins, and this defers rather than fighting it."""
+    if match is None or match.result_ft is not None or not estimated_start_time:
+        return
+    if match.start_time_source == ESPN_START_SOURCE:
+        return
+    match.estimated_start_time = estimated_start_time
+    match.start_time_source = "platform"
 
 
 def _upsert_snapshot(session: Session, market: Market, last_price: float | None, volume: float | None,

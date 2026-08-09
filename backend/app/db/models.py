@@ -356,6 +356,11 @@ class SoccerMatch(Base):
     # being guessed. Populated from ESPN scoring plays; a final score alone
     # cannot answer this, which is why 2 ftts bets sat permanently unsettled.
     first_scorer = Column(String, nullable=True)
+    # Which writer set estimated_start_time. Mirrors TennisMatch's column of
+    # the same name and exists for the same reason: two writers race for this
+    # field and the platform's is the untrustworthy one. See
+    # market_catalog_soccer.update_match_estimated_start_time.
+    start_time_source = Column(String, nullable=True)
     result_ft = Column(String, nullable=True)  # "H" | "D" | "A" -- null until played
     # Real historical closing odds (decimal), football-data.co.uk only --
     # used for the go/no-go backtest gate; null rows (MLS, or any not-yet-
