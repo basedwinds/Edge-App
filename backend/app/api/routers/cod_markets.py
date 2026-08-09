@@ -74,6 +74,9 @@ NO_BASELINE_REASON = (
 UNBOUND_REASON = (
     "Not priced: this market is not yet bound to a known fixture."
 )
+NO_LINE_REASON = (
+    "Not priced: this total-maps market carries no line."
+)
 
 
 class CodMarketOut(BaseModel):
@@ -87,6 +90,8 @@ class CodMarketOut(BaseModel):
     market_type: str
     source: str
     team: str | None
+    side: str | None
+    line: float | None
     match_label: str | None
     cod_match_id: int | None
     event_name: str | None
@@ -187,6 +192,14 @@ def list_cod_markets(session: Session = Depends(get_session)):
                 match.team_a, match.team_b, match.best_of or 5, match.match_date)
             if dist is None:
                 reason = NO_BASELINE_REASON
+            elif m.market_type == "series_total":
+                # Stored on the OVER side only; the under is its complement.
+                # Priced off the SAME series distribution as the winner market,
+                # so the two can never disagree with each other.
+                if m.line is None:
+                    reason = NO_LINE_REASON
+                else:
+                    model_prob = dist.prob_total_maps_over(m.line)
             else:
                 p_a = dist.prob_series_win_a()
                 # `team` is whichever side this YES market pays on.
@@ -205,6 +218,7 @@ def list_cod_markets(session: Session = Depends(get_session)):
 
         out.append(CodMarketOut(
             id=m.id, market_type=m.market_type, source=m.source, team=m.team,
+            side=m.side, line=m.line,
             match_label=f"{match.team_a} vs {match.team_b}" if match else None,
             cod_match_id=m.cod_match_id,
             event_name=match.event_name if match else None,
