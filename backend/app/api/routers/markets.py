@@ -1340,11 +1340,33 @@ def _edge_sentence(model_prob: float | None, market_prob: float | None) -> str:
     varied across a few equivalent phrasings (seeded on the two probs so it's
     stable per market) so every bet in the app doesn't close on the exact
     same sentence."""
-    if model_prob is None or market_prob is None:
+    # WHICH SIDE IS MISSING MATTERS, and this used to get it wrong. All three
+    # phrasings below blamed the MARKET, but the branch fires when EITHER side is
+    # None -- so a row with a real, live market price and no model price told the
+    # user "no market price has landed for this one yet", which is simply false
+    # and reads as a data outage.
+    #
+    # Reported by a user looking at Valorant futures that plainly had prices on
+    # screen. Those rows are the ones this app deliberately refuses to model
+    # (partnership slots, season-long aggregates, unrated teams), so the honest
+    # sentence is that the MODEL has nothing to say, not that the market is
+    # silent.
+    if model_prob is None and market_prob is None:
+        return _seeded_choice(model_prob, [
+            "Neither side has a number here yet -- no market price, and nothing from the model.",
+            "Nothing to compare: this one has no market price and no model estimate.",
+        ])
+    if model_prob is None:
+        return _seeded_choice(market_prob, [
+            "The market has priced this, but the model hasn't -- so there's no gap to read.",
+            "No model estimate for this one, so there's nothing to set against the market price.",
+            "This app doesn't model this particular bet, so the market price stands on its own.",
+        ])
+    if market_prob is None:
         return _seeded_choice(model_prob, [
             "There's no market price to compare the model against here yet.",
             "No market price has landed for this one yet, so there's no gap to read.",
-            "Nothing to compare against yet -- the market hasn't priced this specific bet.",
+            "The model has a number, but the market hasn't priced this specific bet.",
         ])
     seed = f"{model_prob:.4f}|{market_prob:.4f}"
     m, mk = model_prob * 100, market_prob * 100
