@@ -112,9 +112,22 @@ function navItems(sport: string) {
         { to: `/racing/${sport}`, label: "Markets", icon: Flag, end: true },
         // Season Drivers'/Constructors' Champion futures live on their own page
         // (like every other sport's Futures), separate from the per-race markets.
-        // Only F1 has priced champion futures; NASCAR's title is a playoff format
-        // (untraded on both books), so its Futures page shows nothing yet.
-        ...(sport === "f1" ? [{ to: `/racing/${sport}/futures`, label: "Futures", icon: Trophy, end: false }] : []),
+        //
+        // SHOWN FOR ALL THREE SERIES since 2026-08-09. This was F1-only, on the
+        // reasoning that "NASCAR's title is a playoff format (untraded on both
+        // books), so its Futures page shows nothing yet". That was true when it
+        // was written and has since stopped being true twice over: NASCAR's
+        // title got a real model (racing_playoff_sim, added 2026-08-06, exactly
+        // because the points sim was the wrong shape for a knockout), and both
+        // series have live inventory. Measured on the running backend
+        // 2026-08-09: IndyCar 50 drivers_champion rows priced of 50, NASCAR 35
+        // of 36, F1 41 of 44 plus 21 of 22 constructors.
+        //
+        // The rows were being ingested, priced and served the whole time -- only
+        // this nav link was missing, so the one thing a user could not do was
+        // find them. A gate written against a temporary fact needs re-checking
+        // when the fact changes; the page itself already handles an empty state.
+        { to: `/racing/${sport}/futures`, label: "Futures", icon: Trophy, end: false },
         { to: `/racing/${sport}/placed`, label: "Placed Bets", icon: ClipboardList, end: false },
         { to: `/racing/${sport}/calibration`, label: "Calibration", icon: Gauge, end: false },
       ],
