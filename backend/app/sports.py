@@ -68,7 +68,10 @@ SPORTS: tuple[Sport, ...] = (
     Sport("valorant", "Valorant", "/valorant/markets", "valorant_match_id", True, entity_model="ValorantMatch"),
     Sport("cs2", "CS2", "/cs2/markets", "cs2_match_id", True, entity_model="Cs2Match"),
     Sport("lol", "LoL", "/lol/markets", "lol_match_id", True, entity_model="LolMatch"),
-    Sport("cod", "Call of Duty", "/cod/markets", "cod_match_id", True, entity_model="CodMatch"),
+    # has_futures_endpoint FALSE: neither platform lists CoD futures, and no
+    # /cod/futures route exists. Declaring True made the bankroll audit query a
+    # 404 -- caught the same day, by the audit itself.
+    Sport("cod", "Call of Duty", "/cod/markets", "cod_match_id", False, entity_model="CodMatch"),
     # Racing is one markets endpoint covering f1/irl/nascar, and its rows link by
     # race_event_id through racing_markets' own builder rather than the shared
     # game-id path -- hence no game_id_column here.

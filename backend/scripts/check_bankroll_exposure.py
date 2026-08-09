@@ -66,23 +66,26 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app import sports as app_sports  # noqa: E402
+
 BASE = "http://127.0.0.1:8756"
 
-# (sport, game route, futures route). Racing has no futures route.
-SPORTS = [
-    ("nfl", "/markets", "/markets/futures"),
-    ("nba", "/nba/markets", "/nba/futures"),
-    ("wnba", "/wnba/markets", "/wnba/futures"),
-    ("cfb", "/cfb/markets", "/cfb/futures"),
-    ("mlb", "/mlb/markets", "/mlb/futures"),
-    ("mma", "/mma/markets", "/mma/futures"),
-    ("tennis", "/tennis/markets", "/tennis/futures"),
-    ("soccer", "/soccer/markets", "/soccer/futures"),
-    ("valorant", "/valorant/markets", "/valorant/futures"),
-    ("cs2", "/cs2/markets", "/cs2/futures"),
-    ("lol", "/lol/markets", "/lol/futures"),
-    ("racing", "/racing/markets", None),
-]
+# DERIVED from app.sports, not hand-listed. The hand-written version here was
+# missing Call of Duty within hours of that sport shipping -- the same silent
+# omission this audit exists to catch elsewhere, in the audit itself. A sport
+# absent from this list simply reports no exposure, which is the dangerous
+# direction: it UNDERSTATES how oversubscribed the book is.
+def _sport_routes() -> list[tuple[str, str, str | None]]:
+    out = []
+    for sport in app_sports.SPORTS:
+        futures = f"/{sport.key}/futures" if sport.has_futures_endpoint else None
+        if sport.key == "nfl":
+            futures = "/markets/futures"  # NFL is served by the root router
+        out.append((sport.key, sport.markets_path, futures))
+    return out
+
+
+SPORTS = _sport_routes()
 
 # Generous: these routes are slow on a cold cache, and a timeout here would
 # read as "this sport recommends nothing", which is the wrong conclusion.
