@@ -63,6 +63,32 @@ HOME_ADVANTAGE_LOG = 0.20
 SEASON_REGRESSION = 1.0 / 3.0  # fraction of the way back to league-average between seasons -- same constant/rationale as elo.py's NFL SEASON_REGRESSION (squads turn over every transfer window, not a fresh derivation for soccer specifically). NOT included in the 2026-07-19 grid search (only affects the between-season carryover, not scored by this app's own walk-forward Brier the same direct way K/home-advantage are) -- still a borrowed starting point, flagged honestly.
 MAX_GOALS = 10  # joint distribution grid cap per side -- P(11+ goals) is negligible for any real team-strength gap this rating produces
 
+# Dixon-Coles low-score correlation. 0.0 would be the plain independent-Poisson
+# grid this model shipped with. Fitted and held-out validated by
+# scripts/fit_soccer_low_score_rho.py -- do not hand-tune it; the value only
+# means anything alongside the held-out check that justified it.
+#
+# Held out on 26,443 matches (2019+, last 3 seasons never seen by the fit):
+#   draw bias      +0.0148 -> +0.0011      the defect this closes
+#   3-way log-loss -0.000890  95% CI [-0.001271, -0.000501]   improves
+#   3-way Brier    -0.000332  95% CI [-0.000563, -0.000116]   improves
+#
+# SHIPPED OVER A FAILED PRE-REGISTERED TEST, recorded here because that is not
+# a thing to bury. The rule written before the fit was "no market leg may get
+# worse on Brier", and five did. A per-leg paired bootstrap then showed four of
+# those five were indistinguishable from zero; only correct-score 1-0 is
+# genuinely worse (+0.000086), less than half the size of either significant
+# gain (draw -0.000222, away -0.000166). The original rule is close to
+# unpassable for ANY change to a joint distribution, since moving mass always
+# nudges something -- which is a flaw in the rule, not evidence about rho. The
+# user made the call to ship on the significance evidence.
+#
+# NOT FIXED BY THIS: the high-goal tail. total_o3.5 (-0.0085) and total_o4.5
+# (-0.0111) are byte-identical before and after, because tau only touches cells
+# where both sides score at most once. The tail is a dispersion problem -- see
+# the task raised for it. Half the defect in the audit remains open.
+LOW_SCORE_RHO = -0.0603
+
 # PER-LEAGUE home advantage overrides, fitted and held-out-validated by
 # scripts/fit_soccer_home_advantage.py. A league absent from this file uses
 # HOME_ADVANTAGE_LOG above, which the fit script's era table shows is already
@@ -98,14 +124,46 @@ def _poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam + k * math.log(lam) - math.lgamma(k + 1))
 
 
-def _build_grid(expected_home: float, expected_away: float) -> list[list[float]]:
-    """Independent-Poisson joint grid[h][a] = P(home=h, away=a) -- factored
-    out of predict_match (2026-07-19) so predict_half below can build a
-    real, derated-expected-goals grid through the exact same math, not a
-    re-derived copy of it."""
+def _build_grid(expected_home: float, expected_away: float,
+                rho: float | None = None) -> list[list[float]]:
+    """Joint grid[h][a] = P(home=h, away=a) -- factored out of predict_match
+    (2026-07-19) so predict_half below can build a real, derated-expected-goals
+    grid through the exact same math, not a re-derived copy of it.
+
+    Two INDEPENDENT Poissons, then a Dixon-Coles low-score correction. The
+    independence assumption is measurably wrong and this is where it was wrong:
+    scripts/audit_soccer_market_types.py, restricted to 2019+ so the
+    declining-home-advantage era effect could not contaminate it, found every
+    level scoreline under-priced and the draw leg short by 1.4pp (z +8.1) --
+    0-0 +0.0031, 1-1 +0.0081, 2-2 +0.0033. Real matches do not score
+    independently; a level game is played differently from a one-sided one.
+
+    tau nudges only the four cells where both sides score at most once, the
+    classic Dixon-Coles form, then the grid is RENORMALISED -- tau does not
+    preserve the total, and skipping that would silently shift every market
+    type derived from this grid, not just the draw.
+
+    rho < 0 lifts 0-0 and 1-1 and trims 1-0 and 0-1. rho = 0 is exactly the
+    old independent grid, which is the default until a fitted value ships.
+    """
     home_pmf = [_poisson_pmf(h, expected_home) for h in range(MAX_GOALS + 1)]
     away_pmf = [_poisson_pmf(a, expected_away) for a in range(MAX_GOALS + 1)]
-    return [[home_pmf[h] * away_pmf[a] for a in range(MAX_GOALS + 1)] for h in range(MAX_GOALS + 1)]
+    grid = [[home_pmf[h] * away_pmf[a] for a in range(MAX_GOALS + 1)] for h in range(MAX_GOALS + 1)]
+
+    r = LOW_SCORE_RHO if rho is None else rho
+    if not r:
+        return grid
+    lam, mu = max(expected_home, 1e-6), max(expected_away, 1e-6)
+    # Clamped at 0: tau can go negative for an extreme rho/expected-goals pair,
+    # and a negative probability would poison every market read off this grid.
+    grid[0][0] *= max(0.0, 1.0 - lam * mu * r)
+    grid[0][1] *= max(0.0, 1.0 + lam * r)
+    grid[1][0] *= max(0.0, 1.0 + mu * r)
+    grid[1][1] *= max(0.0, 1.0 - r)
+    total = sum(sum(row) for row in grid)
+    if total <= 0:
+        return [[home_pmf[h] * away_pmf[a] for a in range(MAX_GOALS + 1)] for h in range(MAX_GOALS + 1)]
+    return [[cell / total for cell in row] for row in grid]
 
 
 @dataclass
@@ -307,7 +365,20 @@ def predict_half(state: SoccerRatingState, home_team: str, away_team: str, half:
     else:
         expected_home = full.expected_home_goals * (1 - FIRST_HALF_SHARE_HOME)
         expected_away = full.expected_away_goals * (1 - FIRST_HALF_SHARE_AWAY)
-    grid = _build_grid(expected_home, expected_away)
+    # rho=0 ON PURPOSE: the low-score correction is a FULL-MATCH parameter, and
+    # applying it here made the half markets WORSE. A half carries ~44% of the
+    # goals, so expected goals are ~0.6 rather than ~1.4 and the same tau lifts
+    # 0-0 and 1-1 by a far bigger share of a much more concentrated
+    # distribution. Measured over 45,490 half-observations (2019+):
+    #
+    #     H1 draw bias  -0.0039 -> -0.0160   Brier 0.23739 -> 0.23769  WORSE
+    #     H2 draw bias  -0.0050 -> -0.0192   Brier 0.22442 -> 0.22478  WORSE
+    #     H2 btts bias  -0.0131 -> -0.0201   Brier 0.18357 -> 0.18376  WORSE
+    #
+    # Five of six half legs degraded, so a parameter fitted on full-time scores
+    # is confined to full-time scores. Re-fit a separate half rho if the half
+    # markets ever justify one -- do not reuse this number.
+    grid = _build_grid(expected_home, expected_away, rho=0.0)
     return MatchGoalDistribution(expected_home_goals=expected_home, expected_away_goals=expected_away, grid=grid)
 
 

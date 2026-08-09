@@ -77,6 +77,14 @@ Magnitude: 1.4pp on the draw leg of 1,554 live moneyline_3way markets, and
 DO NOT ship a correlation term off this run. Fit it and validate it on
 held-out seasons first -- and check that Brier does not degrade while bias
 improves, which is the trap that killed the per-league home fit.
+
+PARTLY RESOLVED 2026-08-09 by scripts/fit_soccer_low_score_rho.py: a
+Dixon-Coles term (rho = -0.0603) shipped for FULL-TIME markets only. The draw
+leg is fixed (+0.0142 z +8.1 -> +0.0005 z +0.3) and win_away improved, at the
+cost of win_home and btts each picking up a ~0.6-0.7pp lean. THE TAIL IS
+UNTOUCHED -- total_o3.5/o4.5 are identical to the digit, because tau only moves
+cells where both sides score at most once. Re-running this audit will still
+show those two rows exactly as above; that is expected, not a regression.
 ===========================================================================
 """
 from __future__ import annotations
