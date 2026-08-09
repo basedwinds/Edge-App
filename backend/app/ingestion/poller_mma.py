@@ -89,6 +89,64 @@ def _infer_scheduled_rounds_from_kalshi(session, rounds_rows: list[dict], fight_
     return updated
 
 
+def _infer_scheduled_rounds_from_polymarket(session, rounds_rows: list[dict], fight_id_by_slug: dict[str, str | None]) -> int:
+    """The Polymarket twin of _infer_scheduled_rounds_from_kalshi, and the one
+    that actually fires for most cards.
+
+    REAL BUG THIS FIXES (2026-08-09). ufcstats never publishes scheduled_rounds
+    for an upcoming fight, so it has to be inferred from a book's round ladder.
+    That inference existed for KALSHI ONLY -- and Kalshi does not list
+    distance/method/rounds markets for every card. On the 2026-08-15 card it
+    listed moneyline and nothing else, so the ladder was empty, nothing was
+    inferred, and scheduled_rounds stayed NULL on all 19 fights.
+
+    Every downstream model takes scheduled_rounds and returns None without it,
+    so that single missing field silently zeroed the entire non-moneyline half
+    of MMA: 30 distance + 60 method_of_finish + 60 method_of_victory + 96 rounds
+    rows served unpriced, from three models that are built, backtested and
+    working. The poller even reported "11/11 fights matched", because matching
+    WAS fine -- the failure was one field further on.
+
+    Polymarket's own ladder answers it exactly the way Kalshi's does: the
+    highest "over N.5 rounds" rung is one short of the scheduled distance, so
+    max_line + 0.5 IS the real number. Verified against the 2026-08-15 card:
+    16 fights topped out at 2.5 (three rounds) and three at 4.5 (five), and the
+    three included Hernandez vs Rodrigues, which is a five-round MAIN EVENT but
+    NOT a title fight. A "title bout implies five rounds" shortcut would have
+    got that one wrong -- the ladder is real evidence, not a proxy for it.
+
+    REFUSES ANYTHING THAT IS NOT 3 OR 5. Those are the only distances the UFC
+    actually schedules, so any other answer means the ladder was truncated or
+    the rows were mis-joined, and a wrong scheduled_rounds is worse than a
+    missing one: it would not leave the market unpriced, it would price it
+    against the wrong fight length. Never overwrites a value already known.
+    """
+    max_line_by_slug: dict[str, float] = {}
+    for row in rounds_rows:
+        line = row.get("line")
+        if line is None:
+            continue
+        slug = row.get("event_slug")
+        max_line_by_slug[slug] = max(max_line_by_slug.get(slug, 0.0), float(line))
+
+    updated = 0
+    for slug, max_line in max_line_by_slug.items():
+        fight_id = fight_id_by_slug.get(slug)
+        if fight_id is None:
+            continue
+        scheduled = int(round(max_line + 0.5))
+        if scheduled not in (3, 5):
+            log.warning("mma: polymarket rounds ladder for %s tops out at %.1f -> %d "
+                        "scheduled rounds, which is not a real UFC distance; refusing "
+                        "to set it", slug, max_line, scheduled)
+            continue
+        fight = session.get(MmaFight, fight_id)
+        if fight is not None and fight.scheduled_rounds is None:
+            fight.scheduled_rounds = scheduled
+            updated += 1
+    return updated
+
+
 def _infer_start_time_from_kalshi(session, moneyline_rows: list[dict], fight_id_by_suffix: dict[str, str | None]) -> int:
     """Kalshi's own per-fight `occurrence_datetime` (see kalshi_mma_client.py's
     _market_row docstring) is the only real, per-fight-granular estimated
@@ -281,8 +339,14 @@ def refresh_polymarket_mma_markets():
                     session, row, fight_id_by_slug.get(row["event_slug"])
                 )
 
+            # AFTER the rows are upserted, so a fight that only just got its
+            # first market still gets its distance set on the same pass.
+            rounds_inferred = _infer_scheduled_rounds_from_polymarket(
+                session, rounds_rows, fight_id_by_slug)
+
             session.commit()
-            log.info("polymarket mma: %d/%d fights matched", matched, matched + unmatched)
+            log.info("polymarket mma: %d/%d fights matched, %d scheduled_rounds inferred",
+                     matched, matched + unmatched, rounds_inferred)
         finally:
             session.close()
 
