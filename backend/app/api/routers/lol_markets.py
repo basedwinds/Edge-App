@@ -34,7 +34,7 @@ from app.db.models import LolMatch, Market, MarketSnapshot
 from app.ingestion import market_catalog_lol
 from app.ingestion.market_matcher_lol import team_names_match
 from app.models.baseline import elo_service_lol
-from app.models.esports_tournament_pricing import is_competition_outcome, price_tournament_winners
+from app.models.esports_tournament_pricing import price_tournament_winners, skip_reason
 from app.models.ladder_sanity import futures_group_decided, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
 from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
@@ -82,6 +82,13 @@ NON_COMPETITION_REASON = (
     "roster or transfer announcement, an individual player feat, a soloqueue ladder or a "
     "novelty stat -- none of which a match-history model can speak to. Left unpriced on "
     "purpose rather than scored by a bracket simulator that would answer a different question."
+)
+
+UNRATED_TEAM_REASON = (
+    "Not priced: this team has no rating in this app. Its ratings come from a crawl of the "
+    "top competitive tiers, so teams from lower divisions, academy rosters and newly-formed "
+    "orgs are genuinely absent -- and this app returns nothing rather than inventing a "
+    "default rating for them."
 )
 
 COLD_START_CAVEAT = (
@@ -181,6 +188,11 @@ def list_lol_futures(session: Session = Depends(get_session)):
     """See cs2_markets.py::list_cs2_futures's own docstring -- same real
     inventory-with-no-model shape, LoL's own version."""
     markets = session.query(Market).filter(Market.sport == "lol", Market.market_type == "tournament_winner", Market.status == "active").all()
+    # Field size per group, for skip_reason's single-event size backstop.
+    _group_sizes: dict[str, int] = {}
+    for _m in markets:
+        _k = _m.group_label or ''
+        _group_sizes[_k] = _group_sizes.get(_k, 0) + 1
     markets = [m for m in markets if _is_bracket_future(m)]
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     # Identify groups whose tournament is already won. Kalshi still reports every
@@ -270,8 +282,10 @@ def list_lol_futures(session: Session = Depends(get_session)):
                 # shortest-game props all arrive as tournament_winner rows.
                 model_note=(
                     None if model_prob is not None
-                    else NON_COMPETITION_REASON if not is_competition_outcome(m.group_label)
-                    else None
+                    else skip_reason(m.group_label, _group_sizes.get(m.group_label or '', 0))
+                    # Third cause, and the only one the label cannot reveal: the
+                    # team itself is outside the rated pool.
+                    or (UNRATED_TEAM_REASON if (m.team and elo_service_lol.get_team_rating(m.team) is None) else None)
                 ),
             )
         )

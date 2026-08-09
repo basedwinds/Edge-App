@@ -32,7 +32,7 @@ from app.db.models import Cs2Match, Market, MarketSnapshot
 from app.ingestion import market_catalog_cs2
 from app.ingestion.market_matcher_cs2 import team_names_match
 from app.models.baseline import elo_service_cs2
-from app.models.esports_tournament_pricing import is_competition_outcome, price_tournament_winners
+from app.models.esports_tournament_pricing import price_tournament_winners, skip_reason
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import futures_group_decided, CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
@@ -87,6 +87,13 @@ NON_COMPETITION_REASON = (
     "roster or transfer announcement, an individual player feat, a soloqueue ladder or a "
     "novelty stat -- none of which a match-history model can speak to. Left unpriced on "
     "purpose rather than scored by a bracket simulator that would answer a different question."
+)
+
+UNRATED_TEAM_REASON = (
+    "Not priced: this team has no rating in this app. Its ratings come from a crawl of the "
+    "top competitive tiers, so teams from lower divisions, academy rosters and newly-formed "
+    "orgs are genuinely absent -- and this app returns nothing rather than inventing a "
+    "default rating for them."
 )
 
 COLD_START_CAVEAT = (
@@ -158,6 +165,11 @@ def list_cs2_futures(session: Session = Depends(get_session)):
     markets (e.g. a whole-year "win an
     international") stay unpriced -- they're not a single bracket at all."""
     markets = session.query(Market).filter(Market.sport == "cs2", Market.market_type == "tournament_winner", Market.status == "active").all()
+    # Field size per group, for skip_reason's single-event size backstop.
+    _group_sizes: dict[str, int] = {}
+    for _m in markets:
+        _k = _m.group_label or ''
+        _group_sizes[_k] = _group_sizes.get(_k, 0) + 1
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     # Identify groups whose tournament is already won. Kalshi still reports every
     # leg `active` long after the event decides, so status alone cannot catch it --
@@ -246,8 +258,10 @@ def list_cs2_futures(session: Session = Depends(get_session)):
                     # Explain the blank rather than leaving it mysterious: a user
                     # who sees an empty model column has no way to tell "not
                     # modelled yet" from "deliberately out of scope".
-                    else NON_COMPETITION_REASON if not is_competition_outcome(m.group_label)
-                    else None
+                    else skip_reason(m.group_label, _group_sizes.get(m.group_label or '', 0))
+                    # Third cause, and the only one the label cannot reveal: the
+                    # team itself is outside the rated pool.
+                    or (UNRATED_TEAM_REASON if (m.team and elo_service_cs2.get_team_rating(m.team) is None) else None)
                 ),
             )
         )

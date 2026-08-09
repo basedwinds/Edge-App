@@ -131,6 +131,37 @@ def is_competition_outcome(group_label: str | None) -> bool:
     return not any(marker in label for marker in NON_COMPETITION_LABEL_MARKERS)
 
 
+NON_COMPETITION_REASON = (
+    "Not priced: this is not a team-competition result. Polymarket lists it under the same "
+    "market type as a tournament winner, but the question is a franchise/partnership slot, a "
+    "roster or transfer announcement, an individual player feat, a soloqueue ladder or a "
+    "novelty stat -- none of which a match-history model can speak to. Left unpriced on "
+    "purpose rather than scored by a bracket simulator that would answer a different question."
+)
+
+
+AGGREGATE_REASON = (
+    "Not priced: this asks about a season-long outcome spanning many separate events "
+    "(qualifying, or winning any one of several tournaments), not a single bracket. The "
+    "bracket simulator models ONE event, and forcing it on a field this shape produced "
+    "probabilities that summed to 2.5x when it was tried. Left unpriced rather than "
+    "answered with a number that does not mean what it appears to."
+)
+
+
+def skip_reason(group_label: str | None, field_size: int = 0) -> str | None:
+    """Why this futures group is not priced, or None if it should be.
+
+    One place for both refusals, so the three esports routers cannot drift from
+    the pricing function or from each other -- the same drift that left 93
+    Valorant rows blank with no explanation while 95 others had one."""
+    if not is_competition_outcome(group_label):
+        return NON_COMPETITION_REASON
+    if not _is_single_event(group_label or "", field_size):
+        return AGGREGATE_REASON
+    return None
+
+
 def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_OF,
                              trials: int = DEFAULT_TRIALS, event_state_for=None) -> dict[int, float]:
     """Returns {market_id: model_prob} for the tournament_winner markets it can

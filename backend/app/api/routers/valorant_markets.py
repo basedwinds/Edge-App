@@ -44,7 +44,7 @@ from app.models.baseline import elo_service_valorant
 import logging
 
 from app.clients import vlr_client
-from app.models.esports_tournament_pricing import find_event_path, is_competition_outcome, price_tournament_winners
+from app.models.esports_tournament_pricing import find_event_path, price_tournament_winners, skip_reason
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import (
     futures_group_decided,
@@ -101,6 +101,13 @@ NON_COMPETITION_REASON = (
     "roster or transfer announcement, an individual player feat, a soloqueue ladder or a "
     "novelty stat -- none of which a match-history model can speak to. Left unpriced on "
     "purpose rather than scored by a bracket simulator that would answer a different question."
+)
+
+UNRATED_TEAM_REASON = (
+    "Not priced: this team has no rating in this app. Its ratings come from a crawl of the "
+    "top competitive tiers, so teams from lower divisions, academy rosters and newly-formed "
+    "orgs are genuinely absent -- and this app returns nothing rather than inventing a "
+    "default rating for them."
 )
 
 COLD_START_CAVEAT = (
@@ -167,6 +174,11 @@ def list_valorant_futures(session: Session = Depends(get_session)):
     deliberately NOT staked (bracket is an approximation of real double-elim/
     Swiss events); season-long aggregate markets left unpriced."""
     markets = session.query(Market).filter(Market.sport == "valorant", Market.market_type == "tournament_winner", Market.status == "active").all()
+    # Field size per group, for skip_reason's single-event size backstop.
+    _group_sizes: dict[str, int] = {}
+    for _m in markets:
+        _k = _m.group_label or ''
+        _group_sizes[_k] = _group_sizes.get(_k, 0) + 1
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     # Identify groups whose tournament is already won. Kalshi still reports every
     # leg `active` long after the event decides, so status alone cannot catch it --
@@ -268,8 +280,10 @@ def list_valorant_futures(session: Session = Depends(get_session)):
                     # Explain the blank rather than leaving it mysterious: a user
                     # who sees an empty model column has no way to tell "not
                     # modelled yet" from "deliberately out of scope".
-                    else NON_COMPETITION_REASON if not is_competition_outcome(m.group_label)
-                    else None
+                    else skip_reason(m.group_label, _group_sizes.get(m.group_label or '', 0))
+                    # Third cause, and the only one the label cannot reveal: the
+                    # team itself is outside the rated pool.
+                    or (UNRATED_TEAM_REASON if (m.team and elo_service_valorant.get_team_rating(m.team) is None) else None)
                 ),
             )
         )
