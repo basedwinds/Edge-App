@@ -647,7 +647,8 @@ def run_full_refresh_soccer():
     # likely thing in this function to throw. A new, optional market family must
     # never be able to take settlement down with it.
     for name, fn in (("cup", refresh_kalshi_cup_markets), ("uefa", refresh_kalshi_uefa_markets),
-                     ("leagues cup", refresh_kalshi_leagues_cup_markets)):
+                     ("leagues cup", refresh_kalshi_leagues_cup_markets),
+                     ("national", refresh_kalshi_national_markets)):
         _t0 = time.monotonic()
         try:
             fn()
@@ -768,6 +769,51 @@ def refresh_kalshi_uefa_markets():
         finally:
             session.close()
     log.info("kalshi uefa markets refreshed: %s", counts)
+    return counts
+
+
+def refresh_kalshi_national_markets():
+    """National-team match markets (currently the ASEAN Championship).
+
+    Stored under league "INTL" -- the same code the ratings use -- so
+    resolve_league and pricing line up without a second mapping. ADVANCE is not
+    fetched: it is decided after extra time and penalties, which a single-match
+    goal distribution cannot answer.
+    """
+    batches = [
+        (kalshi_soccer_client.get_national_moneyline_markets(),
+         market_catalog_soccer.upsert_kalshi_national_moneyline_market, "national_moneyline"),
+        (kalshi_soccer_client.get_national_total_markets(),
+         market_catalog_soccer.upsert_kalshi_national_total_market, "national_total"),
+        (kalshi_soccer_client.get_national_spread_markets(),
+         market_catalog_soccer.upsert_kalshi_national_spread_market, "national_spread"),
+        (kalshi_soccer_client.get_national_btts_markets(),
+         market_catalog_soccer.upsert_kalshi_national_btts_market, "national_btts"),
+    ]
+    counts: dict[str, int] = {}
+    league = market_catalog_soccer.NATIONAL_LEAGUE_CODE
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            match_id_by_tie: dict[tuple, int | None] = {}
+            for rows, upsert, label in batches:
+                n = 0
+                for row in rows:
+                    date = (row.get("estimated_start_time") or "")[:10] or None
+                    key = (league, canonical_team_key(row["home_team"]),
+                           canonical_team_key(row["away_team"]), date or "")
+                    if key not in match_id_by_tie:
+                        match = market_catalog_soccer.find_or_create_upcoming_match(
+                            session, league, row["home_team"], row["away_team"], date)
+                        session.flush()
+                        match_id_by_tie[key] = match.id if match is not None else None
+                    upsert(session, row, match_id_by_tie[key])
+                    n += 1
+                counts[label] = n
+            session.commit()
+        finally:
+            session.close()
+    log.info("kalshi national markets refreshed: %s", counts)
     return counts
 
 

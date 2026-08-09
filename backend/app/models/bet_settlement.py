@@ -64,6 +64,10 @@ AUTO_SETTLE_MARKET_TYPES = {
     # market_type names pointing at existing logic.
     "leagues_cup_moneyline_3way", "leagues_cup_total",
     "leagues_cup_spread", "leagues_cup_btts",
+    # National teams (2026-08-09). Ordinary single-match questions settled off
+    # the regulation score -- same graders as the league markets, new names only.
+    "national_moneyline_3way", "national_total",
+    "national_spread", "national_btts",
     # mma
     "distance", "rounds", "method_of_finish",
     # esports (cs2/valorant/lol). map_winner grades for LoL + Valorant -- see
@@ -792,6 +796,10 @@ _SOCCER_GRADERS = {
     # upsert_kalshi_leagues_cup_spread_market writes.
     "leagues_cup_spread": _grade_soccer_spread,
     "leagues_cup_btts": _grade_soccer_btts,
+    "national_moneyline_3way": _grade_soccer_moneyline_3way,
+    "national_total": _grade_soccer_total,
+    "national_spread": _grade_soccer_spread,
+    "national_btts": _grade_soccer_btts,
     "game_spread": _grade_soccer_spread,
     "game_total": _grade_soccer_total,
     "team_total": _grade_soccer_team_total,

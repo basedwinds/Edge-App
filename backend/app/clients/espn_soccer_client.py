@@ -90,7 +90,7 @@ LEAGUE_CODES = {
     "E3": "eng.4",       # League Two
     # Extra-format leagues, added with the parser. Verified live:
     # bra.1 40 events, arg.1 78, mex.1 33, jpn.1 40 in August 2026.
-    "BRA1": "bra.1",
+    "BRA1": "bra.1",      # Brasileirao Serie A
     # 2026-08-08: verified live before wiring -- 37/28/28/39 events
     # respectively in a one-month window. Poland and Switzerland were REFUSED
     # at this step (no feed / zero events), which is why they are absent from
@@ -101,7 +101,18 @@ LEAGUE_CODES = {
     # produces markets that stay pending forever. The slug is "concacaf.
     # leagues.cup" (dots, not underscores); "concacaf.leagues_cup" and
     # "usa.leagues_cup" both 400.
-    "LEAGUES_CUP": "concacaf.leagues.cup",     # Brasileirao Serie A
+    "LEAGUES_CUP": "concacaf.leagues.cup",
+    # National teams (2026-08-09). Fixtures are stored under "INTL", so this is
+    # the slug refresh_soccer_results uses to settle them. It is the ASEAN
+    # Championship because that is the only national-team competition currently
+    # listed; a second one would need its own entry, since this map is keyed by
+    # the stored league code and INTL can only point at one slug.
+    #
+    # THAT IS A REAL LIMITATION, not a nicety: storing every national fixture
+    # under one code means results can only be fetched from one competition at a
+    # time. It is correct today and needs revisiting the moment a second
+    # national-team competition is ingested.
+    "INTL": "aff.championship",
     "ARG1": "arg.1",     # Liga Profesional
     "MEX1": "mex.1",     # Liga MX
     "JPN1": "jpn.1",     # J1 League

@@ -815,6 +815,51 @@ def upsert_kalshi_uefa_total_market(session: Session, row: dict, soccer_match_id
 LEAGUES_CUP_LEAGUE_CODE = "LEAGUES_CUP"
 
 
+# --- NATIONAL TEAMS (2026-08-09) -------------------------------------------
+# Stored under the same league code the RATINGS use ("INTL"), unlike the club
+# competitions above which get a per-competition code. That is deliberate: a
+# national team has exactly one rating wherever it plays, so there is no
+# per-competition pool to keep a fixture out of, and using the rating pool's own
+# code means resolve_league lines up with pricing without a second mapping.
+NATIONAL_LEAGUE_CODE = "INTL"
+
+
+def upsert_kalshi_national_moneyline_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "national_moneyline_3way", soccer_match_id)
+    market.team = row.get("team")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_national_total_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "national_total", soccer_match_id)
+    market.line = row.get("line")
+    market.side = "over"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_national_spread_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "national_spread", soccer_match_id)
+    market.team = row.get("team")
+    market.line = row.get("line")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_national_btts_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "national_btts", soccer_match_id)
+    market.side = "yes"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
 def upsert_kalshi_leagues_cup_moneyline_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
     market = _cup_market(session, row, "leagues_cup_moneyline_3way", soccer_match_id)
     market.team = row.get("team")

@@ -1467,6 +1467,130 @@ def get_leagues_cup_btts_markets() -> list[dict]:
     return rows
 
 
+# ---- National teams: ASEAN Championship, added 2026-08-09 -------------------
+# Ratings come from the INTL pool (ingestion/international_data.py) and pricing
+# from models/national_match.py, which refuses any cross-confederation fixture.
+# Every ASEAN fixture is AFC-vs-AFC, so that gate never bites here -- it exists
+# for the day Kalshi lists a World Cup or an inter-confederation friendly.
+#
+# ADVANCE is deliberately not fetched. KXASEANADVANCE is a knockout progression
+# question, decided after extra time and penalties, which a single-match goal
+# distribution cannot answer -- the same reason cup_advance is tracking-only and
+# UEFA advance is not ingested at all. Ingesting it would only mint rows this
+# app must then refuse to price.
+NATIONAL_COMPETITIONS = {
+    "asean": {
+        "name": "ASEAN Championship",
+        "moneyline": "KXASEANGAME",
+        "total": "KXASEANTOTAL",
+        "spread": "KXASEANSPREAD",
+        "btts": "KXASEANBTTS",
+    },
+}
+
+
+def _national_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **extra) -> dict:
+    row = {
+        "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
+        "competition": comp, "competition_name": cfg["name"],
+        "home_team": home, "away_team": away,
+        "ticker": m["ticker"], "estimated_start_time": m.get("occurrence_datetime"),
+        "yes_bid": _to_float(m.get("yes_bid_dollars")), "yes_ask": _to_float(m.get("yes_ask_dollars")),
+        "last_price": _to_float(m.get("last_price_dollars")), "volume": _to_float(m.get("volume_fp")),
+        "status": m.get("status"),
+    }
+    row.update(extra)
+    return row
+
+
+def _national_events(series: str):
+    for ev in get_open_events(series):
+        teams = _cup_pair(ev.get("title", ""))
+        if teams is None:
+            continue
+        try:
+            markets = get_markets_for_event(ev["event_ticker"])
+        except Exception:
+            continue
+        yield ev, teams[0], teams[1], markets
+
+
+def get_national_moneyline_markets() -> list[dict]:
+    """3-way regulation moneyline. Labels carry the "Reg Time: " prefix, which
+    is also the settlement rule stated out loud -- these resolve on 90 minutes,
+    not on who eventually progressed."""
+    rows = []
+    for comp, cfg in NATIONAL_COMPETITIONS.items():
+        for ev, home, away, markets in _national_events(cfg["moneyline"]):
+            for m in markets:
+                label = _REG_TIME_PREFIX.sub("", (m.get("yes_sub_title") or "").strip())
+                if label.lower() == "tie":
+                    side, team = "draw", None
+                elif label == home:
+                    side, team = "home", home
+                elif label == away:
+                    side, team = "away", away
+                else:
+                    continue
+                rows.append(_national_row(comp, cfg, ev, m, home, away, side=side, team=team))
+    return rows
+
+
+def get_national_total_markets() -> list[dict]:
+    rows = []
+    for comp, cfg in NATIONAL_COMPETITIONS.items():
+        for ev, home, away, markets in _national_events(cfg["total"]):
+            for m in markets:
+                mt = re.search(r"([\d.]+)", m.get("yes_sub_title") or m.get("title") or "")
+                if not mt:
+                    continue
+                try:
+                    line = float(mt.group(1))
+                except ValueError:
+                    continue
+                rows.append(_national_row(comp, cfg, ev, m, home, away, line=line, side="over"))
+    return rows
+
+
+def get_national_spread_markets() -> list[dict]:
+    """Goal handicap. The sub-title carries a "Goal Diff Reg Time: " prefix that
+    the club spread markets do not, so the team/line are parsed after stripping
+    everything up to the last colon."""
+    rows = []
+    for comp, cfg in NATIONAL_COMPETITIONS.items():
+        for ev, home, away, markets in _national_events(cfg["spread"]):
+            for m in markets:
+                sub = (m.get("yes_sub_title") or "").strip()
+                sub = sub.rsplit(":", 1)[-1].strip() if ":" in sub else sub
+                mt = re.match(r"^(.*?)\s+wins by more than\s+([\d.]+)\s+goals?", sub)
+                if not mt:
+                    continue
+                label, raw_line = mt.group(1).strip(), mt.group(2)
+                if label == home:
+                    side, team = "home", home
+                elif label == away:
+                    side, team = "away", away
+                else:
+                    continue
+                try:
+                    line = float(raw_line)
+                except ValueError:
+                    continue
+                rows.append(_national_row(comp, cfg, ev, m, home, away, line=line, side=side, team=team))
+    return rows
+
+
+def get_national_btts_markets() -> list[dict]:
+    rows = []
+    for comp, cfg in NATIONAL_COMPETITIONS.items():
+        for ev, home, away, markets in _national_events(cfg["btts"]):
+            for m in markets:
+                if "both teams to score" not in (m.get("yes_sub_title") or "").lower():
+                    continue
+                rows.append(_national_row(comp, cfg, ev, m, home, away, side="yes"))
+    return rows
+
+
 def _uefa_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **extra) -> dict:
     row = {
         "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),

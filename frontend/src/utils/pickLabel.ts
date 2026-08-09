@@ -71,6 +71,12 @@ const GAME_MARKET_TYPE_LABELS: Record<string, string> = {
   leagues_cup_total: "Total",
   leagues_cup_spread: "Spread",
   leagues_cup_btts: "BTTS",
+  // National teams (2026-08-09). Same real questions again, separate
+  // market_type strings only so they route to the confederation-gated model.
+  national_moneyline_3way: "Moneyline",
+  national_total: "Total",
+  national_spread: "Spread",
+  national_btts: "BTTS",
   // Esports (Valorant/CS2/LoL) -- fell through to the raw market_type
   // string until now (found live 2026-07-20 while adding real coverage for
   // all 3 titles' own KXGAME series winner tickers), same wording as each
@@ -179,7 +185,7 @@ export function describePick(row: PickLike): string {
   // fields, not team/line/side; half-spread doesn't match the plain
   // "spread"-prefix check below since its market_type string is
   // "first_half_spread"/"second_half_spread", not "spread_...").
-  if (marketType === "leagues_cup_btts") return "Both teams to score";
+  if (marketType === "leagues_cup_btts" || marketType === "national_btts") return "Both teams to score";
   if (marketType === "btts" || marketType === "first_half_btts" || marketType === "second_half_btts") {
     const halfNote = marketType === "first_half_btts" ? " (1st half)" : marketType === "second_half_btts" ? " (2nd half)" : "";
     return `Both teams to score${halfNote}`;
@@ -193,14 +199,15 @@ export function describePick(row: PickLike): string {
   // Cup/UEFA/Leagues Cup moneylines are ordinary 3-way picks; they settle on
   // regulation, which the label above already conveys via the market-type name.
   if (marketType === "cup_moneyline_3way" || marketType === "uefa_moneyline_3way"
-      || marketType === "leagues_cup_moneyline_3way") {
+      || marketType === "leagues_cup_moneyline_3way"
+      || marketType === "national_moneyline_3way") {
     return side === "draw" ? "Draw" : (team ?? "—");
   }
   if ((marketType === "cup_total" || marketType === "uefa_total"
-       || marketType === "leagues_cup_total") && line !== null) {
+       || marketType === "leagues_cup_total" || marketType === "national_total") && line !== null) {
     return `Over ${line} goals`;
   }
-  if (marketType === "leagues_cup_spread" && line !== null && team) {
+  if ((marketType === "leagues_cup_spread" || marketType === "national_spread") && line !== null && team) {
     return `${team} wins by ${Math.ceil(line)}+ goals`;
   }
   if (marketType === "moneyline_3way" || marketType === "first_half_winner" || marketType === "second_half_winner") {

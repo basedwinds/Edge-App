@@ -57,6 +57,7 @@ from app.models.baseline import elo_service_soccer
 from app.models.cup_match import predict_cup_tie
 from app.models.uefa_match import predict_uefa_match
 from app.models.leagues_cup_match import predict_leagues_cup_match
+from app.models.national_match import predict_national_match
 from app.models.combine import combine_probability_3way
 from app.models.ladder_sanity import (
     SOCCER_LIVE_TRADING_MIN_PRICE_SWING,
@@ -84,6 +85,8 @@ GAME_MARKET_TYPES = {
     "uefa_moneyline_3way", "uefa_total",
     "leagues_cup_moneyline_3way", "leagues_cup_total",
     "leagues_cup_spread", "leagues_cup_btts",
+    "national_moneyline_3way", "national_total",
+    "national_spread", "national_btts",
 }
 
 # Real threshold-LADDER market types (multiple lines/rungs per real match+
@@ -417,6 +420,64 @@ def _leagues_cup_prediction(match: SoccerMatch | None):
     return predict_leagues_cup_match(hk, hl, ak, al, states)
 
 
+# --- NATIONAL TEAMS (2026-08-09) -------------------------------------------
+# Fixtures are stored under "INTL", the same code the ratings use. Pricing goes
+# through predict_national_match, which refuses any CROSS-CONFEDERATION pairing:
+# confederation qualifying is closed, so the six sub-pools were never tied to a
+# common scale and Brazil's attack rating came out below Vietnam's. Every ASEAN
+# fixture is AFC-vs-AFC so the gate never bites today; it exists for the first
+# time Kalshi lists a World Cup match.
+NATIONAL_LEAGUES = {"INTL"}
+NATIONAL_MARKET_TYPES = {
+    "national_moneyline_3way", "national_total", "national_spread", "national_btts",
+}
+
+
+def _national_prediction(match: SoccerMatch | None):
+    if match is None or match.league not in NATIONAL_LEAGUES:
+        return None
+    states = elo_service_soccer._cache.get("states_by_league") or {}
+    return predict_national_match(
+        canonical_team_key(match.home_team), canonical_team_key(match.away_team),
+        states.get("INTL"),
+    )
+
+
+def _national_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _national_prediction(match)
+    if pred is None:
+        return None
+    return {"home": pred.prob_home_win, "draw": pred.prob_draw,
+            "away": pred.prob_away_win}.get(market.side, lambda: None)()
+
+
+def _national_total_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _national_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    return pred.prob_total_over(market.line)
+
+
+def _national_spread_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    """Same two expressions as _game_spread_model_prob -- the away side is the
+    COMPLEMENT of the mirrored line, not the mirrored line itself."""
+    pred = _national_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    if market.side == "home":
+        return pred.distribution.prob_home_spread_cover(-market.line)
+    if market.side == "away":
+        return 1.0 - pred.distribution.prob_home_spread_cover(market.line)
+    return None
+
+
+def _national_btts_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _national_prediction(match)
+    if pred is None:
+        return None
+    return pred.distribution.prob_btts()
+
+
 def _leagues_cup_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
     pred = _leagues_cup_prediction(match)
     if pred is None:
@@ -500,6 +561,10 @@ _MODEL_PROB_DISPATCH = {
     "leagues_cup_total": lambda m, match, news: _leagues_cup_total_model_prob(m, match),
     "leagues_cup_spread": lambda m, match, news: _leagues_cup_spread_model_prob(m, match),
     "leagues_cup_btts": lambda m, match, news: _leagues_cup_btts_model_prob(m, match),
+    "national_moneyline_3way": lambda m, match, news: _national_moneyline_model_prob(m, match),
+    "national_total": lambda m, match, news: _national_total_model_prob(m, match),
+    "national_spread": lambda m, match, news: _national_spread_model_prob(m, match),
+    "national_btts": lambda m, match, news: _national_btts_model_prob(m, match),
     "cup_moneyline_3way": lambda m, match, news: _cup_moneyline_model_prob(m, match),
     "cup_advance": lambda m, match, news: _cup_advance_model_prob(m, match),
     "cup_total": lambda m, match, news: _cup_total_model_prob(m, match),
@@ -738,6 +803,13 @@ def list_soccer_markets(session: Session = Depends(get_session)):
             # _model_prob runs. Resolve each club's real league instead.
             return any(elo_service_soccer.resolve_league(n) is None
                        for n in (match.home_team, match.away_team))
+        if match.league in NATIONAL_LEAGUES:
+            # INTL genuinely IS a rating pool, so the count check at the bottom
+            # would work -- but it would pass a cross-confederation fixture that
+            # predict_national_match then refuses, leaving the row unpriced with
+            # a misleading "no tracked match history" reason. Defer to the model
+            # so the gate and the price agree.
+            return _national_prediction(match) is None
         if match.league in LEAGUES_CUP_LEAGUES:
             # THIRD instance of the same trap (UEFA above, cups below), caught
             # here before it shipped: "LEAGUES_CUP" is a competition, not a
@@ -902,6 +974,7 @@ _SOCCER_LEAGUE_NAME = {
     "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
     "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
     "LEAGUES_CUP": "Leagues Cup",
+    "INTL": "Internationals",
 }
 
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",

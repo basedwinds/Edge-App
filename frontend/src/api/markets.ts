@@ -549,6 +549,7 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
   "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
   "LEAGUES_CUP": "Leagues Cup",
+  "INTL": "Internationals",
 };
 
 // Fallback series names for racing. Only used when the backend hasn't supplied
