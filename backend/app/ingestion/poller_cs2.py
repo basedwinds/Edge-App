@@ -62,14 +62,68 @@ fallback Tennis/Soccer already rely on.
 import datetime as dt
 import logging
 
+import httpx
+
 from app.clients import kalshi_cs2_client, polymarket_cs2_client
 from app.db.database import SessionLocal
+from app.db.models import Setting
 from app.ingestion import cs2_data, market_catalog_cs2
 from app.ingestion.start_times import apply_start
 from app.ingestion.poller_lock import db_write_lock
 from app.models.baseline import elo_service_cs2
 
 log = logging.getLogger("poller_cs2")
+
+# Liquipedia rate-limit backoff.
+#
+# WHY THIS EXISTS (2026-08-09). Liquipedia temporarily IP-banned this app --
+# "Your IP address has been temporarily blocked from accessing Liquipedia due to
+# excessive or invalid requests" -- earned by a Call of Duty crawl that paced
+# itself too aggressively. The ban is site-wide, so it took CS2 down with it:
+# refresh_cs2_matches is the only route by which new CS2 fixtures enter the app.
+#
+# THE PART THAT MATTERS MORE THAN THE BAN. The step is wrapped in the poller's
+# non-fatal try/except, so a 429 just logged a traceback and the scheduler
+# retried FIVE MINUTES LATER, forever. That is 288 requests a day into an
+# endpoint that has explicitly said stop -- which plausibly keeps renewing the
+# very block it is trying to recover from, and is exactly the behaviour that
+# turns a temporary ban into a permanent one.
+#
+# So on a 429 the step now stands down for COOLDOWN_HOURS instead of retrying on
+# the poll interval. The deadline is stored in the DB, not in memory, because
+# this process gets restarted often enough that an in-memory cooldown would
+# reset on every restart and resume hammering -- which is how it behaved today.
+LIQUIPEDIA_COOLDOWN_KEY = "cs2_liquipedia_cooldown_until"
+COOLDOWN_HOURS = 6.0
+
+
+def _cooldown_until() -> dt.datetime | None:
+    session = SessionLocal()
+    try:
+        row = session.get(Setting, LIQUIPEDIA_COOLDOWN_KEY)
+        if not row or not row.value:
+            return None
+        try:
+            return dt.datetime.fromisoformat(row.value)
+        except ValueError:
+            return None
+    finally:
+        session.close()
+
+
+def _set_cooldown(until: dt.datetime | None) -> None:
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            row = session.get(Setting, LIQUIPEDIA_COOLDOWN_KEY)
+            value = until.isoformat() if until else ""
+            if row is None:
+                session.add(Setting(key=LIQUIPEDIA_COOLDOWN_KEY, value=value))
+            else:
+                row.value = value
+            session.commit()
+        finally:
+            session.close()
 
 
 def refresh_cs2_ratings():
@@ -93,8 +147,44 @@ def refresh_cs2_matches():
     REAL BUG this fixes (found live 2026-07-20, same "hold the DB
     connection across slow network I/O" anti-pattern this app's other
     pollers all had -- see poller_lock.py's own docstring): the fetch used
-    to happen INSIDE an open SessionLocal()."""
-    rows = cs2_data.fetch_matches()
+    to happen INSIDE an open SessionLocal().
+
+    Honours the Liquipedia rate-limit cooldown -- see LIQUIPEDIA_COOLDOWN_KEY.
+    A skipped pass is logged at WARNING, not swallowed: "CS2 fixtures are
+    frozen" has to be visible, because everything downstream keeps working off
+    the fixtures already in the DB and so looks healthy from the outside."""
+    until = _cooldown_until()
+    now = dt.datetime.now(dt.timezone.utc)
+    if until is not None and now < until:
+        mins = (until - now).total_seconds() / 60.0
+        log.warning(
+            "cs2 liquipedia fetch SKIPPED -- rate-limited, standing down for another "
+            "%.0f min (until %s). No new CS2 fixtures or start times until then; "
+            "fixtures already in the DB still price normally.",
+            mins, until.isoformat(timespec="seconds"))
+        return
+
+    try:
+        rows = cs2_data.fetch_matches()
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            resume = now + dt.timedelta(hours=COOLDOWN_HOURS)
+            _set_cooldown(resume)
+            log.error(
+                "cs2 liquipedia fetch RATE-LIMITED (429). Standing down until %s (%.1fh) "
+                "instead of retrying every poll -- retrying into a block is what turns a "
+                "temporary one permanent. CS2 fixture ingestion is PAUSED; Kalshi and "
+                "Polymarket CS2 market ingestion and pricing are unaffected.",
+                resume.isoformat(timespec="seconds"), COOLDOWN_HOURS)
+            return
+        raise
+
+    # A clean fetch means the block lifted -- clear the deadline so a later 429
+    # starts a fresh cooldown rather than inheriting a stale one.
+    if until is not None:
+        _set_cooldown(None)
+        log.info("cs2 liquipedia fetch recovered; rate-limit cooldown cleared")
+
     with db_write_lock():
         session = SessionLocal()
         try:

@@ -1,6 +1,40 @@
 """Build data/cod_historical_match_cache.json -- Call of Duty League match
 history from Liquipedia, for a CoD rating model.
 
+===========================================================================
+DO NOT RUN THIS. It got the app's IP banned from Liquipedia. 2026-08-09.
+
+A first attempt at DELAY=2.5 earned an HTTP 429 partway through. The delay
+was raised to 30s and the crawl re-run; it returned "0 matches from 0 pages"
+after ~60 minutes, and a single manual probe afterwards explained why:
+
+    HTTP 429
+    <h1>Rate Limited</h1>
+    Your IP address has been temporarily blocked from accessing Liquipedia
+    due to excessive or invalid requests.
+
+So the 30s run never fetched anything -- the ban from the 2.5s run was
+already in force and outlasted the whole second attempt. The politeness fix
+was correct and irrelevant; the damage was already done.
+
+WHAT IT COST, which is the part worth remembering. The ban is SITE-WIDE, not
+per-wiki, so it took CS2 down with it: app/ingestion/cs2_data.py scrapes
+liquipedia.net/counterstrike/Liquipedia:Matches on the live 5-minute poller,
+and that is the ONLY route by which new CS2 fixtures enter the app. Pricing
+kept working off fixtures already in the DB, so from the UI nothing looked
+wrong. Confirmed live: refresh_cs2_matches failing every 5 minutes with 429.
+poller_cs2.py now stands down for 6h on a 429 instead of retrying on the poll
+interval -- see LIQUIPEDIA_COOLDOWN_KEY there.
+
+THE LESSON: a shared dependency makes an experimental crawler a production
+risk. CS2 had been running off Liquipedia for weeks; a Call of Duty
+feasibility spike was allowed to spend that same credit, and did.
+
+BEFORE ANY FUTURE COD ATTEMPT: use the supported route described at
+liquipedia.net/api-terms-of-use rather than this script, and do not point a
+new crawler at a host that a shipped sport depends on.
+===========================================================================
+
 WHY THE API AND NOT THE HTML, which is how CS2 was crawled. Liquipedia now
 returns 403 to a plain page fetch. That is not a Call-of-Duty-specific block:
 checked live 2026-08-09, the SAME client gets 403 on
