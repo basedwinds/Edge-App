@@ -19,6 +19,7 @@ from app.clients.polymarket_client import quote_fields
 from app.ingestion.start_times import apply_start
 from app.db.models import LolMap, LolMatch, LolRosterChangeCache, Market, MarketSnapshot
 from app.ingestion.market_matcher_lol import match_by_names_only, team_names_match
+from app.ingestion.series_orientation import oriented_result
 
 
 def _load_upcoming_matches(session: Session) -> list[dict]:
@@ -130,12 +131,17 @@ def upsert_leaguepedia_match(session: Session, row: dict) -> LolMatch:
     # start_times.apply_start for the Valorant case that forced generalising it.
     if match.winner is None:
         apply_start(match, row.get("estimated_start_time"))
-    if row.get("maps_won_a") is not None:
-        match.maps_won_a = row["maps_won_a"]
-    if row.get("maps_won_b") is not None:
-        match.maps_won_b = row["maps_won_b"]
-    if row.get("winner") is not None:
-        match.winner = row["winner"]
+    # match_by_names_only above matches the pair in EITHER order, so the row
+    # can describe this fixture with the sides swapped. Re-orient before
+    # writing -- writing these three positionally is what put "FALKE VENOM 2-0
+    # GIANTX GC" on a match GIANTX GC won 2-0 and paid the wrong side.
+    won_a, won_b, winner = oriented_result(row, match, team_names_match)
+    if won_a is not None:
+        match.maps_won_a = won_a
+    if won_b is not None:
+        match.maps_won_b = won_b
+    if winner is not None:
+        match.winner = winner
     session.flush()
     return match
 

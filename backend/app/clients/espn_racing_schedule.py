@@ -14,6 +14,11 @@ import re
 
 from app.clients.base import get_json
 
+# The race session's ESPN abbreviation. Defined in espn_racing_results and
+# re-stated here rather than imported, to keep the schedule client free of a
+# dependency on the results client.
+RACE_SESSION = "Race"
+
 log = logging.getLogger("espn_racing_schedule")
 
 _ESPN = {
@@ -77,19 +82,75 @@ def _parse(s: str | None) -> datetime.datetime | None:
         return None
 
 
+# How far either side of today to ask the scoreboard for real event times. Back
+# far enough to still resolve a race that just ran, forward far enough to cover
+# everything with live markets.
+_EVENT_WINDOW_BACK = datetime.timedelta(days=30)
+_EVENT_WINDOW_FWD = datetime.timedelta(days=120)
+
+
+def _fetch_event_starts(series: str, url: str) -> list[tuple[set[str], datetime.datetime]]:
+    """Real green-flag times from ESPN's scoreboard EVENTS, over a date range.
+
+    THE CALENDAR IS NOT THE START TIME, which is what this exists to fix. A
+    calendar entry is a race-weekend window marker and runs consistently LATE:
+
+        Grand Prix of Portland   calendar 2026-08-09T23:00Z   event 2026-08-09T20:00Z
+        NASCAR Cup at Iowa       calendar 2026-08-09T22:30Z   event 2026-08-09T19:30Z
+        Grand Prix of Ontario    calendar 2026-08-16T19:00Z   event 2026-08-16T16:00Z
+
+    A flat +3h on every race checked. Because the app treats start_time as the
+    live-race cutoff, that made races look UPCOMING for three hours after the
+    green flag and kept staking them -- the user reported exactly this.
+    """
+    today = datetime.datetime.utcnow().date()
+    rng = f"{(today - _EVENT_WINDOW_BACK):%Y%m%d}-{(today + _EVENT_WINDOW_FWD):%Y%m%d}"
+    try:
+        data = get_json(f"{url}?dates={rng}")
+    except Exception:
+        log.exception("espn racing scoreboard fetch failed for %s", series)
+        return []
+    out: list[tuple[set[str], datetime.datetime]] = []
+    for e in data.get("events") or []:
+        if not isinstance(e, dict):
+            continue
+        comps = [c for c in (e.get("competitions") or []) if isinstance(c, dict)]
+        # An F1 weekend is ONE event holding five competitions (FP1, FP2, FP3,
+        # Qual, Race), so comps[0] is Friday practice -- taking it dated the
+        # Italian GP to Sep 4 10:30 instead of Sep 6 13:00. Pick the race
+        # session by name; NASCAR/IndyCar carry a single untyped competition
+        # and fall through to it unchanged.
+        race = next((c for c in comps
+                     if ((c.get("type") or {}).get("abbreviation") or "") == RACE_SESSION), None)
+        dt = _parse((race or (comps[0] if comps else {})).get("date") or e.get("date"))
+        toks = _tokens(e.get("name") or e.get("shortName"))
+        if dt and toks:
+            out.append((toks, dt))
+    return out
+
+
 def fetch_race_dates() -> dict[str, list[tuple[set[str], datetime.datetime]]]:
-    """{series: [(name_tokens, race_date)]} from ESPN's full-season calendars.
-    endDate is the race day (F1's Sunday); single-day NASCAR/IRL have start==end."""
+    """{series: [(name_tokens, race_start)]}.
+
+    Real scoreboard EVENT times first -- those are the green flag. The season
+    calendar is only a fallback, for races outside the scoreboard window (a
+    championship market months out, say), because its times are a race-weekend
+    marker rather than a start and run ~3h late; see _fetch_event_starts.
+
+    Event entries are listed FIRST so resolve_race_date's strict-improvement
+    scan (`n > best_n`) keeps the real start when both sources match a name
+    equally well.
+    """
     out: dict[str, list[tuple[set[str], datetime.datetime]]] = {}
     for series, url in _ESPN.items():
+        races = _fetch_event_starts(series, url)
         try:
             data = get_json(url)
         except Exception:
             log.exception("espn racing calendar fetch failed for %s", series)
-            out[series] = []
+            out[series] = races
             continue
         lg = (data.get("leagues") or [{}])[0]
-        races: list[tuple[set[str], datetime.datetime]] = []
         for c in lg.get("calendar") or []:
             if not isinstance(c, dict):
                 continue
