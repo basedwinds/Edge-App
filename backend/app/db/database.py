@@ -54,7 +54,14 @@ _MISSING_COLUMNS_BY_TABLE = {
         ("valorant_match_id", "INTEGER"),
         ("cs2_match_id", "INTEGER"),
         ("lol_match_id", "INTEGER"),
+        ("cod_match_id", "INTEGER"),
         ("race_event_id", "INTEGER"),
+    ],
+    # is_live is here rather than only on the model because cod_matches can
+    # already exist without it -- the table was created one commit before the
+    # column was added. Same additive path every other late column took.
+    "cod_matches": [
+        ("is_live", "BOOLEAN DEFAULT 0"),
     ],
     "news_adjustment_cache": [("home_scoring_penalty_pp", "FLOAT"), ("away_scoring_penalty_pp", "FLOAT")],
     "placed_bets": [
@@ -69,6 +76,7 @@ _MISSING_COLUMNS_BY_TABLE = {
         ("valorant_match_id", "INTEGER"),
         ("cs2_match_id", "INTEGER"),
         ("lol_match_id", "INTEGER"),
+        ("cod_match_id", "INTEGER"),
         ("paper", "BOOLEAN DEFAULT 0"),
         ("race_event_id", "INTEGER"),
         ("original_start_time", "VARCHAR"),

@@ -138,6 +138,23 @@ DEFAULT_LOL_ALLOCATION_PCT = 0.15
 LOL_FUTURES_SUBPOOL_PCT_KEY = "lol_futures_subpool_pct"
 DEFAULT_LOL_FUTURES_SUBPOOL_PCT = 0.15
 
+# Call of Duty. _discover_allocation_keys() picks this up by NAME, so the
+# over-allocation guard and the /settings total both count it automatically --
+# that introspection exists precisely so adding a sport cannot be forgotten in
+# one place and remembered in another.
+#
+# Deliberately smaller than the 0.15 the established titles carry: CoD is new,
+# its model has NOT been backtested against real market odds, and it ships
+# model_validated: false. A new sport should not open on the same allocation as
+# one with a settled record.
+COD_ALLOCATION_PCT_KEY = "cod_allocation_pct"
+DEFAULT_COD_ALLOCATION_PCT = 0.04
+COD_FUTURES_SUBPOOL_PCT_KEY = "cod_futures_subpool_pct"
+# Zero: Kalshi lists no CoD futures at all (checked live -- KXCODGAME is
+# match-winner only, and the two Esports World Cup series are empty stubs).
+# A futures sub-pool with nothing to buy is dead capital.
+DEFAULT_COD_FUTURES_SUBPOOL_PCT = 0.0
+
 # Added 2026-07-16: these were hardcoded constants in staking.py -- moved to
 # user-editable settings so tuning them doesn't need a code round-trip.
 # Defaults match staking.py's original constants exactly (FRACTIONAL_KELLY/
@@ -773,6 +790,19 @@ def get_lol_pool_dollars(session: Session) -> tuple[float, float]:
     lol_futures_subpool_pct = _get_float(session, LOL_FUTURES_SUBPOOL_PCT_KEY, DEFAULT_LOL_FUTURES_SUBPOOL_PCT)
     lol_pool = bankroll * lol_allocation_pct * _allocation_scale(session)
     return lol_pool * (1.0 - lol_futures_subpool_pct), lol_pool * lol_futures_subpool_pct
+
+
+def get_cod_pool_dollars(session: Session) -> tuple[float, float]:
+    """(weekly, futures) for Call of Duty. The futures half is 0.0 by default
+    because Kalshi lists no CoD futures -- see DEFAULT_COD_FUTURES_SUBPOOL_PCT.
+    The tuple shape is kept anyway so this matches every other esports getter
+    and needs no special-casing at the call site."""
+    bankroll = _get_float(session, BANKROLL_KEY, DEFAULT_BANKROLL)
+    cod_allocation_pct = _get_float(session, COD_ALLOCATION_PCT_KEY, DEFAULT_COD_ALLOCATION_PCT)
+    cod_futures_subpool_pct = _get_float(session, COD_FUTURES_SUBPOOL_PCT_KEY,
+                                         DEFAULT_COD_FUTURES_SUBPOOL_PCT)
+    cod_pool = bankroll * cod_allocation_pct * _allocation_scale(session)
+    return cod_pool * (1.0 - cod_futures_subpool_pct), cod_pool * cod_futures_subpool_pct
 
 
 def get_unit_dollars(session: Session) -> float:

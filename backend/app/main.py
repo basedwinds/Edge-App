@@ -10,7 +10,7 @@ from app.api.response_cache import ResponseCacheMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.routers import backtests, catalog, cfb_markets, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
+from app.api.routers import backtests, catalog, cfb_markets, cod_markets, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
 from app.config import settings
 from app.db.database import get_session, init_db
 from app.db.models import MarketSnapshot, Setting
@@ -24,6 +24,7 @@ from app.ingestion.poller_mma import run_full_refresh_mma
 from app.ingestion.poller_tennis import run_full_refresh_tennis
 from app.ingestion.poller_soccer import run_full_refresh_soccer
 from app.ingestion.poller_valorant import run_full_refresh_valorant
+from app.ingestion.poller_cod import run_full_refresh_cod
 from app.ingestion.poller_cs2 import run_full_refresh_cs2
 from app.ingestion.poller_lol import run_full_refresh_lol
 from app.ingestion.poller_racing import run_full_refresh_racing
@@ -93,7 +94,7 @@ async def lifespan(app: FastAPI):
     pollers = [
         run_full_refresh, run_full_refresh_nba, run_full_refresh_wnba, run_full_refresh_mlb, run_full_refresh_mma,
         run_full_refresh_tennis, run_full_refresh_soccer, run_full_refresh_valorant,
-        run_full_refresh_cs2, run_full_refresh_lol, run_full_refresh_racing,
+        run_full_refresh_cs2, run_full_refresh_cod, run_full_refresh_lol, run_full_refresh_racing,
         run_full_refresh_cfb,
     ]
     # EVERY startup timer MUST be daemon, and must be cancelled on shutdown.
@@ -214,6 +215,7 @@ def create_app() -> FastAPI:
     app.include_router(soccer_markets.router)
     app.include_router(valorant_markets.router)
     app.include_router(cs2_markets.router)
+    app.include_router(cod_markets.router)
     app.include_router(lol_markets.router)
     app.include_router(racing_markets.router)
     app.include_router(settings_router.router)

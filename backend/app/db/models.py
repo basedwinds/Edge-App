@@ -504,6 +504,14 @@ class CodMatch(Base):
     maps_won_b = Column(Integer, nullable=True)
     winner = Column(String, nullable=True)  # "team_a" | "team_b" | null
 
+    # THE SOURCE TELLS US, we do not infer it. Unique among this app's sports:
+    # every other one decides "has it started?" by comparing a platform start
+    # time against the clock, and that failed twice on 2026-08-09 -- a live
+    # soccer match recommended at 1-0 down, and a live CoD match (Heretics 2-0
+    # Falcons) whose Kalshi occurrence_datetime was four hours late. The router
+    # gates on this flag directly; the clock stays as a backstop.
+    is_live = Column(Boolean, nullable=False, default=False)
+
 
 class LolMatch(Base):
     """One League of Legends esports series (Bo1/Bo3/Bo5) -- parallel to
@@ -617,6 +625,7 @@ class Market(Base):
     valorant_match_id = Column(Integer, ForeignKey("valorant_matches.id"), nullable=True)
     cs2_match_id = Column(Integer, ForeignKey("cs2_matches.id"), nullable=True)
     lol_match_id = Column(Integer, ForeignKey("lol_matches.id"), nullable=True)
+    cod_match_id = Column(Integer, ForeignKey("cod_matches.id"), nullable=True)
     race_event_id = Column(Integer, ForeignKey("race_events.id"), nullable=True)  # motorsport (f1/irl/nascar)
     # moneyline | spread | total | division_winner | conference_champion |
     # one_seed | super_bowl_champion | playoff_qualifier -- the futures
@@ -781,6 +790,7 @@ class PlacedBet(Base):
     valorant_match_id = Column(Integer, nullable=True)  # present only for Valorant match-tied market types
     cs2_match_id = Column(Integer, nullable=True)  # present only for CS2 match-tied market types
     lol_match_id = Column(Integer, nullable=True)  # present only for LoL match-tied market types
+    cod_match_id = Column(Integer, nullable=True)  # present only for CoD match-tied market types
     race_event_id = Column(Integer, nullable=True)  # present only for motorsport (f1/irl/nascar) bets
     stake_pool = Column(String, nullable=False)  # "weekly" | "futures"
     stake_dollars = Column(Float, nullable=False)
@@ -1004,6 +1014,7 @@ class ModelObservation(Base):
     valorant_match_id = Column(String)
     cs2_match_id = Column(String)
     lol_match_id = Column(String)
+    cod_match_id = Column(String)
     race_event_id = Column(Integer)
 
     # --- what was believed, and what the market said, at observation time ----
