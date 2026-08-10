@@ -426,6 +426,25 @@ export interface SettingsPayload {
   racing_weekly_pool_dollars: number;
 }
 
+/** Whether the backend's in-memory model state is built yet.
+ *
+ * The rating services live in process memory and start empty, so for the first
+ * few minutes after a restart a sport's endpoint either blocks while it
+ * rebuilds (soccer /markets measured at 159s, tennis /futures at 350s) or
+ * answers instantly with every model_prob null. Both look like a broken app.
+ * This is a cheap read of those caches -- it never triggers a rebuild -- so the
+ * UI can say "still building" instead of showing an empty table. */
+export type WarmupStatus = {
+  ready: boolean;
+  warm: number;
+  total: number;
+  services: Record<string, boolean | null>;
+};
+
+export async function fetchWarmup(): Promise<WarmupStatus> {
+  return apiGet<WarmupStatus>("/warmup");
+}
+
 export async function fetchSettings(): Promise<SettingsPayload> {
   return apiGet<SettingsPayload>("/settings");
 }

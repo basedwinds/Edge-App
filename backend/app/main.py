@@ -10,7 +10,7 @@ from app.api.response_cache import ResponseCacheMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.routers import backtests, catalog, cfb_markets, cod_markets, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, soccer_markets, tennis_markets, valorant_markets, wnba_markets
+from app.api.routers import backtests, catalog, cfb_markets, cod_markets, cs2_markets, health as health_router, lol_markets, markets, mlb_markets, mma_markets, nba_markets, placed_bets, racing_markets, settings as settings_router, warmup, soccer_markets, tennis_markets, valorant_markets, wnba_markets
 from app.config import settings
 from app.db.database import get_session, init_db
 from app.db.models import MarketSnapshot, Setting
@@ -218,6 +218,7 @@ def create_app() -> FastAPI:
     app.include_router(cod_markets.router)
     app.include_router(lol_markets.router)
     app.include_router(racing_markets.router)
+    app.include_router(warmup.router)
     app.include_router(settings_router.router)
     app.include_router(catalog.router)
     app.include_router(placed_bets.router)
