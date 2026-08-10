@@ -54,8 +54,12 @@ export interface SportMeta {
    *  CFB use numeric/ESPN ids that can collide across sports; NFL/NBA/MLB ids are
    *  already globally unique strings. */
   prefixGameId?: boolean;
-  /** True where the sport has its own /futures PAGE. CFB is false on purpose --
-   *  its futures are market types inside /cfb/markets, not a separate endpoint. */
+  /** True where the sport has its own /futures PAGE in this app.
+   *
+   *  This is about the PAGE, not the endpoint -- MMA has an endpoint and no
+   *  page. The comment that used to sit here claimed CFB had no separate
+   *  futures endpoint at all; /cfb/futures returns 1,380 priced rows, and both
+   *  CFB and WNBA now have pages. Check before trusting a flag like this. */
   hasFuturesPage: boolean;
 }
 
@@ -79,10 +83,14 @@ export interface GameIdFields {
 export const SPORTS: SportMeta[] = [
   { key: "nfl", label: "NFL", routePrefix: "", gameIdField: "nflGameId", hasFuturesPage: true },
   { key: "nba", label: "NBA", routePrefix: "/nba", gameIdField: "nbaGameId", hasFuturesPage: true },
-  { key: "wnba", label: "WNBA", routePrefix: "/wnba", gameIdField: "wnbaGameId", hasFuturesPage: false },
-  { key: "cfb", label: "College Football", routePrefix: "/cfb", gameIdField: "cfbGameId", prefixGameId: true, hasFuturesPage: false },
+  { key: "wnba", label: "WNBA", routePrefix: "/wnba", gameIdField: "wnbaGameId", hasFuturesPage: true },
+  { key: "cfb", label: "College Football", routePrefix: "/cfb", gameIdField: "cfbGameId", prefixGameId: true, hasFuturesPage: true },
   { key: "mlb", label: "MLB", routePrefix: "/mlb", gameIdField: "mlbGameId", hasFuturesPage: true },
   { key: "soccer", label: "Soccer", routePrefix: "/soccer", gameIdField: "soccerMatchId", hasFuturesPage: true },
+  // MMA has NO dedicated futures PAGE, which is what this flag means -- but it
+  // does have a /mma/futures ENDPOINT, and that endpoint is wired into the
+  // cross-sport futures list. The two are separate questions; the backend's
+  // has_futures_endpoint is the one that decides cache-warming.
   { key: "mma", label: "MMA", routePrefix: "/mma", gameIdField: "mmaFightId", hasFuturesPage: false },
   { key: "tennis", label: "Tennis", routePrefix: "/tennis", gameIdField: "tennisMatchId", hasFuturesPage: true },
   { key: "valorant", label: "Valorant", routePrefix: "/valorant", gameIdField: "valorantMatchId", prefixGameId: true, hasFuturesPage: true },

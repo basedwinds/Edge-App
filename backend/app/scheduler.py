@@ -75,13 +75,20 @@ _WARM_PATHS = [
     # by hand -- this list and paper_logger's drifted apart once already.
     *app_sports.MARKETS_PATHS,
     "/markets/cross-platform-divergences",
-    # Futures endpoints that run a real model (tennis draw sim, esports
-    # tournament Monte Carlo, team-sport season sims) -- warmed too so a
-    # cold-Elo compute right after restart never gets cached and served stale
-    # (the exact class of bug the startup Elo warm + this warmer exist to kill),
-    # and so their heavier recompute stays off the user's request path.
-    "/markets/futures", "/nba/futures", "/mlb/futures", "/tennis/futures",
-    "/soccer/futures", "/valorant/futures", "/cs2/futures",
+    # Every sport's FUTURES endpoint, also DERIVED -- for the same reason as the
+    # markets paths, and after the same failure. These run a real model (tennis
+    # draw sim, esports tournament Monte Carlo, team-sport season sims, racing
+    # championship sim), so warming them keeps a cold-model compute from being
+    # cached and served stale -- the exact bug class the startup Elo warm and
+    # this warmer both exist to kill.
+    #
+    # This used to be seven paths typed by hand and it was missing five:
+    # /wnba, /cfb, /lol, /mma and /racing. Unwarmed, each computed live on the
+    # user's request (racing measured 21.9s) and then cached whatever it built
+    # -- including an all-unpriced payload, when the request landed before the
+    # racing poller had warmed the championship cache. Racing futures could
+    # therefore sit blank for the full TTL with nothing indicating why.
+    *app_sports.FUTURES_PATHS,
 ]
 
 

@@ -53,6 +53,14 @@ _SERVICES: list[tuple[str, str, str]] = [
     ("cod", "app.models.baseline.elo_service_cod", "state"),
     ("soccer", "app.models.baseline.elo_service_soccer", "states_by_league"),
     ("racing", "app.models.baseline.racing_ratings", "*"),
+    # Racing needs BOTH caches and they warm separately. racing_ratings fills
+    # from the DB almost immediately, while racing_championship is warmed by the
+    # racing poller -- whose first run is ~8 minutes after boot. Probing only
+    # the ratings made racing report warm while all 152 championship futures
+    # were still unpriced, which is exactly the false all-clear this endpoint
+    # exists to prevent. Listed under the same label so either being cold keeps
+    # racing out of `ready`.
+    ("racing", "app.models.baseline.racing_championship", "*"),
 ]
 
 
@@ -99,7 +107,18 @@ def warmup_status(session: Session = Depends(get_session)):
     """
     services: dict[str, bool | None] = {}
     for label, module_path, key in _SERVICES:
-        services[label] = _is_warm(module_path, key)
+        warm = _is_warm(module_path, key)
+        # A label may appear more than once (racing has two caches). Warm only
+        # when EVERY probe under that label is warm; unknown never upgrades a
+        # known-cold to warm.
+        if label in services:
+            prev = services[label]
+            if prev is None:
+                services[label] = warm
+            elif warm is not None:
+                services[label] = bool(prev and warm)
+        else:
+            services[label] = warm
 
     try:
         rows = (session.query(Market.sport, func.count(Market.id))
