@@ -65,6 +65,7 @@ _MISSING_COLUMNS_BY_TABLE = {
     ],
     "news_adjustment_cache": [("home_scoring_penalty_pp", "FLOAT"), ("away_scoring_penalty_pp", "FLOAT")],
     "placed_bets": [
+        ("was_recommended", "BOOLEAN"),
         ("sport", "VARCHAR"),
         ("nba_game_id", "VARCHAR"),
         ("wnba_game_id", "VARCHAR"),

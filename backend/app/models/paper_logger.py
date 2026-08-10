@@ -390,10 +390,19 @@ def run_paper_log():
 
         with SessionLocal() as _s:
             _settings = _read_all(_s).model_dump()
-        recommended_ids = {r.id for r in compute_recommended(_settings)}
+        rec_failures: list = []
+        recommended_ids = {r.id for r in compute_recommended(_settings, failures=rec_failures)}
+        if rec_failures:
+            # A PARTIAL set must not be used to say "not recommended" -- see
+            # PlacedBet.was_recommended. Discard it for membership purposes;
+            # alerts still fire on what was computed.
+            log.warning("recommended set is PARTIAL (%d endpoints failed: %s) -- "
+                        "was_recommended will be recorded as unknown this run",
+                        len(rec_failures), rec_failures[:4])
     except Exception:
         log.exception("recommended-set computation failed; skipping alerts this run")
         recommended_ids = set()
+        rec_failures = ["<computation raised>"]
     new_alerts: list[dict] = []  # newly-qualified bets worth pushing to Discord
     with db_write_lock():
         session = SessionLocal()
@@ -452,6 +461,19 @@ def run_paper_log():
                 if m is None:
                     continue
                 bet = PlacedBet(
+                    # Recorded AT LOG TIME from the set already computed above
+                    # for alerts. It cannot be derived later: the recommended
+                    # set depends on pools, open bets and prices as they were at
+                    # this instant. See PlacedBet.was_recommended for why the
+                    # distinction matters to every number this record produces.
+                    #
+                    # `recommended_ids` is empty when that computation FAILED
+                    # (it is wrapped in its own try/except so a failure only
+                    # costs alerts, not logging). Writing False in that case
+                    # would be a lie -- it would mark every bet in the run as
+                    # not-recommended -- so an empty set records None instead.
+                    was_recommended=(m.id in recommended_ids)
+                    if (recommended_ids and not rec_failures) else None,
                     market_id=m.id,
                     market_type=m.market_type,
                     source=m.source,

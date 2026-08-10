@@ -814,6 +814,22 @@ class PlacedBet(Base):
     # but are EXCLUDED from real-money views (/locked portfolio budget, /stats
     # ROI). Default False so every existing/real bet is unaffected.
     paper = Column(Boolean, nullable=False, default=False)
+    # Was this row in the RECOMMENDED set at the moment it was logged?
+    #
+    # WHY IT MATTERS. The paper record is this app's only forward-validation
+    # harness, and it deliberately logs BELOW the bet gate (PAPER_MIN_EDGE) to
+    # gather measurement coverage. That is the right call -- but it means the
+    # record is dominated by rows the app never recommended: measured
+    # 2026-08-10, only 8 of 43 staked paper bets that day were in
+    # compute_recommended's set. Any ROI, hit-rate or CLV computed over the
+    # whole table therefore describes a portfolio that could never have been
+    # held, which is precisely the number this harness exists to produce.
+    #
+    # NULL means "logged before this flag existed" -- deliberately tri-state so
+    # old rows are not silently counted as either. Recorded at log time rather
+    # than derived later, because the recommended set depends on pools, open
+    # bets and prices as they were THEN and cannot be reconstructed afterwards.
+    was_recommended = Column(Boolean, nullable=True)
     # The game/match start time as it stood WHEN THIS BET WAS PLACED. Compared
     # against the live-resolved start in /open to detect a reschedule (the game
     # moved to a later time/day) -- so the tracker can show the new date AND keep

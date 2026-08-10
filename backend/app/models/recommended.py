@@ -271,12 +271,19 @@ def _builder_for(sport: str):
     return {"racing": _build_racing, "wnba": _build_wnba}.get(sport, _build_sport)
 
 
-def _fetch(client: httpx.Client, ep: str) -> list[dict]:
+def _fetch(client: httpx.Client, ep: str, failures: list | None = None) -> list[dict]:
     try:
         r = client.get(f"{_BASE}{ep}")
         return r.json() if r.status_code == 200 else []
     except Exception:
         log.exception("recommended fetch failed for %s", ep)
+        # REPORT IT, do not just log it. Returning [] alone makes a PARTIAL
+        # set indistinguishable from a genuinely small one, and callers that
+        # record membership (paper_logger.was_recommended) would then mark
+        # genuinely-recommended bets as False. Observed live: one sport
+        # timed out and the set came back short with no signal at all.
+        if failures is not None:
+            failures.append(ep)
         return []
 
 
@@ -306,14 +313,19 @@ def _not_ready(r: _Row, rd: dict) -> bool:
     return False
 
 
-def compute_recommended(settings: dict, snapshot: dict | None = None) -> list[_Row]:
+def compute_recommended(settings: dict, snapshot: dict | None = None,
+                        failures: list | None = None) -> list[_Row]:
     """The full cross-sport Recommended GAMES set (the 'All Recommended Bets'
     tab), as a flat list sorted by stake desc -- identical to loadCombined +
     RecommendedBetsTable's readiness filter.
 
     `snapshot` (verification only): {sport: [market rows], "readiness": {...}} to
     compute from FROZEN data instead of live endpoints, so a diff against the
-    frontend measures logic differences rather than 5-min price drift."""
+    frontend measures logic differences rather than 5-min price drift.
+
+    `failures` (optional): pass a list to be told WHICH endpoints failed. A
+    caller that records membership must treat a non-empty list as "unknown"
+    rather than "not recommended" -- see paper_logger.was_recommended."""
     out: list[_Row] = []
     if snapshot is not None:
         rd = snapshot.get("readiness") or {}
@@ -328,7 +340,7 @@ def compute_recommended(settings: dict, snapshot: dict | None = None) -> list[_R
             for sport, ep, pool_key in _SPORTS:
                 if is_shutting_down():  # see app/shutdown.py -- unkillable worker
                     break
-                rows = [_Row(sport, d) for d in _fetch(client, ep)]
+                rows = [_Row(sport, d) for d in _fetch(client, ep, failures)]
                 out.extend(_builder_for(sport)(rows, settings.get(pool_key) or 0.0))
     out = [r for r in out if not _not_ready(r, rd)]  # readiness runs at display, after budget cap
     out.sort(key=lambda r: -(r.stake or 0.0))
