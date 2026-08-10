@@ -362,6 +362,45 @@ def foreign_league_seasons(session: Session) -> list[dict]:
 _CACHE_AWARE = {"phantom_priced_markets", "flat_ladders", "resolved_looking_active_markets"}
 
 
+def duplicated_paper_bets(session: Session, days: int = 3) -> list[dict]:
+    """Markets carrying MORE THAN ONE staked paper bet in the recent window.
+
+    The paper record is this app's only validation harness, so a market logged
+    twice is not a cosmetic duplicate -- it silently doubles that pick's weight
+    in every forward-CLV and hit-rate number computed from it.
+
+    THIS EXACT BUG HAPPENED. Until 2026-08-07 the logger gated on the PENDING
+    paper set alone, so a paper bet's market became loggable again the moment it
+    settled: the next poll logged a fresh bet, the settler graded it seconds
+    later off the already-known result, and the loop repeated every cycle. Six
+    markets reached 119 staked paper bets each -- 118 of them logged on a single
+    day -- and F1 as a whole hit a 79x duplication factor.
+
+    The fix (one paper bet per market, ever) holds: 464 staked paper bets since,
+    max 1 per market, zero duplicates. Nothing was checking that it KEEPS
+    holding, which is what this is for. Bounded to a recent window on purpose --
+    the pre-fix rows are still in the table and would otherwise make this fire
+    forever about history nobody can change.
+    """
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    rows = (
+        session.query(PlacedBet.market_id, func.count(PlacedBet.id))
+        .filter(PlacedBet.paper == True,  # noqa: E712
+                PlacedBet.stake_dollars > 0,
+                PlacedBet.placed_at >= cutoff)
+        .group_by(PlacedBet.market_id)
+        .having(func.count(PlacedBet.id) > 1)
+        .all()
+    )
+    return [
+        {"market_id": mid, "staked_paper_bets": n,
+         "detail": f"market {mid} has {n} staked paper bets in the last {days}d "
+                   f"-- the one-per-market rule has regressed, and every paper "
+                   f"metric now double-counts this pick"}
+        for mid, n in rows
+    ]
+
+
 def run_all(session: Session, cache: dict | None = None) -> dict:
     """Every invariant, as {check_name: rows}. Never raises -- a check that
     fails is reported as an error string rather than taking the whole report
@@ -380,6 +419,7 @@ def run_all(session: Session, cache: dict | None = None) -> dict:
         "resolver_dependent_teams": resolver_dependent_teams,
         "stale_bet_market_types": stale_bet_market_types,
         "foreign_league_seasons": foreign_league_seasons,
+        "duplicated_paper_bets": duplicated_paper_bets,
     }
     cache = {} if cache is None else cache
     out: dict = {}
