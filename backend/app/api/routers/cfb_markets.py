@@ -19,6 +19,8 @@ markets, so there are no closing prices to backtest edge against at all.
 """
 import datetime
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -32,9 +34,11 @@ from app.models import calibration_temp
 from app.models import game_lines_cfb, playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
 from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, size_stake_dollars
+from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_nested_futures_cap, has_real_trading, kelly_fraction, size_stake_dollars
 
 router = APIRouter(prefix="/cfb", tags=["cfb"])
+
+log = logging.getLogger("cfb_markets")
 
 # Shown on rows whose team's Elo was earned outside the FBS pool -- see
 # elo_service_cfb.MIN_FBS_CONNECTIVITY for why the rating is not comparable and
@@ -540,5 +544,15 @@ def list_cfb_futures(session: Session = Depends(get_session)):
                 else None
             ),
         ))
+    # Collapse nested bracket legs to a single staked position per team. Done
+    # HERE, in the backend, rather than in the cross-sport list: the paper
+    # logger gates on suggested_stake_dollars, so a frontend-only fix would
+    # still have logged four correlated Indiana bets as four independent paper
+    # trades and quietly corrupted the very forward-CLV record we use to judge
+    # this model.
+    nested_zeroed = apply_nested_futures_cap(out, "cfb")
+    if nested_zeroed:
+        log.info("cfb futures: collapsed %d nested bracket legs to one stake per team",
+                 nested_zeroed)
     out.sort(key=lambda r: (r.market_type, -(r.implied_prob or 0)))
     return out

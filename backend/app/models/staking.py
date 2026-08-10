@@ -497,3 +497,101 @@ def size_stake_dollars(
         if stake <= 0:
             return None
     return stake
+
+
+# ---------------------------------------------------------------------------
+# Nested futures: one opinion, listed as several markets.
+# ---------------------------------------------------------------------------
+#
+# A bracket lists the SAME opinion at several depths. For College Football:
+# making the 12-team field, earning a top-4 seed, reaching the quarterfinal,
+# the semifinal, the final, and winning it. For one team those are nested --
+# each implies the one before it -- so staking them separately is not four
+# bets, it is one position sized four times.
+#
+# Found live on 2026-08-10: Indiana was staked on four legs at once (+21.8pp
+# playoff, +41.6pp quarterfinal, +44.8pp finalist, +32.6pp champion), roughly
+# 4x the intended single-team exposure.
+#
+# Combined.tsx already collapses the WITHIN-type version of this (a win-total
+# ladder: 45+ implies 40+ implies 35+). It cannot collapse this one, because
+# its dedupe key includes market_type and these are six different types. Same
+# bug, one level up.
+#
+# The nesting is VERIFIED against the model's own output rather than assumed:
+# across 50 teams carrying two or more legs, 156 adjacent comparisons, zero
+# violations of P(playoff) >= P(QF) >= P(semi) >= P(final) >= P(champion), and
+# top4_seed <= quarterfinal for all 45 comparable teams (a bye means you are
+# already in the quarterfinal).
+#
+# Widest-first, and each tuple must stay ordered that way.
+NESTED_FUTURES_FAMILIES: dict[str, tuple[tuple[str, ...], ...]] = {
+    "cfb": (
+        (
+            "cfb_playoff",
+            "cfb_top4_seed",
+            "cfb_quarterfinal",
+            "cfb_semifinal",
+            "cfb_finalist",
+            "cfb_national_champion",
+        ),
+    ),
+}
+
+NESTED_LEG_NOTE = (
+    "Not staked separately: this is a narrower leg of a bet already taken on the same team "
+    "(the bracket legs are nested, so each implies the one before it). Staking them all would "
+    "size one position several times over. Shown for tracking."
+)
+
+
+def apply_nested_futures_cap(rows: list, sport: str) -> int:
+    """Keep ONE staked leg per (team, family); zero the stake on the rest.
+
+    Returns how many legs were zeroed. Mutates rows in place.
+
+    WHICH LEG SURVIVES: the WIDEST one that the staking gates already approved
+    -- deliberately not the highest-edge one.
+    -
+    Taking the biggest edge looks obviously right and is backwards here. Each
+    extra round compounds elo_cfb's deliberately wide rating spread, so the
+    deeper the leg, the more inflated its model probability, and therefore the
+    larger its apparent edge (playoff_sim_cfb's own docstring says exactly
+    this, and that the qualification markets "which need only one round" are
+    much less affected). Indiana was the live case: +21.8pp on the widest leg
+    rising to +44.8pp on a narrow one. Selecting on edge would systematically
+    pick the most compounded, least trustworthy leg every time -- adverse
+    selection against ourselves.
+    -
+    This only ever REMOVES stakes, never adds one, so it cannot promote a leg
+    that some other gate rejected: the survivor is chosen from rows that were
+    already staked.
+    """
+    families = NESTED_FUTURES_FAMILIES.get(sport)
+    if not families:
+        return 0
+    zeroed = 0
+    for family in families:
+        depth = {mt: i for i, mt in enumerate(family)}
+        best: dict[str, int] = {}          # team -> depth of the widest staked leg
+        for r in rows:
+            d = depth.get(r.market_type)
+            if d is None or not r.team or not r.suggested_stake_dollars:
+                continue
+            if r.team not in best or d < best[r.team]:
+                best[r.team] = d
+        for r in rows:
+            d = depth.get(r.market_type)
+            if d is None or not r.team or not r.suggested_stake_dollars:
+                continue
+            if d == best.get(r.team):
+                continue
+            r.suggested_stake_dollars = None
+            r.suggested_stake_units = None
+            r.kelly_fraction = None
+            r.stake_pool = None
+            # Keep any existing note (the approximate badge) and add this one,
+            # so a row never silently loses its caveat to this pass.
+            r.model_note = f"{r.model_note} {NESTED_LEG_NOTE}" if r.model_note else NESTED_LEG_NOTE
+            zeroed += 1
+    return zeroed
