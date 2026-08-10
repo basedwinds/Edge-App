@@ -144,6 +144,39 @@ LIVE_TRADING_MIN_PRICE_SWING = 0.10
 LIVE_TRADING_SHORT_WINDOW_MIN_VOLUME_DELTA = 50_000.0
 LIVE_TRADING_SHORT_WINDOW_MIN_PRICE_SWING = 0.10
 
+# SOCCER AND ESPORTS DELIBERATELY HAVE NO SHORT-WINDOW BARS. Measured
+# 2026-08-10 over a 60-minute window, splitting by whether the stored start
+# time had passed:
+#
+#     soccer    STARTED  n=  9  vol_delta med=  0  p90=   240   swing p90=0.100
+#     soccer    upcoming n=916  vol_delta med=  0  p90=     0   max=35,909
+#     cs2       STARTED  n= 22  vol_delta med=  4  p90=   328   max= 4,351
+#     cs2       upcoming n=142  vol_delta med=  0  p90=   379   max= 4,329
+#     lol       STARTED  n=  8  vol_delta med=956  p90=28,455
+#     valorant  STARTED  n= 10  vol_delta med= 49  p90= 5,831
+#
+# Soccer and CS2 OVERLAP -- an upcoming soccer market moved 35,909 while
+# started ones barely moved -- so no bar separates them. LoL and Valorant hint
+# at separation but on n=8 and n=10.
+#
+# Worse, those labels come from estimated_start_time, which is THE FIELD whose
+# unreliability caused the Santos incident in the first place, and unlike
+# tennis there is no independent live feed (Flashscore is tennis-only here) to
+# label against. Tennis's bars were calibrated against real live labels with a
+# ~3,000x gap between the two populations; nothing of that quality exists here.
+#
+# Picking numbers anyway would repeat exactly what
+# SOCCER_LIVE_TRADING_MIN_VOLUME_DELTA below already records as its own
+# weakness -- a threshold "NOT validated against a real observed live-trading
+# incident". One unvalidated constant in this file is a known debt; adding three
+# more, in the path that decides whether real money is staked on a match already
+# in play, is not.
+#
+# TO UNBLOCK: either an independent in-play feed for these sports, or one
+# confirmed live incident per sport to calibrate against the way Kothari/Hans
+# calibrated tennis. Until then these callers pass no bars and the arm stays
+# inert for them -- which is why the bars are caller-supplied with no default.
+
 # Soccer-specific volume threshold (added 2026-07-19, this app's own first
 # calibration pass for a sport OTHER than Tennis): checked live against
 # real Kalshi Soccer moneyline volumes the same day this guard's shared
@@ -224,6 +257,8 @@ def looks_already_live_by_trading(
     min_volume_delta: float = LIVE_TRADING_MIN_VOLUME_DELTA,
     min_price_swing: float = LIVE_TRADING_MIN_PRICE_SWING,
     short_window_snapshots: list[tuple[float | None, float | None]] | None = None,
+    short_window_min_volume_delta: float | None = None,
+    short_window_min_price_swing: float | None = None,
 ) -> bool:
     """`current_price` is this market's own latest snapshot price (checked
     against the same EXTREME_LOW/EXTREME_HIGH as ladder_looks_resolved --
@@ -246,12 +281,19 @@ def looks_already_live_by_trading(
     # extremity. See LIVE_TRADING_SHORT_WINDOW_* for the calibration against
     # Flashscore's own live labels and for why rate, not price level, is what
     # separates a live match from a liquid pregame one.
-    if short_window_snapshots:
+    # THE CALLER MUST SUPPLY ITS OWN BARS. No default, deliberately: Kalshi
+    # volume scale differs by 1-2 ORDERS OF MAGNITUDE between sports (tennis
+    # 100k vs LoL 400 on the six-hour arm), so a shared number is either a
+    # no-op or a false-positive machine depending on where it lands. Silently
+    # defaulting to tennis's 50,000 would make this arm dead code everywhere
+    # else while LOOKING active -- the exact shape of failure this module keeps
+    # being bitten by.
+    if short_window_snapshots and short_window_min_volume_delta is not None             and short_window_min_price_swing is not None:
         sp = [p for p, v in short_window_snapshots if p is not None]
         sv = [v for p, v in short_window_snapshots if v is not None]
         if len(sp) >= 2 and len(sv) >= 2:
-            if (max(sv) - min(sv) >= LIVE_TRADING_SHORT_WINDOW_MIN_VOLUME_DELTA
-                    and max(sp) - min(sp) >= LIVE_TRADING_SHORT_WINDOW_MIN_PRICE_SWING):
+            if (max(sv) - min(sv) >= short_window_min_volume_delta
+                    and max(sp) - min(sp) >= short_window_min_price_swing):
                 return True
 
     if current_price is None or not (current_price <= EXTREME_LOW or current_price >= EXTREME_HIGH):

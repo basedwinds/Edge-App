@@ -31,6 +31,8 @@ from app.models import game_lines_tennis
 from app.models.baseline import elo_service_tennis
 from app.models.bracket_sim_tennis import simulate_tournament
 from app.models.ladder_sanity import (
+    LIVE_TRADING_SHORT_WINDOW_MIN_PRICE_SWING,
+    LIVE_TRADING_SHORT_WINDOW_MIN_VOLUME_DELTA,
     find_resolved_entities,
     looks_already_live_by_trading,
     pair_looks_live_by_surge,
@@ -517,6 +519,8 @@ def list_tennis_markets(session: Session = Depends(get_session)):
             current_price,
             [(s.last_price, s.volume) for s in recent],
             short_window_snapshots=[(s.last_price, s.volume) for s in short],
+            short_window_min_volume_delta=LIVE_TRADING_SHORT_WINDOW_MIN_VOLUME_DELTA,
+            short_window_min_price_swing=LIVE_TRADING_SHORT_WINDOW_MIN_PRICE_SWING,
         )
 
     matches_live_by_trading = {m.tennis_match_id for m in markets if m.tennis_match_id and _market_looks_live_by_trading(m)}
