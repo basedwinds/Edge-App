@@ -7,6 +7,7 @@ import datetime
 import logging
 
 from app.clients.base import get_json
+from app.clients.espn_racing_results import _SLUG as _RESULT_SLUG
 
 log = logging.getLogger("espn_racing_standings")
 
@@ -43,7 +44,13 @@ _STANDINGS_URL = (
 # empty dict was read downstream as "NASCAR has no rateable drivers" rather than
 # "nobody asked ESPN". A missing mapping and a genuinely empty feed are
 # indistinguishable once the {} is returned.
-_LEAGUE_SLUG = {"f1": "f1", "irl": "irl", "nascar": "nascar-premier"}
+# DERIVED from espn_racing_results._SLUG (imported at the top) rather than
+# retyped. That module already maps all five series to their ESPN league slugs,
+# and keeping a second hand-written copy here is exactly how this map came to be
+# missing "nascar" in the first place -- see the note above. Verified live
+# 2026-08-10: nascar-secondary returns 66 standings entries and nascar-truck 82,
+# so the lower series carry real championship points, not empty shells.
+_LEAGUE_SLUG = _RESULT_SLUG
 
 
 def _points(entry: dict) -> float | None:
