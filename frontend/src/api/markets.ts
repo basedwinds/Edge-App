@@ -438,6 +438,10 @@ export type WarmupStatus = {
   ready: boolean;
   warm: number;
   total: number;
+  /** Sports that have live markets but have not built ratings yet. Comes from
+   *  the server rather than being derived here: only the backend knows which
+   *  sports are merely out of season, and those must not hold the banner up. */
+  pending: string[];
   services: Record<string, boolean | null>;
 };
 

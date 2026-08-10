@@ -35,9 +35,9 @@ export function WarmingBanner() {
   if (!data || data.ready) return null;
 
   const pct = data.total > 0 ? Math.round((data.warm / data.total) * 100) : 0;
-  const pending = Object.entries(data.services)
-    .filter(([, warm]) => warm === false)
-    .map(([name]) => name);
+  // Server-supplied: it excludes sports that are simply out of season, which a
+  // client-side filter over `services` would wrongly list as still loading.
+  const pending = data.pending ?? [];
 
   return (
     <div

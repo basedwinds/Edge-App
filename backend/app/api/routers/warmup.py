@@ -13,17 +13,24 @@ that is a fault -- it is 240k soccer matches and a dozen Monte Carlo sims being
 built -- but the UI had no way to say so.
 
 DESIGN CONSTRAINT: this endpoint must be INSTANT and must never itself trigger
-a rebuild. It only reads the caches other code has already filled -- no DB
-query, no HTTP, no refresh_ratings() call. A readiness probe that is slow, or
-that warms things as a side effect, is worse than none: it would queue behind
-the very work it is reporting on.
+a rebuild. Rating state is read straight from the caches other code has already
+filled -- no HTTP, no refresh_ratings() call. The one DB touch is a grouped
+COUNT of active markets over an indexed column, used to tell "still building"
+apart from "out of season, nothing to build"; it reads, never writes, and never
+warms anything. A readiness probe that is slow, or that warms things as a side
+effect, is worse than none: it would queue behind the very work it reports on.
 """
 from __future__ import annotations
 
 import importlib
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.db.database import get_session
+from app.db.models import Market
 
 router = APIRouter(prefix="/warmup", tags=["warmup"])
 log = logging.getLogger("warmup")
@@ -67,27 +74,50 @@ def _is_warm(module_path: str, key: str) -> bool | None:
     return bool(value)
 
 
-@router.get("")
-def warmup_status():
-    """{ready, warm, total, services:{name: bool|null}} -- for a loading state.
+# Racing's three Kalshi series are one registry sport and one rating service.
+_MARKET_SPORT_TO_SERVICE = {"f1": "racing", "nascar": "racing", "irl": "racing"}
 
-    `ready` is deliberately NOT "every service warm". Sports out of season
-    legitimately never fill (there is nothing to rate), and gating the whole UI
-    on them would leave a permanent loading screen in, say, February. It means
-    "enough is built that the pages will show real numbers": the caches fill
-    within a poll cycle of each other, so a majority warm is the honest signal
-    that boot is done rather than in progress.
+
+@router.get("")
+def warmup_status(session: Session = Depends(get_session)):
+    """{ready, warm, total, pending, services} -- for a loading state.
+
+    READY MEANS "every sport that has live markets has built its ratings".
+    Not "all warm", and not a fraction.
+
+    A fraction was the first attempt and it was wrong in the way that matters:
+    it reported ready at 6 of 13 while soccer, racing and all four esports were
+    still cold. Those are precisely the slow ones the banner exists for -- the
+    ball sports warm in seconds -- so it cleared itself exactly when the user
+    still needed it. "All warm" is the opposite failure: a sport out of season
+    has nothing to rate and never fills, which would pin the banner up forever.
+
+    Live-market count is the honest discriminator between "still building" and
+    "nothing to build", and it costs one grouped COUNT over an indexed column.
+    Everything else here stays a pure cache read -- this endpoint must never
+    trigger the work it reports on, or it queues behind it.
     """
     services: dict[str, bool | None] = {}
     for label, module_path, key in _SERVICES:
         services[label] = _is_warm(module_path, key)
 
+    try:
+        rows = (session.query(Market.sport, func.count(Market.id))
+                .filter(Market.status.in_(("active", "open")))
+                .group_by(Market.sport).all())
+        active = {_MARKET_SPORT_TO_SERVICE.get(sp, sp) for sp, n in rows if sp and n}
+    except Exception:  # noqa: BLE001 - readiness must never 500
+        log.exception("warmup could not count active markets; falling back to all-warm")
+        active = {k for k, v in services.items() if v is not None}
+
+    # Only sports with something to price gate readiness.
+    gating = {k: v for k, v in services.items() if v is not None and k in active}
+    pending = sorted(k for k, v in gating.items() if not v)
     known = [v for v in services.values() if v is not None]
-    warm = sum(1 for v in known if v)
-    total = len(known)
     return {
-        "ready": bool(total) and warm >= max(1, total // 2),
-        "warm": warm,
-        "total": total,
+        "ready": not pending,
+        "warm": sum(1 for v in known if v),
+        "total": len(known),
+        "pending": pending,
         "services": services,
     }
