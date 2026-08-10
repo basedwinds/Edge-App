@@ -41,6 +41,17 @@ router = APIRouter(prefix="/cfb", tags=["cfb"])
 # why no numerical correction is applied.
 WEAK_POOL_NOTE = "rating built outside FBS play - tracking only"
 
+# Shown on every playoff/bracket futures row. Deliberately states the direction
+# of the error, not just that one exists: the bias is systematic and always the
+# same way, so "approximate" alone would understate it.
+BRACKET_APPROXIMATE_NOTE = (
+    "Approximate. The playoff field is seeded by a PROXY for the selection committee "
+    "(simulated wins, Elo breaking ties), and each further round compounds this model's "
+    "deliberately wide rating spread -- so the strongest team is over-concentrated and its "
+    "apparent edge is largest exactly where the model is least trustworthy. Directionally "
+    "useful; not a validated price."
+)
+
 
 
 # Bracket rounds Polymarket lists and Kalshi does not (added 2026-08-07 with the
@@ -509,7 +520,25 @@ def list_cfb_futures(session: Session = Depends(get_session)):
             suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
             stake_pool="futures" if kelly is not None else None,
             line_move_pp=None,
-            model_note=WEAK_POOL_NOTE if weak_pool else None,
+            # THE APPROXIMATE BADGE HAS TO BE ON THE FUTURES PAYLOAD TOO.
+            #
+            # /cfb/markets sets model_approximate for these same market types,
+            # but this route only ever set the weak-pool note -- so on the
+            # Futures pages and in the cross-sport list every bracket row looked
+            # like an ordinary, fully-founded model number. They are not: the
+            # bracket seeds off a PROXY for the selection committee, and four
+            # rounds compound elo_cfb's deliberately wide K=100 spread (see
+            # playoff_sim_cfb's docstring). That badge is the entire reason
+            # these are allowed to be staked rather than suppressed, and it was
+            # missing exactly where the staking decision is displayed.
+            #
+            # Live when this was found: Indiana staked on FOUR nested bracket
+            # markets at +21.8 to +44.8pp, each showing no caveat at all.
+            model_note=(
+                WEAK_POOL_NOTE if weak_pool
+                else BRACKET_APPROXIMATE_NOTE if m.market_type in APPROXIMATE_MARKET_TYPES
+                else None
+            ),
         ))
     out.sort(key=lambda r: (r.market_type, -(r.implied_prob or 0)))
     return out

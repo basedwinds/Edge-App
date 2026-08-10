@@ -344,11 +344,31 @@ def refresh_polymarket_cfb_futures():
 
 
 def run_full_refresh_cfb():
+    # MODEL WARMING FIRST, MARKET INGESTION SECOND.
+    #
+    # refresh_cfb_playoff_sim used to sit ninth, after four Kalshi ingestion
+    # steps it does not depend on -- it needs only ratings and the schedule,
+    # both of which are ready by step 3. That ordering starved it: on
+    # 2026-08-10 the chain logged "kalshi cfb moneyline: 30 rows" and then
+    # stopped inside the following market sweeps (each is a paginated network
+    # fetch that also takes the shared db_write_lock, so it can block on
+    # another sport's writer), and the sim never ran. Nothing errored -- the
+    # steps are individually try/excepted, so a STALL produces no log at all --
+    # and the result was all 301 CFB bracket markets sitting unpriced across
+    # both platforms, indefinitely.
+    #
+    # The sim itself is not the expensive part and never was: measured 0.5s for
+    # 2,000 trials, with _fetch_season_games at 12.5s the only real cost. It was
+    # simply never reached.
+    #
+    # refresh_kalshi_cfb_playoff_futures still runs AFTER the sim -- it resolves
+    # team names against the sim's own team set -- so only the sim moves.
     for step in (refresh_cfb_games, refresh_cfb_ratings, refresh_cfb_season_sim,
-                 refresh_cfb_conference_sim, refresh_kalshi_cfb_moneyline,
+                 refresh_cfb_conference_sim, refresh_cfb_playoff_sim,
+                 refresh_kalshi_cfb_moneyline,
                  refresh_kalshi_cfb_spread,
                  refresh_kalshi_cfb_win_totals, refresh_kalshi_cfb_conference_futures,
-                 refresh_cfb_playoff_sim, refresh_kalshi_cfb_playoff_futures,
+                 refresh_kalshi_cfb_playoff_futures,
                  refresh_polymarket_cfb_futures):
         try:
             step()

@@ -266,8 +266,25 @@ def warm(trials: int = 2000) -> None:
     except Exception:
         log.exception("cfb playoff sim failed")
         data = {}
+    # A REFUSAL IS NOT A RESULT. simulate() bails out in three places -- no
+    # games, too few teams, or the "most remaining games could not be rated"
+    # guard -- and each returns {"playoff": {}, "quarterfinal": {}, ...}. That
+    # dict is TRUTHY, so the `_TTL if hit[1] else _FAILURE_TTL` test below read
+    # it as a successful run and latched it for the full hour instead of
+    # retrying in two minutes. Judge the CONTENT, not the container: this is the
+    # same cache-a-failure-as-a-value shape that left racing's championship
+    # futures unpriced for an hour at a time.
+    usable = bool(data.get("playoff"))
     with _lock:
-        _cache["data"] = (now, data)
+        prev = _cache.get("data")
+        if not usable and prev and prev[1].get("playoff"):
+            # Keep the last good bracket rather than blanking 301 markets over
+            # one bad cycle, but let it expire soon so the next poll retries.
+            log.warning("cfb playoff sim produced no bracket -- keeping the previous "
+                        "values and retrying in %ds", _FAILURE_TTL)
+            _cache["data"] = (now - (_TTL - _FAILURE_TTL), prev[1])
+            return
+        _cache["data"] = (now, data if usable else {})
     log.info("cfb playoff sim: %d teams, %d trials", len(data.get("playoff") or {}), trials)
 
 
