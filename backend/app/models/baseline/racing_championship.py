@@ -44,17 +44,38 @@ _PLAYOFF_SERIES = ("nascar",)
 _NASCAR_REGULAR_RACES = 26
 
 _TTL = 3600  # recompute at most hourly
+# How soon to retry after a compute that produced no probabilities. Short on
+# purpose: an empty result means a feed failed, and an hour of unpriced
+# futures is a far worse outcome than one extra ESPN round-trip.
+_EMPTY_RETRY_TTL = 300
 _lock = threading.Lock()
 _cache: dict[str, tuple[float, dict]] = {}
 
 
 def _remaining_races(series: str) -> int:
+    """Races still to run. DEDUPED, and that is not optional.
+
+    fetch_race_dates returns real scoreboard EVENT times first and the season
+    calendar after, so the same race legitimately appears TWICE -- once per
+    source, a few hours apart (Portland: event 20:00Z, calendar 23:00Z). A raw
+    count therefore double-counts every remaining race, which is exactly what
+    happened when that helper gained its event source on 2026-08-09: F1 read 22
+    races remaining in August of a 24-race season. A championship sim handed
+    double the real runway spreads title probability far too evenly, so the
+    leader is under-priced and the field over-priced -- the failure is silent
+    because the number is plausible-looking.
+
+    Deduped on (race identity, calendar day): the two sources agree on the day,
+    while genuinely distinct races on different days (IndyCar's Milwaukee
+    doubleheader, whose names tokenize identically once digits are stripped)
+    stay separate.
+    """
     try:
         dates = fetch_race_dates().get(series, [])
     except Exception:
         return 0
     now = datetime.datetime.utcnow()
-    return sum(1 for _toks, dt in dates if dt >= now)
+    return len({(frozenset(toks), dt.date()) for toks, dt in dates if dt >= now})
 
 
 def _norm_constructor(name: str) -> str:
@@ -173,7 +194,37 @@ def warm(series: str = "f1") -> None:
     except Exception:
         log.exception("championship warm failed for %s", series)
         data = {}
+
+    # AN EMPTY RESULT IS A FAILURE, NOT AN ANSWER, and conflating the two is
+    # what left every racing championship market unpriced.
+    #
+    # _compute catches its own per-endpoint errors -- a 500 from ESPN's
+    # standings feed is logged and swallowed -- so it returns a well-formed
+    # dict with NO driver_probs rather than raising. warm() then cached that as
+    # a success for the full hour-long TTL. One flaky fetch at startup, and all
+    # 152 drivers_champion / constructors_champion rows across F1, NASCAR and
+    # IndyCar sat unpriced until the TTL expired, with nothing anywhere saying
+    # why. Confirmed live 2026-08-09: the poller was running fine every 5
+    # minutes and the model priced correctly the moment it was warmed by hand.
+    #
+    # So: never overwrite a good cache with an empty one, and retry an empty
+    # result in minutes instead of an hour.
+    usable = bool(data.get("driver_probs") or data.get("constructor_probs"))
     with _lock:
+        prev = _cache.get(series)
+        if not usable:
+            if prev and (prev[1].get("driver_probs") or prev[1].get("constructor_probs")):
+                # Keep the last good numbers, but let the TTL lapse soon so the
+                # next poll retries rather than serving stale odds for an hour.
+                log.warning("championship warm produced no probabilities for %s -- keeping the "
+                            "previous values and retrying in %ds", series, _EMPTY_RETRY_TTL)
+                _cache[series] = (now - (_TTL - _EMPTY_RETRY_TTL), prev[1])
+                return
+            log.warning("championship warm produced no probabilities for %s and there is no "
+                        "previous value -- its futures stay unpriced, retrying in %ds",
+                        series, _EMPTY_RETRY_TTL)
+            _cache[series] = (now - (_TTL - _EMPTY_RETRY_TTL), data)
+            return
         _cache[series] = (now, data)
 
 

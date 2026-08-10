@@ -89,6 +89,27 @@ MAX_GOALS = 10  # joint distribution grid cap per side -- P(11+ goals) is neglig
 # the task raised for it. Half the defect in the audit remains open.
 LOW_SCORE_RHO = -0.0603
 
+# Multiplicative correction on expected goals. 1.0 = no correction.
+#
+# WHY IT IS NEEDED, and it is NOT the dispersion problem it was assumed to be.
+# The audit found over-3.5 and over-4.5 over-priced, which looked like the
+# Poisson variance assumption failing. Measured instead (62,584 matches, 2019+):
+#
+#     actual Var(total) / model-implied Var(total) = 1.0038
+#
+# i.e. essentially exactly Poisson. The tail is over-priced for the dull reason
+# that the model expects too many goals outright: predicted total 2.7210 vs
+# actual 2.6733, +0.0477 per match, z +7.3.
+#
+# Decomposed, the running league average is not the culprit either -- it sits
+# at 2.6325, slightly BELOW actual. The rating multiplier adds +0.0885 on top.
+# That is Jensen's inequality: the update is unbiased in LOG space, but
+# E[exp(X)] > exp(E[X]) whenever the ratings have spread, so a perfectly
+# calibrated set of log-ratings still inflates expected goals by ~3.4%.
+#
+# Fitted and held-out validated by scripts/fit_soccer_goal_scale.py.
+GOAL_SCALE = 1.0
+
 # PER-LEAGUE home advantage overrides, fitted and held-out-validated by
 # scripts/fit_soccer_home_advantage.py. A league absent from this file uses
 # HOME_ADVANTAGE_LOG above, which the fit script's era table shows is already
@@ -324,8 +345,8 @@ def predict_match(state: SoccerRatingState, home_team: str, away_team: str) -> M
     # noise-level model would produce, which is what made this a proven sign
     # bug rather than just "no real edge" (2026-07-19).
     avg_goals = state.league_avg_goals()
-    expected_home = avg_goals * math.exp(state.get_attack(home_team) + state.get_concede(away_team) + state.home_log)
-    expected_away = avg_goals * math.exp(state.get_attack(away_team) + state.get_concede(home_team))
+    expected_home = GOAL_SCALE * avg_goals * math.exp(state.get_attack(home_team) + state.get_concede(away_team) + state.home_log)
+    expected_away = GOAL_SCALE * avg_goals * math.exp(state.get_attack(away_team) + state.get_concede(home_team))
     grid = _build_grid(expected_home, expected_away)
     return MatchGoalDistribution(expected_home_goals=expected_home, expected_away_goals=expected_away, grid=grid)
 
