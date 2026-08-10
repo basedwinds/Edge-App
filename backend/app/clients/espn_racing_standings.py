@@ -10,8 +10,25 @@ from app.clients.base import get_json
 
 log = logging.getLogger("espn_racing_standings")
 
+# SEASON TYPE 1, NOT 2, and the difference is not cosmetic.
+#
+# types/2 began returning HTTP 500 for nascar-premier and irl (f1 kept working),
+# which silently blanked 86 live championship markets -- fetch_driver_standings
+# caught the error, returned {}, and downstream that reads as "no rateable
+# drivers" rather than "the feed is down". Confirmed still 500 on 2026-08-10.
+#
+# types/1 serves all three leagues and is VERIFIED EQUIVALENT where the two
+# overlap: F1 returns Antonelli 219 / Hamilton 169 / Russell 160 / Leclerc 138
+# from both, to the point. It also carries `wins` and `currentWeek`, which the
+# NASCAR playoff model needs and which no other working endpoint exposes.
+#
+# site.web.api.espn.com/apis/v2/.../standings was the other candidate and was
+# REJECTED as stale: it still reports Palou on 457 -- the exact figure recorded
+# here on 2026-08-02 -- while types/1 has him on 510 at week 13, after races
+# that have since been run. A lagging feed is worse than a broken one, because
+# nothing about it looks wrong.
 _STANDINGS_URL = (
-    "https://sports.core.api.espn.com/v2/sports/racing/leagues/{league}/seasons/{year}/types/2/standings/0"
+    "https://sports.core.api.espn.com/v2/sports/racing/leagues/{league}/seasons/{year}/types/1/standings/0"
 )
 
 # ESPN's racing league slugs. IndyCar is "irl" on ESPN (its own historic name for
