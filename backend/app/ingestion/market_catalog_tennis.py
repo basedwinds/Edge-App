@@ -16,12 +16,16 @@ Every Market/PlacedBet row this writes gets sport="tennis". Market.team
 holds the player's real full name (same repurposed-field pattern as
 MmaFight's fighter names)."""
 import datetime
+import logging
+import re
 
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
 from app.db.models import Market, MarketSnapshot, TennisMatch
 from app.ingestion.market_matcher_tennis import full_name_to_abbreviated_key, match_upcoming_tennis_match
+
+log = logging.getLogger(__name__)
 
 
 def _load_upcoming_matches(session: Session) -> list[dict]:
@@ -71,16 +75,64 @@ def _infer_slam_attributes(tour: str, tournament_text: str) -> tuple[int, str] |
     return best_of, surface
 
 
+def infer_tour_and_tier_from_text(title: str, default_tour: str) -> tuple[str, str]:
+    """Best-effort tour/tier from a platform's own event title.
+
+    For the Polymarket poller only, which gets no tier from its slug. This is
+    still a GUESS -- it just beats the hardcoded "atp"/"tour" that was labelling
+    `ITF W15 Tianjin 2 Women` as an ATP Tour match. Absent tokens fall back to
+    the caller's default, so it can only add information, never remove it.
+    """
+    text = (title or "").lower()
+    if "itf" in text:
+        tier = "itf"
+    elif "challenger" in text:
+        tier = "challenger"
+    else:
+        tier = "tour"
+    # ITF names its women's events "ITF W15 ..." / "... Women"; the men's are
+    # "M15". Checked as a whole token so "Women" inside a venue name is the
+    # only false positive available, and there is no men's marker to lose.
+    tour = default_tour
+    if "women" in text or "wta" in text or re.search(r"\bw\d{2}\b", text):
+        tour = "wta"
+    elif re.search(r"\bm\d{2}\b", text):
+        tour = "atp"
+    return tour, tier
+
+
 def find_or_create_upcoming_match(
     session: Session, tour: str, tier: str, player_a_name: str, player_b_name: str,
-    tournament_text: str = "",
+    tournament_text: str = "", authoritative_tier: bool = False,
 ) -> TennisMatch | None:
     if not player_a_name or not player_b_name:
         return None
     upcoming = _load_upcoming_matches(session)
     found = match_upcoming_tennis_match(player_a_name, player_b_name, upcoming)
     if found is not None:
-        return session.get(TennisMatch, found["id"])
+        existing = session.get(TennisMatch, found["id"])
+        # CORRECT A GUESSED TIER. Only one caller KNOWS the tier: the Kalshi
+        # poller, whose series ticker states it outright
+        # (KXATPCHALLENGERMATCH/KXITFWMATCH/...). The Polymarket poller cannot
+        # tell them apart from a slug and passes a placeholder. Whichever runs
+        # FIRST creates the row, and this function used to return an existing
+        # row untouched -- so a placeholder written by Polymarket outlived
+        # every later Kalshi pass that knew better. Measured 2026-08-10: 108 of
+        # 218 active Kalshi tennis markets displayed as ATP Tour, including
+        # ITF W15 women's matches labelled `tour=atp`.
+        #
+        # Only an authoritative caller may overwrite, and only downward from a
+        # guess -- a guessing caller must never undo a known-good value.
+        if existing is not None and authoritative_tier:
+            if tier and existing.tier != tier:
+                log.info("corrected tennis tier for %s vs %s: %s -> %s",
+                         existing.player_a_key, existing.player_b_key, existing.tier, tier)
+                existing.tier = tier
+            if tour and existing.tour != tour:
+                log.info("corrected tennis tour for %s vs %s: %s -> %s",
+                         existing.player_a_key, existing.player_b_key, existing.tour, tour)
+                existing.tour = tour
+        return existing
 
     slam = _infer_slam_attributes(tour, tournament_text)
     resolved_date = datetime.date.today().isoformat()

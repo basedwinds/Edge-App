@@ -72,6 +72,10 @@ def refresh_kalshi_tennis_markets():
                 match = market_catalog_tennis.find_or_create_upcoming_match(
                     session, event_rows[0]["tour"], event_rows[0]["tier"], names[0], names[1],
                     event_rows[0].get("competition", ""),
+                    # The Kalshi series ticker STATES the tier
+                    # (KXATPCHALLENGERMATCH, KXITFWMATCH, ...), so this caller is
+                    # allowed to correct a placeholder written by Polymarket.
+                    authoritative_tier=True,
                 )
                 market_catalog_tennis.update_match_estimated_start_time(match, event_rows[0].get("estimated_start_time"))
                 market_catalog_tennis.update_match_expected_expiration(match, event_rows[0].get("expected_expiration_time"))
@@ -150,15 +154,22 @@ def refresh_polymarket_tennis_markets():
                     match_id_by_event[event_slug] = None
                     continue
                 names = [r["player_name"] for r in event_rows]
-                # series_slug alone can't distinguish tour vs challenger
-                # here (see polymarket_tennis_client.py's docstring) --
-                # "tour" is a reasonable default tier for matching purposes
-                # only (tier isn't used by the name matcher, just stored
-                # for display/bookkeeping on brand-new rows this poller
-                # creates).
-                tour = "wta" if event_rows[0]["series_slug"] == "wta" else "atp"
+                # series_slug alone can't distinguish tour vs challenger here
+                # (see polymarket_tennis_client.py's docstring), so the tier is
+                # inferred from the event TITLE, which usually names it.
+                #
+                # The previous note here said tier was "stored for
+                # display/bookkeeping" only, and used that to justify a
+                # hardcoded "tour". Display IS a consumer: it is what the user
+                # reads on the bet, and it was calling Challenger and ITF
+                # matches "ATP Tour". This caller is still NOT authoritative --
+                # a guess must never overwrite the Kalshi ticker's known tier.
+                default_tour = "wta" if event_rows[0]["series_slug"] == "wta" else "atp"
+                tour, tier = market_catalog_tennis.infer_tour_and_tier_from_text(
+                    event_rows[0].get("event_title", ""), default_tour,
+                )
                 match = market_catalog_tennis.find_or_create_upcoming_match(
-                    session, tour, "tour", names[0], names[1],
+                    session, tour, tier, names[0], names[1],
                     event_rows[0].get("event_title", ""),
                 )
                 market_catalog_tennis.update_match_estimated_start_time(match, event_rows[0].get("estimated_start_time"))
