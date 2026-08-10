@@ -103,6 +103,26 @@ CALLS: dict[str, tuple[str, str]] = {
         "itself is total-maps, which is the tracking-only class in every other title here, so it "
         "would not be stakeable on arrival; it is evidence of supply, not a build target."),
 
+    # --- CORRECTED after a boundary bug in this script's own already-ingested
+    # check dismissed these four as "already priced" when they are not. See
+    # decide(). ---
+    "KXNASCAR": (FLAG,
+        "NASCAR Cup PLAYOFF QUALIFICATION ('make the 16'). Only KXNASCARRACE is ingested; this "
+        "series is not. racing_playoff_sim already simulates the regular season to decide the "
+        "playoff field, so qualification probability falls out of state it computes anyway."),
+    "KXLEAGUESCUP": (FLAG,
+        "Leagues Cup WINNER. The app already prices Leagues Cup fixtures "
+        "(leagues_cup_moneyline_3way), so ratings exist for both the MLS and Liga MX sides -- the "
+        "missing piece is a bracket sim over the competition, not the ratings. That makes this a "
+        "genuinely different case from the continental cups dismissed above, where no rating "
+        "spans the clubs at all."),
+    "KXWNBA1H": (FLAG,
+        "WNBA 1st-half winner. The app DOES price first_half_winner, but from KXWNBA1HWINNER -- "
+        "this is a different ticker for what looks like the same proposition. Confirm whether "
+        "Kalshi renamed the series; if so the ingestion must follow it or half-winner coverage "
+        "lapses silently when the old ticker retires."),
+    "KXWNBA2H": (FLAG, "WNBA 2nd-half winner -- same ticker-rename question as KXWNBA1H (priced today from KXWNBA2HWINNER)."),
+
     # --- NOT RELEVANT: no model path, with the reason recorded ---
     "KXNCAAFCONFLEAVE": (DROP,
         "Conference realignment, not a game outcome -- resolves on administrative announcements "
@@ -120,7 +140,6 @@ CALLS: dict[str, tuple[str, str]] = {
         "Total maps. Per-map markets are tracking-only across all three esports titles here "
         "because the map model returns the same probability for every map -- so this is a known, "
         "already-rejected class, not new supply."),
-    "KXLEAGUESCUP": (DROP, "Already ingested and priced by the soccer pipeline -- surfaced only because the scan had never committed before."),
     "KXNASCARRACEOLD": (DROP, "Superseded series ('NASCAR Race winner' old) -- KXNASCARRACE is the live one and is already priced."),
     "KXF1DELAY": (DROP, "Whether an F1 event is delayed -- a logistics/weather question with no model."),
     "KXF1OCCUR": (DROP, "Generic 'event occurrence' novelty -- not a sporting outcome."),
@@ -202,7 +221,14 @@ def decide(ident: str, live: list[str]) -> tuple[str, str] | None:
     # Data-driven: is this series ALREADY being ingested? Derived from the
     # markets table rather than hand-listed, so it stays true as coverage
     # changes and cannot go stale the way a typed list would.
-    if ident.startswith("KX") and any(t.startswith(ident) for t in live):
+    # BOUNDARY-AWARE. A bare startswith() is wrong here and produced four false
+    # dismissals on the first run: "KXNASCAR" (the playoffs series) matched
+    # "KXNASCARRACE-...", "KXLEAGUESCUP" matched "KXLEAGUESCUPBTTS-...", and
+    # "KXWNBA1H"/"KXWNBA2H" matched "KXWNBA1HSPREAD-...". Kalshi tickers are
+    # "<SERIES>-<EVENT>-<SIDE>", so the series ends at the first hyphen and a
+    # real match must respect that. Exactly the same prefix/substring sloppiness
+    # as the NFL matcher bug this whole batch started with.
+    if ident.startswith("KX") and any(t == ident or t.startswith(ident + "-") for t in live):
         return DROP, ALREADY_INGESTED_NOTE
     for prefixes, disp, note in PATTERNS:
         if ident.startswith(prefixes):

@@ -222,12 +222,57 @@ _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
 }
 
 
+def _series_with_any_market(tickers: set[str]) -> set[str]:
+    """Which of these series have EVER listed a market, in any status.
+
+    One request per series, so it is deliberately called with a set and only
+    from the per-sport fetchers (a few dozen tickers), never over the full
+    3,000-series catalog. A series that errors is treated as LIVE: this gate
+    only ever removes things from review, so a transient failure must not be
+    able to hide real supply.
+    """
+    live: set[str] = set()
+    for t in sorted(tickers):
+        try:
+            data = get_json(f"{KALSHI_BASE}/markets?series_ticker={t}&limit=1")
+        except Exception:  # noqa: BLE001 - see docstring: fail OPEN, never hide supply
+            log.warning("liveness check failed for %s; treating as live", t)
+            live.add(t)
+            continue
+        if (data or {}).get("markets"):
+            live.add(t)
+    return live
+
+
 def _fetch_kalshi_series_for_sport(sport: str) -> list[dict]:
+    """Every series matching this sport that has EVER listed a market.
+
+    THE LIVENESS GATE APPLIES HERE TOO. fetch_kalshi_other_series has always
+    required at least one open market, on the grounds that "Kalshi's catalog is
+    full of dead shells" -- but the per-sport fetchers had no such gate, so a
+    TRACKED sport got dead shells flagged for review while an untracked one did
+    not. That asymmetry is expensive: 20 of the series flagged for review on
+    2026-08-10 had ZERO markets in every status, and one of them
+    (KXNASCARCUPCHAMP, "Nascar Cup Series Championship") reads so exactly like a
+    real coverage gap that it was written up as a build task before anyone
+    checked whether it had a book. It never has. The live NASCAR title series
+    is KXNASCARCUPSERIES.
+
+    Deliberately EVER-listed rather than currently-open, which is weaker than
+    the catch-all's rule and is the right call for a tracked sport: a series
+    between seasons (KXNASCARPOLE has 200 settled markets and 0 open today) is
+    real supply this app wants back when it reopens, whereas a series that has
+    never listed anything is not supply at all.
+    """
     match = _KALSHI_SPORT_MATCHERS[sport]
-    return [
-        {"identifier": s.get("ticker", ""), "title": s.get("title") or s.get("ticker", "")}
-        for s in _fetch_kalshi_sports_series()
+    candidates = [
+        s for s in _fetch_kalshi_sports_series()
         if s.get("ticker") and match(s.get("ticker", ""), s.get("title") or "")
+    ]
+    ever = _series_with_any_market({s["ticker"] for s in candidates})
+    return [
+        {"identifier": s["ticker"], "title": s.get("title") or s["ticker"]}
+        for s in candidates if s["ticker"] in ever
     ]
 
 

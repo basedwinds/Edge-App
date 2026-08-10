@@ -40,6 +40,23 @@ SERIES_MAP = {
     # so this is pure coverage, no new model.
     "KXF1": ("f1", "drivers_champion", None),
     "KXF1CONSTRUCTORS": ("f1", "constructors_champion", None),
+    # NASCAR Cup title on KALSHI. racing_championship already prices the NASCAR
+    # championship (racing_playoff_sim), but every one of the 36 title rows the
+    # app served came from POLYMARKET -- Kalshi championship coverage was F1 and
+    # IndyCar only, so there was no second venue and therefore no cross-platform
+    # divergence signal on the title at all.
+    #
+    # THE TICKER MATTERS AND THE OBVIOUS ONE IS A TRAP. The catalog surfaced
+    # KXNASCARCUPCHAMP ("Nascar Cup Series Championship"), which reads like the
+    # right series and is not: it has ZERO markets in every status -- open,
+    # closed, settled and unopened -- i.e. a dead shell that has never listed
+    # anything, the same category as the Rocket League series the catch-all
+    # deliberately withholds. KXNASCAR ("NASCAR Cup Series playoffs") is dead in
+    # exactly the same way. The live series is this one: 35 open per-driver
+    # markets under event KXNASCARCUPSERIES-NCS26, yes_sub_title carrying the
+    # full driver name ("Chase Briscoe"), which is the shape this fetcher and
+    # racing_championship's name resolution already expect.
+    "KXNASCARCUPSERIES": ("nascar", "drivers_champion", None),
     "KXNASCARRACE": ("nascar", "race_winner", None),  # NASCAR race winner (headline market)
     # NASCAR qualifying. Added 2026-08-07: pole was ingested for F1 (KXF1POLE)
     # and IndyCar but not NASCAR, leaving it the only series in the app with no
