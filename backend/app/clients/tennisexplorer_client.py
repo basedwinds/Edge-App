@@ -292,6 +292,19 @@ def _parse_result_table(table, match_date: str | None, matches: list[dict]) -> N
 _SCORE_OR_WALKOVER_RE = re.compile(
     r"^\d+(\(\d+\))?-\d+(\(\d+\))?(,\s*\d+(\(\d+\))?-\d+(\(\d+\))?)*$|^w/o$", re.IGNORECASE
 )
+# Chrome that sits in a round column but is not an entrant. "H2H" is the
+# head-to-head comparison link tennisexplorer renders between the two names of
+# an UPCOMING match, so it appears once per pending tie in the deepest live
+# round -- four of them across a semifinal column, which is why the existing
+# "a stray H2H column has only one entry" guard below does not catch it.
+#
+# REAL BUG (2026-08-09): every tennis tournament-winner future was unpriced.
+# The draw parsed 128/64/32/16/8 real names and then a column of
+# ['H2H','H2H','H2H','H2H']. bracket_sim_tennis starts from the DEEPEST
+# resolved round, resolved none of those four to a player, and returned None
+# for the whole tournament -- so a perfectly good draw priced nothing, and it
+# looked identical to "the draw isn't published yet".
+_NON_PLAYER_CELL_RE = re.compile(r"^(h2h|vs\.?|bye\s*bye)$", re.IGNORECASE)
 
 
 def parse_draw_html(html: str) -> list[list[str]] | None:
@@ -339,7 +352,10 @@ def parse_draw_html(html: str) -> list[list[str]] | None:
     rounds: list[list[str]] = []
     for left in lefts:
         entries = sorted(by_left[left])
-        names = [text for top, text in entries if top > 10 and text and not _SCORE_OR_WALKOVER_RE.match(text)]
+        names = [text for top, text in entries
+                 if top > 10 and text
+                 and not _SCORE_OR_WALKOVER_RE.match(text)
+                 and not _NON_PLAYER_CELL_RE.match(text)]
         rounds.append(names)
     return rounds if rounds else None
 

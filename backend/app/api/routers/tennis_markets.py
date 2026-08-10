@@ -804,9 +804,33 @@ def _get_tournament_draw(slug: str, tour: str) -> tuple[list[list[str]] | None, 
     if cached is not None and now - cached[0] < _DRAW_CACHE_TTL_SECONDS:
         return cached[1]
     tour_suffix = "atp-men" if tour == "atp" else "wta-women"
+    # tennisexplorer DISAMBIGUATES A TOUR IN THE SLUG, not just the path, and
+    # missing that blanked every WTA tournament's futures.
+    #
+    # The ATP Canadian Open lives at /montreal/2026/atp-men/ and its WTA twin
+    # the same week at /toronto-wta/2026/wta-women/ -- NOT /toronto/. Asking for
+    # the unsuffixed slug returns HTTP 200 with a "[tournament]" placeholder
+    # page and no draw, so the failure looked exactly like "the draw isn't out
+    # yet" and every WTA future stayed unpriced indefinitely. Confirmed live
+    # 2026-08-09: 'toronto' -> 0 rounds, 'toronto-wta' -> 8 rounds, Hard.
+    #
+    # Both spellings are tried rather than hardcoding a rule, because the
+    # suffix only appears where the name collides across tours; a bare WTA-only
+    # event keeps the plain slug. First one that yields a real draw wins.
+    candidates = [f"{slug}-wta", slug] if tour != "atp" else [slug, f"{slug}-atp"]
     try:
         with TennisExplorerClient() as client:
-            result = client.get_tournament_draw(slug, 2026, tour_suffix)
+            result = (None, None)
+            for cand in candidates:
+                attempt = client.get_tournament_draw(cand, 2026, tour_suffix)
+                if attempt[0]:
+                    result = attempt
+                    break
+                # Keep a surface-only hit: it proves the page exists and the
+                # draw simply is not published, which is a different (and
+                # self-resolving) state from a wrong slug.
+                if attempt[1] and not result[1]:
+                    result = attempt
     except Exception:
         # REAL BUG this avoids (caught live 2026-07-19): a single transient
         # fetch failure (network hiccup, tennisexplorer momentarily slow)
