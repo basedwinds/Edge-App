@@ -1,6 +1,30 @@
 """Call of Duty pricing route. Fifth esports title, and the smallest one --
-Kalshi lists match_winner and nothing else for CoD (no spread, no totals, no
-per-map, no futures), so this router prices exactly one market type.
+Kalshi lists match_winner and nothing else this app prices, so this router
+handles exactly one market type.
+
+CoD FUTURES: THE SERIES IS LIVE, AND IT IS STILL RIGHT NOT TO PRICE IT.
+"KXCOD has no book" was the earlier finding and it is now out of date -- KXCOD
+carries a real, traded book: event KXCOD-EWC26 ("COD Esports World Cup
+Champion"), 16 teams, 295,526 volume and 233,834 open interest. Nothing about
+the volume is the problem.
+
+The problem is that the tournament is OVER. OpTic Gaming sits bid 0.99 / ask
+1.00 and every other team at 0.00/0.01, and two independent sources agree the
+event has concluded: Kalshi's expected_expiration_time is 2026-08-09 (already
+past, while close_time stays 2026-08-23 as an administrative backstop), and
+this app's OWN CodMatch feed shows the bracket running out on 2026-08-09 with
+OpTic's semi-final and final as the last entries.
+
+So ingesting it would price a DECIDED event with a pre-tournament Elo bracket
+sim that cannot know the result. The sim would give the eventual champion far
+less than 99%, and -- much worse -- would hand every one of the fifteen
+1-cent longshots a positive edge on a tournament that is already lost. Any of
+those clearing the 10pp gate would be staked on a guaranteed loser. That is
+the phantom-price failure this app has fought before, in its purest form.
+
+Worth ingesting when a CoD tournament is UPCOMING rather than concluded. The
+check to make first is expected_expiration_time, not open/closed status:
+KXCOD-EWC26 is still `active` today.
 
 MODEL: team Elo over 3,615 real matches (2020-2026) from breakingpoint.gg.
 Walk-forward accuracy 0.6479 over 2,508 scored predictions, z = 14.8, which
