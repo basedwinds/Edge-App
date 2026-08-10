@@ -12,6 +12,7 @@ market types' own historical prices) -- ships as an honest, real-data-
 derived reference estimate, model_validated: false everywhere, same policy
 as every other market in this app.
 """
+import logging
 import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -791,6 +792,8 @@ def _flashscore_live_pairs() -> frozenset:
     return _live_cache["data"]  # type: ignore[return-value]
 
 
+log = logging.getLogger("tennis_markets")
+
 _DRAW_CACHE_TTL_SECONDS = 600
 _draw_cache: dict[tuple[str, str], tuple[float, tuple[list[list[str]] | None, str | None]]] = {}
 
@@ -818,11 +821,23 @@ def _get_tournament_draw(slug: str, tour: str) -> tuple[list[list[str]] | None, 
     # suffix only appears where the name collides across tours; a bare WTA-only
     # event keeps the plain slug. First one that yields a real draw wins.
     candidates = [f"{slug}-wta", slug] if tour != "atp" else [slug, f"{slug}-atp"]
+    page_found = False
     try:
         with TennisExplorerClient() as client:
             result = (None, None)
+            # YEAR IS DERIVED, NOT HARDCODED. This read `2026` literally, which
+            # works exactly until 1 January 2027 -- at which point every tennis
+            # tournament_winner future goes unpriced at once, with no error and
+            # no log, because a wrong-year URL returns the same HTTP 200
+            # "[tournament]" placeholder a not-yet-created event does. That is
+            # the silent-zero shape that has cost the most time in this app, and
+            # the Australian Open (mid-January) would be the first casualty.
+            year = datetime.datetime.utcnow().year
             for cand in candidates:
-                attempt = client.get_tournament_draw(cand, 2026, tour_suffix)
+                rounds, surface, exists = client.get_tournament_draw_status(cand, year, tour_suffix)
+                if exists:
+                    page_found = True
+                attempt = (rounds, surface)
                 if attempt[0]:
                     result = attempt
                     break
@@ -831,6 +846,17 @@ def _get_tournament_draw(slug: str, tour: str) -> tuple[list[list[str]] | None, 
                 # self-resolving) state from a wrong slug.
                 if attempt[1] and not result[1]:
                     result = attempt
+            if not result[0]:
+                # Say WHICH of the two no-draw states this is, once per slug per
+                # cache window. Without this the only signal is a blank column.
+                if page_found:
+                    log.info("tennis draw not published yet for %s/%s (%d) -- page exists, "
+                             "futures stay unpriced until the bracket is out", slug, tour, year)
+                else:
+                    log.warning("tennis draw MISSING for %s/%s (%d): every candidate slug %s "
+                                "returned the '[tournament]' placeholder. Either the event is not "
+                                "created yet, or the slug/year is wrong -- check the calendar "
+                                "before assuming it self-resolves", slug, tour, year, candidates)
     except Exception:
         # REAL BUG this avoids (caught live 2026-07-19): a single transient
         # fetch failure (network hiccup, tennisexplorer momentarily slow)
@@ -886,6 +912,21 @@ def list_tennis_futures(session: Session = Depends(get_session)):
         rounds, surface = _get_tournament_draw(slug, tour)
         sim_by_tournament[(group_label, tour)] = simulate_tournament(rounds, surface=surface) if rounds else None
 
+    # A blank model column on a real, actively-traded market reads as "the app
+    # is broken". For a tournament outright it usually is not: an outright
+    # cannot be priced until the bracket exists, because the whole model is a
+    # Monte Carlo over the real draw. Kalshi lists Grand Slam outrights weeks
+    # early -- the 2026 US Open markets were live on 2026-08-10 while the draw
+    # is not published until a couple of days before play -- so this state is
+    # both normal and, on its own, indistinguishable from a scrape failure.
+    # Saying so in the row itself is the difference between "not yet" and
+    # "broken".
+    NO_DRAW_REASON = (
+        "This outright is priced by simulating the real tournament draw, and the draw for this "
+        "event has not been published yet. It prices automatically once the bracket is out "
+        "(typically a day or two before play starts)."
+    )
+
     out = []
     for m in markets:
         snap = snapshots_by_market.get(m.id)
@@ -913,6 +954,10 @@ def list_tennis_futures(session: Session = Depends(get_session)):
                 updated_at=m.updated_at.isoformat() if m.updated_at else None,
                 model_prob=model_prob,
                 model_validated=False,
+                # Only when the whole tournament failed to simulate -- not when
+                # one player merely didn't match into an otherwise-good sim,
+                # which is a different problem and must not be papered over.
+                model_note=NO_DRAW_REASON if sim_result is None else None,
                 edge=edge,
                 kelly_fraction=kelly,
                 suggested_stake_dollars=stake_dollars,

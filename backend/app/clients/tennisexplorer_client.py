@@ -100,8 +100,34 @@ class TennisExplorerClient:
         rest of this client. Returns (rounds, surface); either half can be
         None independently (a tournament can have a surface listed with no
         draw yet, or vice versa)."""
+        rounds, surface, _exists = self.get_tournament_draw_status(slug, year, tour_suffix)
+        return rounds, surface
+
+    def get_tournament_draw_status(
+        self, slug: str, year: int, tour_suffix: str
+    ) -> tuple[list[list[str]] | None, str | None, bool]:
+        """As get_tournament_draw, plus whether the PAGE ITSELF exists.
+
+        WHY THE THIRD VALUE. tennisexplorer answers an unknown slug/year with
+        HTTP 200 and a "[tournament]" placeholder, so three genuinely different
+        situations arrive here looking identical -- (rounds=None, surface=None):
+
+          * the slug is wrong            -> a bug, fix the slug
+          * the year is wrong            -> a bug, and a silent one every January
+          * the event is not created yet -> not a bug, self-resolves
+
+        Collapsing them cost real time twice: the WTA Toronto slug bug read as
+        "draw isn't out yet" and blanked every WTA future indefinitely, and the
+        2026 US Open reads the same way while genuinely just being early
+        (verified 2026-08-10: /us-open/2025/ returns a full 8-round draw, /2026/
+        returns the placeholder, and tennisexplorer's own 2026 calendar stops at
+        Cincinnati). Separating "page exists" from "draw published" is what makes
+        those distinguishable without a human re-deriving it each time."""
         resp = self._client.get(f"{BASE_URL}/{slug}/{year}/{tour_suffix}/")
-        return parse_draw_html(resp.text), parse_tournament_surface(resp.text)
+        html = resp.text
+        if page_is_placeholder(html):
+            return None, None, False
+        return parse_draw_html(html), parse_tournament_surface(html), True
 
 
     def get_scheduled_times(self) -> dict[frozenset, str]:
@@ -305,6 +331,19 @@ _SCORE_OR_WALKOVER_RE = re.compile(
 # for the whole tournament -- so a perfectly good draw priced nothing, and it
 # looked identical to "the draw isn't published yet".
 _NON_PLAYER_CELL_RE = re.compile(r"^(h2h|vs\.?|bye\s*bye)$", re.IGNORECASE)
+
+
+_PLACEHOLDER_TITLE_RE = re.compile(r"<title>[^<]*\[tournament\]", re.IGNORECASE)
+
+
+def page_is_placeholder(html: str) -> bool:
+    """True when tennisexplorer served its "this tournament does not exist"
+    page. It answers HTTP 200 with a normal-looking ~86KB document whose title
+    is literally "Tennis Explorer: [tournament]" -- the unreplaced template
+    token is the only reliable marker, and it is checked in the TITLE rather
+    than anywhere in the body so a real page that happens to mention the word
+    cannot trip it."""
+    return bool(_PLACEHOLDER_TITLE_RE.search(html))
 
 
 def parse_draw_html(html: str) -> list[list[str]] | None:

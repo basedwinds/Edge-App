@@ -152,15 +152,25 @@ const columns = [
     ),
     cell: (info) => {
       const note = info.row.original.model_note;
+      // "approx" means "here is a number, treat it as rough". On a row with NO
+      // number it says the opposite of the truth -- there is nothing to treat
+      // as rough, the market simply is not priceable yet (a tournament outright
+      // before its draw is published). Those get "pending" instead, so an
+      // unpriced row reads as waiting rather than broken or approximate.
+      const pending = note != null && info.getValue() == null;
       return (
         <span className="tabular-nums font-mono text-[var(--color-text-dim)] inline-flex items-center gap-1">
           {formatPct(info.getValue())}
           {note && (
             <span
               title={note}
-              className="cursor-help rounded-sm border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)] text-[9px] px-1 leading-tight"
+              className={
+                pending
+                  ? "cursor-help rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)] text-[9px] px-1 leading-tight"
+                  : "cursor-help rounded-sm border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)] text-[9px] px-1 leading-tight"
+              }
             >
-              approx
+              {pending ? "pending" : "approx"}
             </span>
           )}
         </span>

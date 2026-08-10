@@ -137,7 +137,20 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
               <td className="px-3 py-2">
                 <div className="text-[var(--color-text)]">{r.team ?? r.side ?? "—"}</div>
                 {futuresThreshold(r) && <div className="text-[11px] text-[var(--color-text-dim)]">{futuresThreshold(r)}</div>}
-                {r.model_note && <div className="text-[10px] text-[var(--color-warning)]">approx / tracking</div>}
+                {r.model_note && (
+                  // See FuturesTable: "approx / tracking" on a row with no
+                  // model number claims a rough estimate exists when none does.
+                  // An unpriced row with a note is waiting on data, not approximate.
+                  r.model_prob == null ? (
+                    <div className="text-[10px] text-[var(--color-text-muted)]" title={r.model_note}>
+                      not priced yet
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-[var(--color-warning)]" title={r.model_note}>
+                      approx / tracking
+                    </div>
+                  )
+                )}
               </td>
               <td className="px-3 py-2 text-right tabular-nums font-mono">{pct(r.implied_prob)}</td>
               <td className="px-3 py-2 text-right tabular-nums font-mono text-[var(--color-text-dim)]">{pct(r.model_prob)}</td>
