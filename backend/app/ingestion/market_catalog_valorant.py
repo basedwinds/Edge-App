@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
 from app.ingestion.start_times import apply_start
+from app.ingestion.esports_event_name import clean_event_name
 from app.db.models import Market, MarketSnapshot, ValorantMap, ValorantMatch, ValorantRosterChangeCache
 from app.ingestion.market_matcher_valorant import match_by_names_only, team_names_match
 from app.ingestion.series_orientation import oriented_result
@@ -85,7 +86,9 @@ def find_or_create_upcoming_match(
         return existing
     match = ValorantMatch(
         source="live", source_match_id=source_match_id,
-        event_name=event_name or "", match_date=resolved_date,
+        # A platform event title IS the matchup for these markets; the UI
+        # renders event_name as the LEAGUE. See esports_event_name.py.
+        event_name=clean_event_name(event_name, team_a_name, team_b_name), match_date=resolved_date,
         team_a=team_a_name, team_b=team_b_name,
     )
     session.add(match)
