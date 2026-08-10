@@ -822,7 +822,8 @@ def refresh_kalshi_cup_markets():
                            canonical_team_key(row["away_team"]), date or "")
                     if key not in match_id_by_tie:
                         match = market_catalog_soccer.find_or_create_upcoming_match(
-                            session, league, row["home_team"], row["away_team"], date)
+                            session, league, row["home_team"], row["away_team"], date,
+                            start_time=row.get("estimated_start_time"))
                         session.flush()
                         match_id_by_tie[key] = match.id if match is not None else None
                     upsert(session, row, match_id_by_tie[key])
@@ -864,7 +865,8 @@ def refresh_kalshi_uefa_markets():
                            canonical_team_key(row["away_team"]), date or "")
                     if key not in match_id_by_tie:
                         match = market_catalog_soccer.find_or_create_upcoming_match(
-                            session, league, row["home_team"], row["away_team"], date)
+                            session, league, row["home_team"], row["away_team"], date,
+                            start_time=row.get("estimated_start_time"))
                         session.flush()
                         match_id_by_tie[key] = match.id if match is not None else None
                     upsert(session, row, match_id_by_tie[key])
@@ -909,7 +911,8 @@ def refresh_kalshi_national_markets():
                            canonical_team_key(row["away_team"]), date or "")
                     if key not in match_id_by_tie:
                         match = market_catalog_soccer.find_or_create_upcoming_match(
-                            session, league, row["home_team"], row["away_team"], date)
+                            session, league, row["home_team"], row["away_team"], date,
+                            start_time=row.get("estimated_start_time"))
                         session.flush()
                         match_id_by_tie[key] = match.id if match is not None else None
                     upsert(session, row, match_id_by_tie[key])
@@ -957,7 +960,8 @@ def refresh_kalshi_leagues_cup_markets():
                            canonical_team_key(row["away_team"]), date or "")
                     if key not in match_id_by_tie:
                         match = market_catalog_soccer.find_or_create_upcoming_match(
-                            session, league, row["home_team"], row["away_team"], date)
+                            session, league, row["home_team"], row["away_team"], date,
+                            start_time=row.get("estimated_start_time"))
                         session.flush()
                         match_id_by_tie[key] = match.id if match is not None else None
                     upsert(session, row, match_id_by_tie[key])

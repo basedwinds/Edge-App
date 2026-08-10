@@ -67,14 +67,41 @@ def _infer_season(league: str, match_date: str) -> str:
 
 def find_or_create_upcoming_match(
     session: Session, league: str, home_team_name: str, away_team_name: str,
-    match_date: str | None = None,
+    match_date: str | None = None, start_time: str | None = None,
 ) -> SoccerMatch | None:
     if not home_team_name or not away_team_name:
         return None
     upcoming = _load_upcoming_matches(session, league)
     found = match_upcoming_soccer_match(home_team_name, away_team_name, upcoming)
     if found is not None:
-        return session.get(SoccerMatch, found["id"])
+        existing = session.get(SoccerMatch, found["id"])
+        # BACKFILL A KICKOFF THE ROW NEVER GOT.
+        #
+        # A fixture ingested before its platform published a start time is
+        # created with estimated_start_time NULL and match_date set to the
+        # SCRAPE day. Every later ingest found it here and returned it
+        # unchanged, so the kickoff never landed -- and the markets, which
+        # attach to this row, stayed on a fixture with no start time forever.
+        #
+        # Measured on Leagues Cup 2026-08-10: 23 of 30 rows had no start time,
+        # and ALL 252 active Leagues Cup markets pointed at those 23. Those
+        # markets are priced and stakeable, so the "already started" gates could
+        # not bind for a single one of them -- the same exposure as the tennis
+        # Santos incident, and soccer has no calibrated live-trading arm to
+        # catch it either.
+        #
+        # Only FILLS A HOLE: never overwrites a time the row already has, so it
+        # cannot fight the ESPN correction path (which exists precisely to
+        # replace a wrong platform time and tags start_time_source itself).
+        # `start_time` is the FULL instant, not match_date -- callers pass a
+        # date-only string as match_date (estimated_start_time[:10]), and writing
+        # that into this column would store "2026-08-12" where every reader
+        # expects an ISO datetime.
+        if existing is not None and not existing.estimated_start_time and start_time:
+            existing.estimated_start_time = start_time
+            log.info("backfilled kickoff for %s %s vs %s: %s",
+                     league, existing.home_team, existing.away_team, start_time)
+        return existing
 
     # FIXTURE FALLBACK -- the name match above failed, which does NOT mean this
     # is a new fixture. It routinely means the other platform spells the clubs
