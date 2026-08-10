@@ -352,6 +352,20 @@ def simulate_season(
         def league_avg_goals(self) -> float:
             return self._real.league_avg_goals()
 
+        # MUST mirror the real state's home advantage. predict_match reads
+        # `state.home_log` directly (it became per-league on 2026-08-09), and
+        # this class only DUCK-TYPES SoccerRatingState -- it is not a subclass,
+        # so a new attribute on the real state does not appear here and the
+        # whole season sim raised AttributeError. That took every soccer
+        # future to a 500 for the rest of the day.
+        #
+        # Delegating rather than copying is deliberate: a copy taken at
+        # construction would silently go stale if the league's fitted term
+        # changed, which is the same drift in slower motion.
+        @property
+        def home_log(self) -> float:
+            return self._real.home_log
+
     sim_state = _SimState(state)
 
     # MID-SEASON. Anything already played is a FACT, not something to resample:
