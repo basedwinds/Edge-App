@@ -291,7 +291,13 @@ def _model_prob(m: Market, match: TennisMatch | None) -> float | None:
     return None
 
 
-LIVE_TRADING_LOOKBACK = datetime.timedelta(hours=6)  # see ladder_sanity.py's own module comment for why 6, not 1
+LIVE_TRADING_LOOKBACK = datetime.timedelta(hours=6)
+# The short window for the rate-based arm. 60 minutes is what the calibration
+# against Flashscore's live labels used (see ladder_sanity's
+# LIVE_TRADING_SHORT_WINDOW_* constants): live tennis markets showed a median
+# volume delta of 56,868 and swing of 0.165 inside it, against 19 and 0.000 for
+# everything else.
+LIVE_TRADING_SHORT_LOOKBACK = datetime.timedelta(minutes=60)  # see ladder_sanity.py's own module comment for why 6, not 1
 
 
 def _batch_recent_snapshots_for_live_check(session: Session, market_ids: list[int]) -> dict[int, list["MarketSnapshot"]]:
@@ -500,7 +506,18 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         current = all_snapshots.get(m.id)
         current_price = current.last_price if current else None
         recent = recent_snapshots_for_live_check.get(m.id, [])
-        return looks_already_live_by_trading(current_price, [(s.last_price, s.volume) for s in recent])
+        # A SECOND, SHORTER window alongside the 6-hour one. The 6h arms need an
+        # extreme current price (deliberately -- see ladder_sanity), so they
+        # cannot see a live match that is still genuinely in the balance. The
+        # short window supplies the RATE signal that separates in-play trading
+        # from a merely liquid pregame market, and needs no extremity.
+        short_cut = datetime.datetime.utcnow() - LIVE_TRADING_SHORT_LOOKBACK
+        short = [s for s in recent if s.ts and s.ts >= short_cut]
+        return looks_already_live_by_trading(
+            current_price,
+            [(s.last_price, s.volume) for s in recent],
+            short_window_snapshots=[(s.last_price, s.volume) for s in short],
+        )
 
     matches_live_by_trading = {m.tennis_match_id for m in markets if m.tennis_match_id and _market_looks_live_by_trading(m)}
 

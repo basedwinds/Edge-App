@@ -117,6 +117,33 @@ def find_resolved_entities(groups: dict[object, list[tuple[float, float]]]) -> s
 LIVE_TRADING_MIN_VOLUME_DELTA = 100_000.0
 LIVE_TRADING_MIN_PRICE_SWING = 0.10
 
+# SHORT-WINDOW ARM: catches a live match that is still UNDECIDED, which the
+# extremity requirement above cannot.
+#
+# User-reported 2026-08-10: "Sophia Santos vs Sigrist recommended to me now"
+# while the match was in play. Santos moved 0.09 -> 0.46 with volume 16,684 ->
+# 227,370 in fifty minutes, and the app staked $10 on a +40.3pp "edge" that was
+# nothing but the model still holding its PRE-MATCH number (0.8631) against a
+# market that had watched her lose a set. Every existing gate missed it: the
+# stored start time said 19:00Z, four hours away; Flashscore does not cover that
+# ITF women's event; and the arms above returned False at the first line because
+# 0.46 is not extreme.
+#
+# The extremity requirement is NOT removed -- it was added deliberately, against
+# a real counter-example (Vukic/Holmgren, a liquid PREGAME market that wandered
+# 0.49-0.72 with big swing and volume and must not be flagged). Instead this arm
+# adds the thing that actually separates the two: RATE. Vukic/Holmgren drifted
+# over many hours; a live match reprices violently inside one.
+#
+# Calibrated against FLASHSCORE'S OWN live labels as ground truth, over 250
+# tennis moneyline markets with 2+ snapshots in a 60-minute window:
+#     flashscore LIVE (n=12):  median volume delta 56,868   median swing 0.165
+#     not live       (n=238):  median volume delta     19   median swing 0.000
+# a ~3,000x gap in medians, so these bars sit in empty space rather than on a
+# boundary. Set below the live median, far above anything quiet.
+LIVE_TRADING_SHORT_WINDOW_MIN_VOLUME_DELTA = 50_000.0
+LIVE_TRADING_SHORT_WINDOW_MIN_PRICE_SWING = 0.10
+
 # Soccer-specific volume threshold (added 2026-07-19, this app's own first
 # calibration pass for a sport OTHER than Tennis): checked live against
 # real Kalshi Soccer moneyline volumes the same day this guard's shared
@@ -196,6 +223,7 @@ def looks_already_live_by_trading(
     snapshots: list[tuple[float | None, float | None]],
     min_volume_delta: float = LIVE_TRADING_MIN_VOLUME_DELTA,
     min_price_swing: float = LIVE_TRADING_MIN_PRICE_SWING,
+    short_window_snapshots: list[tuple[float | None, float | None]] | None = None,
 ) -> bool:
     """`current_price` is this market's own latest snapshot price (checked
     against the same EXTREME_LOW/EXTREME_HIGH as ladder_looks_resolved --
@@ -213,6 +241,19 @@ def looks_already_live_by_trading(
     MAX and MIN price/volume across every snapshot in the window is what
     was actually validated against real data (see module comment above),
     not a single before/after pair."""
+    # SHORT-WINDOW ARM FIRST -- it is the only one that fires on a live match
+    # whose price is still mid-range, and it deliberately does NOT require
+    # extremity. See LIVE_TRADING_SHORT_WINDOW_* for the calibration against
+    # Flashscore's own live labels and for why rate, not price level, is what
+    # separates a live match from a liquid pregame one.
+    if short_window_snapshots:
+        sp = [p for p, v in short_window_snapshots if p is not None]
+        sv = [v for p, v in short_window_snapshots if v is not None]
+        if len(sp) >= 2 and len(sv) >= 2:
+            if (max(sv) - min(sv) >= LIVE_TRADING_SHORT_WINDOW_MIN_VOLUME_DELTA
+                    and max(sp) - min(sp) >= LIVE_TRADING_SHORT_WINDOW_MIN_PRICE_SWING):
+                return True
+
     if current_price is None or not (current_price <= EXTREME_LOW or current_price >= EXTREME_HIGH):
         return False
     prices = [p for p, v in snapshots if p is not None]
