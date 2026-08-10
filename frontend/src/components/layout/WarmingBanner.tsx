@@ -21,6 +21,13 @@ export function WarmingBanner() {
     // Poll while cold so the banner clears itself, then stop: once ready, the
     // answer cannot go back to false without a restart, which remounts this.
     refetchInterval: (q) => (q.state.data?.ready ? false : 5000),
+    // KEEP POLLING WHEN THE TAB IS NOT FOCUSED. react-query pauses interval
+    // refetches in the background by default, and that is precisely wrong here:
+    // waiting out a multi-minute boot is exactly when someone tabs away. Caught
+    // in testing -- the backend reported ready and the banner stayed up until
+    // the page was touched, which is the "stuck loading screen" this is meant
+    // to prevent. Costs one 0.5s request every 5s, and only while cold.
+    refetchIntervalInBackground: true,
     staleTime: 0,
     retry: false,
   });
