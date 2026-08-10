@@ -219,6 +219,25 @@ _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
     # anyone noticing, which is the whole argument for that guard.
     "wnba": _prefix_matcher("KXWNBA"),
     "racing": _prefix_matcher("KXF1", "KXNASCAR", "KXINDYCAR"),
+    # CBB is added BEFORE the sport exists, which is the opposite of the four
+    # cases above and the whole point. Every one of those was added AFTER the
+    # damage: the series had already been swept into "other" and dismissed as
+    # not_relevant, and CoD's dismissal is why a later check concluded it had no
+    # futures at all.
+    #
+    # College basketball is off-season right now -- KXNCAAMBGAME and every other
+    # candidate series returns 0 open events, checked 2026-08-10 -- and the app
+    # does not price it. When Kalshi relists it (~Nov), the series would arrive
+    # to a scanner that has never heard of them and become instance FIVE. This
+    # entry costs nothing while they do not exist and classifies them the moment
+    # they do.
+    #
+    # Men's only, and NOT the looser "KXNCAAB": a bare KXNCAAB prefix would also
+    # swallow a college BASEBALL ticker, which is the same prefix-boundary trap
+    # that let an NFL rule claim a CFB series. The model
+    # (scripts/derive_cbb_elo.py) is men's only, so a women's series should stay
+    # unclaimed rather than be mislabelled as something we can price.
+    "cbb": _prefix_matcher("KXNCAAMB", "KXMARCHMADNESS"),
 }
 
 
