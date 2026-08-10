@@ -182,21 +182,60 @@ def find_or_create_upcoming_match(
     return match
 
 
-def update_match_estimated_start_time(match: TennisMatch | None, estimated_start_time: str | None) -> None:
-    """Keeps TennisMatch.estimated_start_time fresh every poll while the
-    match is still upcoming -- same "genuine estimate, always overwrite"
-    reasoning as MmaFight.estimated_start_time (see poller_mma.py). Whichever
-    platform's poller has a real value for this match wins; never touched
-    once the match is decided (winner_key set)."""
+# PRECEDENCE, because "whichever poller ran last wins" is not a rule.
+#
+# REAL BUG (user-reported 2026-08-10): Haliak vs Liu flipped between 05:00Z and
+# 11:00Z and back, over and over. Reproduced in one cycle -- the Kalshi poller
+# wrote 11:00Z, the Polymarket poller wrote 05:00Z, and both tagged the row
+# "platform", so neither could tell it was undoing the other. 141 of 341 tennis
+# fixtures with live markets are listed on BOTH platforms and could do this.
+#
+# Kalshi ranks LOWEST on purpose, and not as a tie-break preference: for this
+# very match its occurrence_datetime (11:00Z) is byte-identical to its
+# expected_expiration_time. Kalshi's tennis "start" is an EXPIRY -- late by a
+# whole match -- which is the same structural fact measured across every soccer
+# series. Polymarket's value is not provably an expiry, so it wins over Kalshi
+# and loses to a real order of play.
+#
+# Kalshi is not silenced, only outranked: 105 of those 341 fixtures are listed
+# ONLY on Kalshi, and blanking their start would disable the already-started
+# gate entirely rather than merely making it late.
+#
+# Legacy rows tagged plainly "platform" rank with Polymarket, so an existing
+# value stops being clobbered by Kalshi from the first pass.
+_START_SOURCE_RANK = {
+    "kalshi": 1,
+    # Legacy rows written before this function knew which platform it was
+    # hearing from. Ranked WITH Kalshi, not above it: ranking them higher would
+    # have frozen the 105 fixtures listed only on Kalshi, whose rescheduled
+    # times could then never be picked up again. Ambiguity resolves itself
+    # within one cycle -- the first real write retags the row, after which
+    # precedence applies normally.
+    "platform": 1,
+    "polymarket": 2,
+    "flashscore": 3,     # real order of play; agrees with tennisexplorer where
+    "tennisexplorer": 3,  # both carry a match (see flashscore_tennis_client)
+}
+
+
+def update_match_estimated_start_time(match: TennisMatch | None, estimated_start_time: str | None,
+                                      source: str = "platform") -> None:
+    """Keeps TennisMatch.estimated_start_time fresh every poll while the match
+    is still upcoming; never touched once the match is decided (winner_key set).
+
+    A write lands only if `source` ranks at least as high as whatever wrote the
+    current value. Equal ranks still overwrite, so a source refreshing its own
+    estimate (a genuine reschedule) is never frozen out -- what is blocked is a
+    WEAKER source undoing a better one, which is what made rows flicker.
+    """
     if match is None or match.winner_key is not None or not estimated_start_time:
         return
-    # Never overwrite a tennisexplorer time -- that is the real order of play,
-    # while this value is Kalshi's occurrence_datetime, which is never revised
-    # once set. Both writers running poll is what made matches flicker.
-    if match.start_time_source == "tennisexplorer":
+    incoming = _START_SOURCE_RANK.get(source, 2)
+    current = _START_SOURCE_RANK.get(match.start_time_source or "", 0)
+    if incoming < current:
         return
     match.estimated_start_time = estimated_start_time
-    match.start_time_source = "platform"
+    match.start_time_source = source
 
 
 def update_match_expected_expiration(match: TennisMatch | None, expected_expiration_time: str | None) -> None:

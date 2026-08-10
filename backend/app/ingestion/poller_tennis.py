@@ -77,7 +77,8 @@ def refresh_kalshi_tennis_markets():
                     # allowed to correct a placeholder written by Polymarket.
                     authoritative_tier=True,
                 )
-                market_catalog_tennis.update_match_estimated_start_time(match, event_rows[0].get("estimated_start_time"))
+                market_catalog_tennis.update_match_estimated_start_time(
+                    match, event_rows[0].get("estimated_start_time"), source="kalshi")
                 market_catalog_tennis.update_match_expected_expiration(match, event_rows[0].get("expected_expiration_time"))
                 match_id_by_event[event_ticker] = match.id if match else None
                 suffix = kalshi_match_suffix(event_ticker)
@@ -172,7 +173,8 @@ def refresh_polymarket_tennis_markets():
                     session, tour, tier, names[0], names[1],
                     event_rows[0].get("event_title", ""),
                 )
-                market_catalog_tennis.update_match_estimated_start_time(match, event_rows[0].get("estimated_start_time"))
+                market_catalog_tennis.update_match_estimated_start_time(
+                    match, event_rows[0].get("estimated_start_time"), source="polymarket")
                 market_catalog_tennis.update_match_expected_expiration(match, event_rows[0].get("expected_expiration_time"))
                 match_id_by_event[event_slug] = match.id if match else None
 
