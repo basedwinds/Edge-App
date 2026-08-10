@@ -83,6 +83,12 @@ class FuturesMarketOut(BaseModel):
     # defaulted, so the other sports' futures routes (where the sport IS the
     # league, and _league_for_row deliberately returns None) are unaffected.
     league: str | None = None
+    # The sport key this row belongs to, when the ROUTE serves more than one.
+    # Only /racing/futures sets it: that one endpoint covers f1, irl and nascar,
+    # and the cross-sport page needs the real series per row to route its
+    # reasoning link and to key a placed bet. Every other futures route serves a
+    # single sport, so the caller already knows it and this stays None.
+    sport: str | None = None
     line: float | None  # win-total ladder markets only (win_total/exact_win_total/wins_any); None otherwise
     side: str | None  # win_total/wins_any: always "over"; exact_win_total/other futures: None
     implied_prob: float | None

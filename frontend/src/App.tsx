@@ -33,6 +33,8 @@ import { Combined } from "./pages/Combined";
 import { Tracker } from "./pages/Tracker";
 import { Mlb } from "./pages/Mlb";
 import { MlbFutures } from "./pages/MlbFutures";
+import { CfbFutures } from "./pages/CfbFutures";
+import { WnbaFutures } from "./pages/WnbaFutures";
 import { MlbRecommended } from "./pages/MlbRecommended";
 import { MlbPlaced } from "./pages/MlbPlaced";
 import { MlbCalibration } from "./pages/MlbCalibration";
@@ -102,6 +104,8 @@ function App() {
         <Route path="/health" element={<Health />} />
         <Route path="/mlb" element={<Mlb />} />
         <Route path="/mlb/futures" element={<MlbFutures />} />
+        <Route path="/cfb/futures" element={<CfbFutures />} />
+        <Route path="/wnba/futures" element={<WnbaFutures />} />
         <Route path="/mlb/recommended" element={<MlbRecommended />} />
         <Route path="/mlb/placed" element={<MlbPlaced />} />
         <Route path="/mlb/calibration" element={<MlbCalibration />} />

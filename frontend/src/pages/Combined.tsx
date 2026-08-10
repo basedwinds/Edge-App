@@ -23,7 +23,7 @@ import {
   markBetPlaced,
   fetchFutures, fetchNbaFutures, fetchMlbFutures, fetchTennisFutures,
   fetchSoccerFutures, fetchValorantFutures, fetchCs2Futures, fetchLolFutures,
-  fetchWnbaFutures, fetchCfbFutures,
+  fetchWnbaFutures, fetchCfbFutures, fetchRacingFutures, fetchMmaFutures,
   type RecommendedBetRow,
   type SettingsPayload,
 } from "../api/markets";
@@ -203,12 +203,16 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
   // rows (CFB 139, the most of any sport; WNBA 12), but no fetcher ever called
   // them, so neither could appear on this tab at all. That is not "crowded out
   // by a bigger sport", it is absent, and no per-sport cap can fix absence.
-  const [nfl, nba, wnba, cfb, mlb, ten, soc, val, cs2, lol] = await Promise.all([
+  const [nfl, nba, wnba, cfb, mlb, ten, soc, val, cs2, lol, racing, mma] = await Promise.all([
     guard("Futures", fetchFutures(), []), guard("NbaFutures", fetchNbaFutures(), []),
     guard("WnbaFutures", fetchWnbaFutures(), []), guard("CfbFutures", fetchCfbFutures(), []),
     guard("MlbFutures", fetchMlbFutures(), []),
     guard("TennisFutures", fetchTennisFutures(), []), guard("SoccerFutures", fetchSoccerFutures(), []), guard("ValorantFutures", fetchValorantFutures(), []),
     guard("Cs2Futures", fetchCs2Futures(), []), guard("LolFutures", fetchLolFutures(), []),
+    // Racing and MMA were absent from this list, so their futures could never
+    // appear here no matter what edge they carried -- the same hand-maintained
+    // per-sport-list drift that hid whole sports from the catalog scanner.
+    guard("RacingFutures", fetchRacingFutures(), []), guard("MmaFutures", fetchMmaFutures(), []),
   ]);
   const tag = (fr: FuturesMarketRow[], sport: CrossSportFuturesRow["sport"]) =>
     fr.map((r) => ({ ...r, sport }));
@@ -216,6 +220,11 @@ async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
     ...tag(nfl, "nfl"), ...tag(nba, "nba"), ...tag(wnba, "wnba"), ...tag(cfb, "cfb"),
     ...tag(mlb, "mlb"), ...tag(ten, "tennis"),
     ...tag(soc, "soccer"), ...tag(val, "valorant"), ...tag(cs2, "cs2"), ...tag(lol, "lol"),
+    ...tag(mma, "mma"),
+    // Racing's single /futures route covers three series, so each row carries
+    // its own `sport` (f1 | irl | nascar). Tagging them all "f1" would send the
+    // reasoning link and the placed-bet key to the wrong series.
+    ...racing.map((r) => ({ ...r, sport: (r.sport ?? "f1") as CrossSportFuturesRow["sport"] })),
   ];
   // Curated to a number you can actually keep up with. Raw positive-edge is
   // ~800+ and mostly noise, so:

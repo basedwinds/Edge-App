@@ -406,6 +406,8 @@ export interface MlbMarketRow {
 }
 
 export interface FuturesMarketRow {
+  /** Only /racing/futures sets this: one route, three series (f1|irl|nascar). */
+  sport?: string | null;
   id: number;
   market_type: string; // division_winner | conference_champion | one_seed | super_bowl_champion | playoff_qualifier | best_record | undefeated_season | win_total | exact_win_total | wins_any
   source: "kalshi" | "polymarket";

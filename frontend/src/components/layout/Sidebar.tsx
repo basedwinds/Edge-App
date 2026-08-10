@@ -135,17 +135,19 @@ function navItems(sport: string) {
       sharedItems: shared,
     };
   }
-  // WNBA gets the full per-sport page set EXCEPT Futures (moneyline-only; Kalshi
-  // lists no WNBA spread/total/futures markets) -- Dashboard/Recommended/Placed/
-  // Calibration, uniform with every other sport (2026-07-24).
-  // CFB gets Dashboard/Recommended/Placed/Calibration but NO Futures page --
-  // unlike every other sport its futures are not a separate endpoint, they are
-  // market types inside /cfb/markets (944 of 974 rows), so they surface on the
-  // Dashboard and Recommended alongside the game markets.
+  // WNBA and CFB now get a Futures page like every other sport (2026-08-10).
+  // BOTH exclusions were documented with reasons that had since become false:
+  // "Kalshi lists no WNBA futures" (/wnba/futures returns 116 rows, all priced,
+  // 3 staked) and "CFB futures are not a separate endpoint" (/cfb/futures
+  // returns 1,380 rows, all priced, 42 staked -- more than any other sport).
+  // Both routes existed and were already being fetched by the cross-sport page;
+  // only the per-sport nav entry was missing, so the data was reachable
+  // everywhere except the page a user would look for it on.
   if (sport === "cfb") {
     return {
       sportItems: [
         { to: "/cfb", label: "Dashboard", icon: LayoutDashboard, end: true },
+        { to: "/cfb/futures", label: "Futures", icon: Trophy, end: false },
         { to: "/cfb/recommended", label: "Recommended", icon: Target, end: false },
         { to: "/cfb/placed", label: "Placed Bets", icon: ClipboardList, end: false },
         { to: "/cfb/calibration", label: "Calibration", icon: Gauge, end: false },
@@ -157,6 +159,7 @@ function navItems(sport: string) {
     return {
       sportItems: [
         { to: "/wnba", label: "Dashboard", icon: LayoutDashboard, end: true },
+        { to: "/wnba/futures", label: "Futures", icon: Trophy, end: false },
         { to: "/wnba/recommended", label: "Recommended", icon: Target, end: false },
         { to: "/wnba/placed", label: "Placed Bets", icon: ClipboardList, end: false },
         { to: "/wnba/calibration", label: "Calibration", icon: Gauge, end: false },

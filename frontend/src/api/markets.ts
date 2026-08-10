@@ -65,6 +65,24 @@ export async function fetchWnbaMarkets(): Promise<WnbaMarketRow[]> {
   return apiGet<WnbaMarketRow[]>("/wnba/markets");
 }
 
+/** Racing season titles (F1 drivers + constructors, IndyCar, NASCAR Cup).
+ *
+ * Racing was the ONLY sport whose futures could not reach the cross-sport
+ * recommended list: it had no /futures endpoint, so its 147 priced
+ * championship rows were invisible there whatever edge they carried. The
+ * endpoint reshapes the same numbers /racing/markets already computes, so the
+ * two views cannot disagree. */
+export async function fetchRacingFutures(): Promise<FuturesMarketRow[]> {
+  return apiGet<FuturesMarketRow[]>("/racing/futures");
+}
+
+/** UFC title futures. Currently returns rows but none priced (belt retention
+ *  has open blockers) -- wired anyway so the gap stays visible rather than
+ *  silently absent the day it starts pricing. */
+export async function fetchMmaFutures(): Promise<FuturesMarketRow[]> {
+  return apiGet<FuturesMarketRow[]>("/mma/futures");
+}
+
 export async function fetchWnbaFutures(): Promise<FuturesMarketRow[]> {
   return apiGet<FuturesMarketRow[]>("/wnba/futures");
 }

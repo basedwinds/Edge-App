@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
 from app.api.routers.settings import get_racing_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
-from app.api.schemas import RacingMarketOut, ReasoningOut, ReasoningFactorOut
+from app.api.schemas import FuturesMarketOut, RacingMarketOut, ReasoningOut, ReasoningFactorOut
 import logging
 
 from app.db.database import get_session
@@ -542,6 +542,69 @@ def list_racing_markets(session: Session = Depends(get_session)):
             row.stake_pool = (("futures" if _is_champ else "weekly") if stake is not None else None)
             out.append(row)
     out.sort(key=lambda r: (r.series, r.event or "", r.market_type, -(r.model_prob or -1)))
+    return out
+
+
+# Human labels for the two championship families, so the cross-sport futures
+# list can show "F1 Drivers' Championship" rather than a bare market_type.
+_CHAMP_GROUP_LABEL = {
+    ("f1", "drivers_champion"): "F1 Drivers' Championship",
+    ("f1", "constructors_champion"): "F1 Constructors' Championship",
+    ("irl", "drivers_champion"): "IndyCar Drivers' Championship",
+    ("nascar", "drivers_champion"): "NASCAR Cup Drivers' Championship",
+}
+
+
+@router.get("/futures", response_model=list[FuturesMarketOut])
+def list_racing_futures(session: Session = Depends(get_session)):
+    """Racing season titles in the SHARED futures shape.
+
+    WHY THIS EXISTS. Racing was the only sport whose futures could not reach
+    the cross-sport recommended list, because it had no /futures endpoint at
+    all -- its championship markets came back from /markets mixed in with
+    race_winner/top_n/pole, in a racing-specific schema the combined page does
+    not read. 147 priced championship rows (F1 drivers + constructors, IndyCar,
+    NASCAR) were therefore invisible there no matter what edge they carried.
+
+    Deliberately a RESHAPE of list_racing_markets rather than a second pricing
+    path. Every number here -- model_prob, edge, kelly, stake, pool -- is the
+    one /markets already computed, so the two views can never disagree. That
+    matters more than the small cost of computing the race markets too: this
+    app has repeatedly been bitten by two code paths answering the same
+    question differently.
+    """
+    rows = [r for r in list_racing_markets(session) if r.market_type in CHAMPIONSHIP_MARKET_TYPES]
+    out: list[FuturesMarketOut] = []
+    for r in rows:
+        out.append(FuturesMarketOut(
+            id=r.id,
+            market_type=r.market_type,
+            source=r.source,
+            team=r.driver,
+            group_label=_CHAMP_GROUP_LABEL.get((r.series, r.market_type)) or r.series_label or r.series,
+            # The SERIES is the league here (Cup vs Xfinity vs Truck all report
+            # series "nascar"), which is what the tracker's league column wants.
+            league=r.series_label or r.series,
+            sport=r.series,
+            line=None,
+            side=None,
+            implied_prob=r.implied_prob,
+            yes_bid=None,
+            yes_ask=None,
+            last_price=None,
+            volume=r.volume,
+            updated_at=None,
+            model_prob=r.model_prob,
+            model_validated=r.model_validated,
+            edge=r.edge,
+            kelly_fraction=r.kelly_fraction,
+            suggested_stake_dollars=r.suggested_stake_dollars,
+            suggested_stake_units=r.suggested_stake_units,
+            stake_pool=r.stake_pool,
+            line_move_pp=None,
+            model_note=r.model_note,
+        ))
+    out.sort(key=lambda r: -(r.edge if r.edge is not None else -1))
     return out
 
 
