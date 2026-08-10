@@ -18,9 +18,17 @@ export function WarmingBanner() {
   const { data } = useQuery({
     queryKey: ["warmup"],
     queryFn: fetchWarmup,
-    // Poll while cold so the banner clears itself, then stop: once ready, the
-    // answer cannot go back to false without a restart, which remounts this.
-    refetchInterval: (q) => (q.state.data?.ready ? false : 5000),
+    // Poll fast while cold so the banner clears itself; keep polling SLOWLY
+    // once ready rather than stopping.
+    //
+    // Stopping was the first version and it is wrong for how this app is
+    // actually used: the backend is restarted often, and a tab left open
+    // across a restart would keep its cached ready=true forever, silently
+    // showing a warming backend as if it were live. Caught in testing when a
+    // stale ready=true survived a backend change and the banner never
+    // reappeared. 30s idle polling costs a sub-second request and makes the
+    // banner correct across restarts.
+    refetchInterval: (q) => (q.state.data?.ready ? 30000 : 5000),
     // KEEP POLLING WHEN THE TAB IS NOT FOCUSED. react-query pauses interval
     // refetches in the background by default, and that is precisely wrong here:
     // waiting out a multi-minute boot is exactly when someone tabs away. Caught
