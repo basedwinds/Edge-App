@@ -170,10 +170,22 @@ function formatGameDate(
     return <span className="whitespace-nowrap font-mono">{localLabel(new Date(estimatedStartTime))} (est.)</span>;
   }
 
-  // "00:00" is nflverse/ESPN's placeholder for "kickoff not yet announced"
-  // (confirmed live: 18/108 tracked NFL games show it, alongside genuine real
-  // times like "13:00"/"20:15") -- not an actual midnight kickoff.
-  if (!gametime || gametime === "00:00") return <span className="whitespace-nowrap font-mono">{dateStr}</span>;
+  // "00:00" is nflverse's placeholder for "kickoff not yet announced" -- but
+  // ONLY for NFL, whose gametime is stadium-LOCAL wall clock, where midnight is
+  // not a real kickoff. Treating it as a placeholder everywhere suppressed the
+  // most common tip-off time in the league:
+  //
+  //     nba   00:00 on 3,586 of 18,004 games (20%) -- the SINGLE most common,
+  //           sitting among 01:00 (3,027), 00:30 (2,292), 23:00 (1,632)
+  //     wnba  00:00 on 47 of 304 (15%) -- second most common
+  //     nfl   00:00 on 12 of 7,597 (0.2%), against 13:00 on 3,798
+  //
+  // NBA/WNBA gametime is stored UTC (see the note below), so 00:00 UTC is
+  // 8pm ET -- the standard US evening slot, not an unknown. User-reported:
+  // "TOR vs Atlanta WNBA today" showing a date and no time.
+  if (!gametime || (sport === "nfl" && gametime === "00:00")) {
+    return <span className="whitespace-nowrap font-mono">{dateStr}</span>;
+  }
   // NFL's gametime is stadium LOCAL kickoff (nflverse's own convention) --
   // parsed with no "Z" so the Date constructor treats it as wall-clock, which
   // toLocaleTimeString then just echoes back as typed. NBA's gametime is
