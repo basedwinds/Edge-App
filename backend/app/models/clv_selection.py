@@ -52,6 +52,7 @@ def bucket_clv_stats(session: Session) -> dict[tuple[str, str], dict]:
     if _stats_cache["value"] is not None and now - _stats_cache["at"] < _STATS_TTL_SECONDS:
         return _stats_cache["value"]
     buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
+    rec_buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
     for bet in session.query(PlacedBet).all():
         clv = compute_bet_clv(session, bet)
         if clv["status"] != "closed" or clv["clv_pp"] is None:
@@ -65,6 +66,23 @@ def bucket_clv_stats(session: Session) -> dict[tuple[str, str], dict]:
         if _entry_was_unquoted(session, bet):
             continue
         buckets[(bet.sport, bet.market_type)].append(clv["clv_pp"])
+        # Track how much of each bucket the app would ACTUALLY have bet.
+        #
+        # This population is 81% paper rows that were never on the recommended
+        # tab (measured 2026-08-10: 8 of 43 staked paper bets that day), because
+        # paper deliberately logs below the bet gate to gather coverage. So the
+        # gate that retires market types is learning largely from bets this app
+        # would not have placed.
+        #
+        # DELIBERATELY NOT FILTERED YET. was_recommended only started being
+        # recorded on 2026-08-10, so every historical row is NULL -- switching
+        # the gate to recommended-only today would empty nearly every bucket and
+        # change staking behaviour overnight on no evidence. Counting it first
+        # makes the switchover a measured decision instead of a guess: when
+        # n_recommended reaches a usable size, compare the two populations'
+        # CLV before changing what gate_kelly consumes.
+        if bet.was_recommended:
+            rec_buckets[(bet.sport, bet.market_type)].append(clv["clv_pp"])
     value = {}
     for key, vals in buckets.items():
         clean = [v for v in vals if abs(v) <= _CONTAMINATION_PP]
@@ -75,6 +93,14 @@ def bucket_clv_stats(session: Session) -> dict[tuple[str, str], dict]:
             "n_contaminated": len(vals) - len(clean),
             "avg_clv_pp": round(sum(used) / len(used), 4),      # clean mean
             "median_clv_pp": round(statistics.median(used), 4),  # robust primary stat
+            # Subset that was on the recommended tab when logged. NOT used by
+            # gate_kelly -- see the note above. Reported so the switchover can
+            # be made on evidence.
+            "n_recommended": len(rec_buckets.get(key, [])),
+            "avg_clv_pp_recommended": (
+                round(sum(rec_buckets[key]) / len(rec_buckets[key]), 4)
+                if rec_buckets.get(key) else None
+            ),
         }
     _stats_cache.update(at=now, value=value)
     return value
