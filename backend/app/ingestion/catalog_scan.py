@@ -241,6 +241,75 @@ _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
 }
 
 
+# Sports whose SERIES exist on Kalshi all year but which this app does not price,
+# because they are between seasons and there is no edge measurement yet.
+#
+# WHY THIS NEEDS CODE AND NOT A NOTE. Checked live 2026-08-10: all 31 KXNCAAMB*
+# entries already sit in catalog_entries as sport="other",
+# disposition="not_relevant", dismissed -- swept up in a past pass over untracked
+# sports. A dismissal is STICKY and never re-flags, so when college basketball
+# relists in November the app would have said precisely nothing. That is exactly
+# how Call of Duty's dismissal led a later check to conclude it had no futures.
+#
+# The trigger is therefore the sport WAKING UP: while it has no open markets this
+# does nothing, and the moment it does, the dismissal recorded while it slept is
+# cleared so the series return to the New Markets review list.
+DORMANT_SPORTS = ("cbb",)
+
+
+def wake_dormant_sports(session: Session) -> dict[str, int]:
+    """Un-dismiss a dormant sport's catalog entries once it has OPEN markets."""
+    woken: dict[str, int] = {}
+    for sport in DORMANT_SPORTS:
+        matcher = _KALSHI_SPORT_MATCHERS.get(sport)
+        if matcher is None:
+            continue
+        rows = [e for e in session.query(CatalogEntry).all()
+                if e.identifier and matcher(e.identifier, e.title or "")]
+        if not rows:
+            continue
+        tickers = {e.identifier for e in rows}
+        open_now = set()
+        for t in sorted(tickers):
+            try:
+                data = get_json(f"{KALSHI_BASE}/markets?series_ticker={t}&status=open&limit=1")
+            except Exception:  # noqa: BLE001 - a fetch failure must not fake a wake-up
+                continue
+            if (data or {}).get("markets"):
+                open_now.add(t)
+        if not open_now:
+            log.info("dormant sport %s: still no open markets (%d series watched)",
+                     sport, len(tickers))
+            continue
+        cleared = 0
+        for e in rows:
+            # ONCE, on the transition only. Clearing on every run would undo the
+            # user's own dismissals every night -- they review the series,
+            # dismiss what they do not want, and tomorrow it is all back. The
+            # re-tag from the "other" catch-all to this sport IS the latch: a row
+            # already tagged with the sport has been through here before, so its
+            # disposition from then on is a real decision, not a stale sweep.
+            first_time = e.sport != sport
+            e.sport = sport
+            if first_time and e.dismissed:
+                e.dismissed = 0
+                e.disposition = None
+                cleared += 1
+        woken[sport] = cleared
+        if cleared:
+            log.warning(
+                "DORMANT SPORT IS BACK: %s now has open markets on %d of %d series. "
+                "Cleared %d stale dismissal(s) so they reappear under New Markets. "
+                "Run the market-odds backtest BEFORE pricing it.",
+                sport, len(open_now), len(tickers), cleared,
+            )
+        else:
+            # Already latched on an earlier run. Not a warning -- nothing changed.
+            log.info("dormant sport %s: open on %d/%d series, already surfaced",
+                     sport, len(open_now), len(tickers))
+    return woken
+
+
 def _series_with_any_market(tickers: set[str]) -> set[str]:
     """Which of these series have EVER listed a market, in any status.
 
@@ -335,6 +404,27 @@ def fetch_kalshi_cfb_series() -> list[dict]:
     spread and total series list nothing today but will appear here the moment
     they do, which is the point."""
     return _fetch_kalshi_series_for_sport("cfb")
+
+
+def fetch_kalshi_cbb_series() -> list[dict]:
+    """Every KXNCAAMB*/KXMARCHMADNESS* series, for a sport this app does NOT
+    price yet.
+
+    THIS FETCHER IS NOT OPTIONAL, and leaving it out is a trap I walked into.
+    The catch-all is defined as the exact COMPLEMENT of _KALSHI_SPORT_MATCHERS,
+    so adding a "cbb" matcher immediately STOPPED those tickers being swept up
+    as "other" -- and with no fetcher here they would then have been collected
+    by nobody at all. That is strictly worse than the bulk-dismissal problem the
+    matcher was added to prevent: invisible instead of merely mislabelled.
+
+    So the pair must always be added together: a matcher without a fetcher hides
+    a sport, exactly as a fetcher without a matcher mislabels one.
+
+    Returns nothing today -- college basketball is off-season and every
+    candidate series reports 0 open events -- and starts returning the moment
+    Kalshi relists it (~Nov), which is when it should appear under New Markets.
+    """
+    return _fetch_kalshi_series_for_sport("cbb")
 
 
 def fetch_kalshi_nfl_series() -> list[dict]:
@@ -826,6 +916,10 @@ _SPORT_FETCHERS: dict[str, list[tuple[str, callable]]] = {
     "cod": [("kalshi", fetch_kalshi_cod_series), ("polymarket", fetch_polymarket_cod_events)],
     "wnba": [("kalshi", fetch_kalshi_wnba_series), ("polymarket", fetch_polymarket_wnba_events)],
     "racing": [("kalshi", fetch_kalshi_racing_series), ("polymarket", fetch_polymarket_racing_events)],
+    # Kalshi only, and NOT yet priced by this app -- present so the series are
+    # COLLECTED and surfaced under New Markets when the season relists. See
+    # fetch_kalshi_cbb_series for why omitting it would have hidden them.
+    "cbb": [("kalshi", fetch_kalshi_cbb_series)],
     OTHER_SPORT: [("kalshi", fetch_kalshi_other_series),
                   ("polymarket", fetch_polymarket_other_events)],
 }

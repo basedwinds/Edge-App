@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from app import sports as app_sports
 from app.db.database import SessionLocal
-from app.ingestion.catalog_scan import scan_catalog
+from app.ingestion.catalog_scan import scan_catalog, wake_dormant_sports
 from app.ingestion.poller import run_full_refresh
 from app.ingestion.poller_soccer import refresh_mls_playoff_sim
 from app.models import observation_logger
@@ -190,6 +190,10 @@ def run_catalog_scan():
     session = SessionLocal()
     try:
         scan_catalog(session)
+        # A sport that was dismissed while between seasons must not stay
+        # dismissed once it relists -- see wake_dormant_sports.
+        wake_dormant_sports(session)
+        session.commit()
     except Exception:
         log.exception("catalog scan failed")
         # ROLL BACK BEFORE REUSING THE SESSION. A failed commit leaves the
