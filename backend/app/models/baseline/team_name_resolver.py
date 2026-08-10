@@ -76,6 +76,28 @@ def build_canonical_by_key(match_counts: dict[str, int], min_games: int) -> dict
         strong = [n for n in names if match_counts.get(n, 0) >= min_games]
         if len(strong) == 1:
             out[key] = strong[0]
+
+    # ALSO INDEX A SPACE-FREE KEY. name_key collapses punctuation INTO spaces
+    # but keeps them, so "The Mongolz" and "TheMongolz" land on different keys
+    # and never resolve to each other. That was survivable while both spellings
+    # carried their own rating; once team_name_folding merges the pool onto one
+    # spelling, a lookup on the other returns None -- an UNRATED team on a
+    # market we can price, which is strictly worse than the split it replaced.
+    # Confirmed live 2026-08-10: 'TheMongolz' and 'Nongshim Red Force' both went
+    # to None after the merge, and "Nongshim Red Force" is the spacing an
+    # exchange is likely to list.
+    #
+    # Added as a SECOND index rather than by changing name_key, because the
+    # corporate-suffix strip matches on " " + suffix and would silently stop
+    # working if spaces were removed there. Only registered where it is
+    # unambiguous -- if two different canonicals collapse to the same
+    # space-free key, neither is indexed.
+    spaceless: dict[str, set[str]] = {}
+    for key, canonical in out.items():
+        spaceless.setdefault(key.replace(" ", ""), set()).add(canonical)
+    for key, canonicals in spaceless.items():
+        if key and key not in out and len(canonicals) == 1:
+            out[key] = next(iter(canonicals))
     return out
 
 
@@ -86,7 +108,13 @@ def resolve(team: str, match_counts: dict[str, int], canonical_by_key: dict[str,
         return team
     if match_counts.get(team, 0) >= min_games:
         return team              # already has its own real history -- never redirect
-    return canonical_by_key.get(name_key(team)) or team
+    key = name_key(team)
+    # Try the spaced key first, then the space-free one. BOTH halves are needed:
+    # build_canonical_by_key indexes the space-free key, but the QUERY still
+    # folds to a spaced key, so "Nongshim Red Force" would look up
+    # "nongshim red force" and miss the "nongshimredforce" entry sitting right
+    # there. Caught by testing the lookup rather than the index.
+    return canonical_by_key.get(key) or canonical_by_key.get(key.replace(" ", "")) or team
 
 
 def count_appearances(matches, team_a_key: str = "team_a", team_b_key: str = "team_b",

@@ -29,6 +29,8 @@ is a different claim from beating a market price.
 """
 from __future__ import annotations
 
+from app.models.baseline import team_name_folding
+
 import json
 import logging
 from pathlib import Path
@@ -113,6 +115,21 @@ def refresh_ratings():
     for m in live_matches:
         by_id[m["source_match_id"]] = m
     all_matches = sorted(by_id.values(), key=lambda m: (m["sort_key"], m["source_match_id"]))
+    # MERGE SPELLING VARIANTS BEFORE TRAINING. The same team arrives under
+    # several spellings and each was accumulating its own independent Elo --
+    # measured 2026-08-10: Dplus Kia 1794.1 vs Dplus KIA 1516.8, Heroic 1591.5
+    # vs HEROIC 1741.1. Which rating a live match got priced off then depended
+    # on which spelling the exchange happened to use.
+    #
+    # Done HERE, on the combined history, because that is what actually merges
+    # the two rating histories; a lookup-time redirect would leave both pools
+    # split and each training on half the matches. Folds case/whitespace/
+    # punctuation ONLY, and every candidate group must survive a self-play
+    # disproof test -- see team_name_folding for why fuzzy matching is unsafe
+    # here (Evil Geniuses vs Evil Geniuses GC are different teams).
+    _folded = team_name_folding.apply_to_matches(all_matches)
+    if _folded:
+        log.info("%s: folded %d team-name variants into canonical spellings", __name__, _folded)
 
     state = CodEloState()
     rated = 0
