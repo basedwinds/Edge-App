@@ -139,11 +139,43 @@ def _fetch_kalshi_sports_series() -> list[dict]:
 
 
 def _prefix_matcher(*prefixes: str):
-    return lambda ticker, _title: ticker.upper().startswith(prefixes)
+    fn = lambda ticker, _title: ticker.upper().startswith(prefixes)
+    # Recorded so the loose NFL matcher below can yield to an explicit prefix
+    # claim without anyone having to maintain a second copy of these strings.
+    fn.prefixes = prefixes
+    return fn
 
 
 def _nfl_matcher(ticker: str, title: str) -> bool:
-    return "NFL" in ticker.upper() or "NFL" in title.upper() or "PRO FOOTBALL" in title.upper()
+    """NFL is the one sport matched by SUBSTRING rather than ticker prefix, and
+    that is not a style choice: real NFL series carry "NFL" mid-ticker
+    (KXPHILIPRIVERSNFL, KXRECORDNFLBEST, KXRECORDNFLWORST), so a KXNFL prefix
+    rule would silently drop them.
+
+    The cost of substring matching is that it also claims tickers that merely
+    CONTAIN those three letters. KXNCAAFCONFLEAVE ("College Football Conference
+    Leave") is the live example -- "CO-NFL-EAVE" -- so both nfl and cfb claimed
+    it. catalog_entries is unique on (platform, identifier) and SessionLocal
+    runs autoflush=False, so the second sport's existence query could not see
+    the first sport's pending row: both INSERTed, and the whole scan died on an
+    IntegrityError at commit. Nothing was catalogued at all, on every run.
+
+    So the loose matcher YIELDS to any sport with an explicit prefix claim.
+    Derived from the matcher table itself rather than a hardcoded exclusion, so
+    a new prefix sport is covered the moment it is added -- exactly the drift
+    that has already bitten this module three times (NCAAF, CS2/LoL, CoD).
+    Measured against 3,156 live Kalshi series: this drops KXNCAAFCONFLEAVE and
+    nothing else, keeps all three mid-ticker NFL series, and leaves ZERO
+    tickers claimed by more than one sport.
+    """
+    tu = ticker.upper()
+    for sport, matcher in _KALSHI_SPORT_MATCHERS.items():
+        if sport == "nfl":
+            continue
+        prefixes = getattr(matcher, "prefixes", None)
+        if prefixes and tu.startswith(prefixes):
+            return False
+    return "NFL" in tu or "NFL" in title.upper() or "PRO FOOTBALL" in title.upper()
 
 
 # The single source of truth for "which Kalshi series belongs to which
@@ -771,6 +803,9 @@ def scan_catalog(session: Session) -> list[CatalogEntry]:
     independent of whether OTHER sports already have history."""
     newly_flagged: list[CatalogEntry] = []
     counted = 0
+    # (platform, identifier) already processed in THIS run -- see the dedupe
+    # check in the item loop for why the DB query alone cannot cover this.
+    seen: set[tuple[str, str]] = set()
     bootstrapped_sports: list[str] = []
 
     for sport, fetchers in _SPORT_FETCHERS.items():
@@ -794,6 +829,20 @@ def scan_catalog(session: Session) -> list[CatalogEntry]:
                 # belong in this flag list.
                 if _is_per_game(item["identifier"]):
                     continue
+                # Already handled EARLIER IN THIS RUN -- do not add it twice.
+                #
+                # catalog_entries is unique on (platform, identifier) and
+                # SessionLocal runs autoflush=False, so a row added a moment ago
+                # is still pending and INVISIBLE to the query below. Two sports
+                # claiming one ticker therefore produced two INSERTs and killed
+                # the entire scan with an IntegrityError at commit -- nothing
+                # catalogued, every run, which is how new markets stop being
+                # seen at all. The nfl/cfb overlap that caused it is fixed at
+                # source in _nfl_matcher; this is the guard that keeps the next
+                # such overlap from being fatal rather than merely wrong.
+                if (platform, item["identifier"]) in seen:
+                    continue
+                seen.add((platform, item["identifier"]))
                 existing = (
                     session.query(CatalogEntry)
                     .filter_by(platform=platform, identifier=item["identifier"])

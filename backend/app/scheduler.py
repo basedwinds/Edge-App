@@ -192,6 +192,16 @@ def run_catalog_scan():
         scan_catalog(session)
     except Exception:
         log.exception("catalog scan failed")
+        # ROLL BACK BEFORE REUSING THE SESSION. A failed commit leaves the
+        # transaction in a broken state, and every later query on it raises
+        # PendingRollbackError rather than the original error -- so the scan's
+        # IntegrityError silently took auto_resolve_flagged down with it, and
+        # the second traceback pointed at an innocent query. Two jobs dead from
+        # one fault, and the second failure actively misleading.
+        try:
+            session.rollback()
+        except Exception:
+            log.exception("catalog scan rollback failed")
     try:
         # Close flagged entries whose build has since shipped. Runs with the
         # scan because that is when the catalog picture is freshest, and it is
