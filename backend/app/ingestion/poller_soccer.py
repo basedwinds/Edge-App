@@ -21,6 +21,13 @@ from app.models.news_adjustment.schema import merge_adjustments
 
 log = logging.getLogger("poller_soccer")
 
+# How far AHEAD a fixture may be and still have its kickoff corrected from ESPN.
+# Not a settlement horizon -- a display/staking one: a wrong kickoff is wrong on
+# the screen the moment the market is priced, which is days before it settles.
+# 14 days covers 410 of the 414 upcoming fixtures that currently carry live
+# markets; the handful beyond that are season-long futures with no kickoff.
+KICKOFF_HORIZON = datetime.timedelta(days=14)
+
 
 def refresh_soccer_ratings():
     elo_service_soccer.refresh_ratings()
@@ -92,7 +99,7 @@ def refresh_soccer_results():
             # today for a match a week out would otherwise look "already
             # played" and be re-fetched pointlessly every cycle.
             match_date = _real_match_date(match)
-            if match_date is None or match_date > today + datetime.timedelta(days=1):
+            if match_date is None or match_date > today + KICKOFF_HORIZON:
                 continue  # real match hasn't happened yet, nothing to backfill
             # TOMORROW is included deliberately, and this is not just slack.
             # The gate decides using the STORED start, which is the very thing
@@ -106,6 +113,19 @@ def refresh_soccer_results():
             # Widening by a day costs nothing: the ESPN window below already
             # runs to today + 1, and a not-yet-played match simply finds no
             # result to backfill.
+            #
+            # ONE DAY WAS NOT ENOUGH (user-reported 2026-08-10). Tigres vs
+            # Vancouver kicks off 02:00Z on the 12th; Kalshi said 05:00Z, which
+            # on the 10th is TWO days out, so the day of slack could not reach
+            # it and the row displayed 1am instead of 10pm. The correction ran
+            # only on matches about to be played, which is far too late to be
+            # the thing a user reads when deciding a bet.
+            #
+            # So the horizon is now the BETTING horizon, not the settlement
+            # one. It costs no extra requests -- the fetch below is one
+            # scoreboard call per league over a date RANGE, so a wider range is
+            # the same call. 399 of 414 upcoming fixtures carrying live markets
+            # sat outside the old window.
             by_league_ids.setdefault(match.league, []).append(match.id)
     finally:
         read_session.close()
@@ -171,7 +191,12 @@ def refresh_soccer_results():
         # One day of slack each side: ESPN dates a late kickoff on the next
         # UTC day, which is the off-by-one the matcher below tolerates too.
         oldest = min(league_dates) - datetime.timedelta(days=1)
-        raw = espn_soccer_client.fetch_scoreboard(league, oldest, today + datetime.timedelta(days=1))
+        # End of the window must track the gate above. If the fetch stopped at
+        # today+1 while the gate admitted matches 14 days out, those matches
+        # would be selected and then find no ESPN event to match -- a silent
+        # no-op that looks exactly like "ESPN has no fixture for this".
+        newest = max(max(league_dates), today) + datetime.timedelta(days=1)
+        raw = espn_soccer_client.fetch_scoreboard(league, oldest, newest)
         results_by_league[league] = espn_soccer_client.parse_final_results(raw)
         # Same payload, no extra request -- see parse_kickoffs' docstring for the
         # live-match bug this closes.
