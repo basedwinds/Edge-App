@@ -436,8 +436,46 @@ def list_valorant_markets(session: Session = Depends(get_session)):
             _fs_states, match.team_a, match.team_b, match.estimated_start_time)
     } if _fs_states else set()
 
+    # SECOND positive source, and for Valorant the only one that actually
+    # reports (see vlr_client.live_pairs and flashscore_esports_client's
+    # TITLE_KEYWORDS note: the flashscore feed carries LoL only, so _fs_states
+    # above is always empty here). Same one-directional, fail-open contract.
+    #
+    # ANCHORED IN TIME on purpose. Two Valorant teams meet repeatedly, and a
+    # pair alone cannot tell today's live game from next week's rematch on
+    # another row -- hiding the rematch would silently drop a legitimate
+    # market. So a live report only applies to a fixture whose own start is
+    # near now: already begun (or within 6h of beginning) and not more than
+    # 12h past, which comfortably covers a long series without reaching a
+    # future meeting.
+    _vlr_live = vlr_client.live_pairs()
+    _vlr_hidden: set[int] = set()
+    if _vlr_live:
+        # Same key space vlr_client.live_pairs() builds with, so the two cannot
+        # drift apart on diacritics or punctuation.
+        from app.ingestion.lol_team_aliases import base_key
+
+        _now = datetime.datetime.now(datetime.timezone.utc)
+        for mid, match in matches_by_id.items():
+            a, b = base_key(match.team_a), base_key(match.team_b)
+            if not a or not b or frozenset((a, b)) not in _vlr_live:
+                continue
+            raw = getattr(match, "estimated_start_time", None)
+            if not raw:
+                continue
+            try:
+                started = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=datetime.timezone.utc)
+            ahead = (started - _now).total_seconds() / 3600.0
+            if -12.0 <= ahead <= 6.0:
+                _vlr_hidden.add(mid)
+
     def _match_live_on_flashscore(m: Market) -> bool:
-        return getattr(m, "valorant_match_id", None) in _fs_hidden
+        mid = getattr(m, "valorant_match_id", None)
+        return mid in _fs_hidden or mid in _vlr_hidden
 
     # One id per real FIXTURE: duplicate Kalshi/Polymarket rows of the same
     # match share it, so the frontend's dedupe and per-match stake cap stop

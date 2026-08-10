@@ -177,3 +177,67 @@ def event_state(event_path: str, force: bool = False) -> dict:
     cache[event_path] = state
     _save_cache(cache)
     return state
+
+
+# --- LIVE MATCH FLAG -------------------------------------------------------
+# WHY THIS EXISTS (2026-08-10). Valorant had NO positive in-play signal at all.
+# flashscore_esports_client is the guard the router calls, but its feed (f_36)
+# publishes LEAGUE OF LEGENDS only -- sport ids 1-89 were probed and Valorant
+# appears nowhere on that host -- so `hides_match` has never once fired for this
+# sport. Everything blocking a live Valorant bet was inferred from a stored
+# start time, and this app has a recorded case of an esports match beginning
+# FOUR HOURS before its recorded start (see valorant_markets.py).
+#
+# vlr.gg/matches marks in-play games with `mod-live`, which is a positive
+# report rather than an inference. Measured when added: 44 pairs on the page,
+# 22 of our 40 fixtures-with-markets resolvable, and it correctly flagged the
+# two of ours that were live at that moment.
+#
+# ONE-DIRECTIONAL and FAILS OPEN, exactly like the flashscore guard: it can only
+# ever hide a match a real source says is underway, never surface or unhide one.
+_LIVE_TTL_SECONDS = 60
+_live_cache: dict[str, object] = {"at": 0.0, "pairs": set()}
+
+
+def _live_pairs_uncached() -> set[frozenset]:
+    from app.ingestion.lol_team_aliases import base_key
+
+    html = _get("/matches")
+    if not html:
+        return set()
+    out: set[frozenset] = set()
+    # One <a class="match-item"> per match; the live ones carry `mod-live`.
+    for block in re.split(r'<a\b', html):
+        if "match-item" not in block or "mod-live" not in block:
+            continue
+        names = re.findall(
+            r'match-item-vs-team-name[^>]*>(.*?)</div>', block, re.S)
+        cleaned = [unescape(re.sub(r"<[^>]+>", " ", n)).strip() for n in names]
+        cleaned = [c for c in cleaned if c]
+        if len(cleaned) != 2:
+            continue
+        a, b = base_key(cleaned[0]), base_key(cleaned[1])
+        if a and b and a != b:
+            out.add(frozenset((a, b)))
+    return out
+
+
+def live_pairs() -> set[frozenset]:
+    """{frozenset({team_key, team_key})} for matches vlr.gg reports as LIVE.
+
+    Empty on any failure -- a scrape that breaks must degrade to today's
+    behaviour, never to hiding a board. Cached for 60s because this is a SAFETY
+    read on the request path: a match going live is the event to react to
+    quickly, but one page fetch per minute is the most vlr.gg should ever see.
+    """
+    now = time.time()
+    if now - float(_live_cache["at"]) < _LIVE_TTL_SECONDS:
+        return _live_cache["pairs"]  # type: ignore[return-value]
+    try:
+        pairs = _live_pairs_uncached()
+    except Exception:
+        log.debug("vlr live scrape failed", exc_info=True)
+        pairs = set()
+    _live_cache["at"] = now
+    _live_cache["pairs"] = pairs
+    return pairs
