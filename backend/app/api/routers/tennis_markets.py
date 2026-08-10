@@ -40,7 +40,7 @@ from app.models.ladder_sanity import (
     pair_looks_resolved,
 )
 from app.models.duplicate_fixtures import canonical_tennis_fixture_ids
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/tennis", tags=["tennis"])
@@ -330,7 +330,13 @@ def _batch_recent_snapshots_for_live_check(session: Session, market_ids: list[in
         market_ids,
         lambda chunk: (
             session.query(
-                MarketSnapshot.market_id, MarketSnapshot.last_price, MarketSnapshot.volume
+                MarketSnapshot.market_id, MarketSnapshot.last_price, MarketSnapshot.volume,
+                # ts is needed to carve the SHORT window out of this same result
+                # set. Adding a fourth COLUMN is nearly free -- the 5.2s this
+                # helper was optimised away from was ORM entity construction,
+                # not the width of the row -- and it avoids a second query over
+                # the same 358k rows.
+                MarketSnapshot.ts,
             )
             .filter(MarketSnapshot.market_id.in_(chunk), MarketSnapshot.ts >= cutoff)
             .all()
@@ -770,6 +776,26 @@ def list_tennis_markets(session: Session = Depends(get_session)):
                 stake_pool="weekly" if kelly is not None else None,
             )
         )
+    # ONE STAKE PER PROPOSITION. The same tennis match is listed on both
+    # platforms, and both were being staked: Filippo Romano vs Massimo Giunta
+    # carried $10 on Polymarket AND $10 on Kalshi for the SAME moneyline (market
+    # ids 107144 and 117040, both tennis_match_id 3880) -- twice the intended
+    # exposure on one match. Jorda Sanchis, Balshaw and Darderi were the same.
+    #
+    # NOT the duplicate-FIXTURE problem canonical_tennis_fixture_ids solves:
+    # every one of these already shares a single tennis_match_id. It is the
+    # cross-platform duplicate the MLB futures path already caps, so it reuses
+    # that cap rather than growing a second implementation -- scoped by fixture,
+    # because a player appears in many matches and an unscoped key would drop a
+    # legitimate second bet.
+    #
+    # Keeping the BEST EDGE is right here for the same reason it is right for
+    # MLB: identical proposition, identical model_prob, so a bigger edge means
+    # only a better price. That is best execution, not the adverse selection
+    # that makes edge the wrong selector for NESTED legs.
+    duped = apply_duplicate_listing_cap(out, fixture_attr="tennis_match_id")
+    if duped:
+        log.info("tennis: unstaked %d cross-platform duplicate listings", duped)
     out.sort(key=lambda m: (m.match_date or "9999", m.match_label or ""))
     return out
 

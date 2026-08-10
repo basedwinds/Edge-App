@@ -650,7 +650,7 @@ def apply_ladder_futures_cap(rows: list, sport: str) -> int:
     return zeroed
 
 
-def apply_duplicate_listing_cap(rows: list) -> int:
+def apply_duplicate_listing_cap(rows: list, fixture_attr: str | None = None) -> int:
     """One stake per identical proposition listed on BOTH platforms.
 
     Identity is (team, market_type, line, side) -- deliberately excluding
@@ -667,11 +667,19 @@ def apply_duplicate_listing_cap(rows: list) -> int:
     legs are different propositions whose deeper rungs are less trustworthy,
     which is why edge is the wrong selector there and the right one here.
     """
+    def _key(r):
+        # fixture_attr scopes the identity to ONE real-world event. Futures need
+        # no such scope (a team has one season), but a tennis player appears in
+        # many matches, so without it two different matches for the same player
+        # would collapse into one and a legitimate second bet would be dropped.
+        fixture = getattr(r, fixture_attr, None) if fixture_attr else None
+        return (fixture, r.team, r.market_type, r.line, r.side)
+
     best: dict[tuple, object] = {}
     for r in rows:
         if not r.team or not r.suggested_stake_dollars:
             continue
-        key = (r.team, r.market_type, r.line, r.side)
+        key = _key(r)
         cur = best.get(key)
         if cur is None or (r.edge or -9) > (cur.edge or -9):
             best[key] = r
@@ -679,7 +687,7 @@ def apply_duplicate_listing_cap(rows: list) -> int:
     for r in rows:
         if not r.team or not r.suggested_stake_dollars:
             continue
-        if best.get((r.team, r.market_type, r.line, r.side)) is r:
+        if best.get(_key(r)) is r:
             continue
         _unstake(r, DUPLICATE_LISTING_NOTE)
         zeroed += 1
@@ -694,4 +702,8 @@ def _unstake(row, note: str) -> None:
     row.suggested_stake_units = None
     row.kelly_fraction = None
     row.stake_pool = None
-    row.model_note = f"{row.model_note} {note}" if row.model_note else note
+    # Not every payload carries model_note -- TennisMarketOut, for one, has no
+    # such field, and assigning an undeclared attribute on a pydantic model
+    # raises. The stake removal is the part that matters; annotate where we can.
+    if hasattr(row, "model_note"):
+        row.model_note = f"{row.model_note} {note}" if row.model_note else note
