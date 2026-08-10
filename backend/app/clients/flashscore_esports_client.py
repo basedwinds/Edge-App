@@ -64,6 +64,16 @@ STATUS_FINISHED = "3"
 
 # Tournament-title keyword per app sport. Flashscore prefixes every esports
 # tournament with its title, e.g. "LEAGUE OF LEGENDS: LCK (South Korea)".
+# ONLY "lol" ACTUALLY RESOLVES (measured 2026-08-10). This feed host publishes
+# League of Legends and nothing else under f_36; sport ids 1-89 were probed and
+# Counter-Strike and Valorant appear nowhere on it. The other two entries are
+# kept because they are correct IF a feed ever carries those titles, and because
+# deleting them would silently narrow the guard rather than leave the gap
+# visible -- get_match_states() now WARNS when a keyword matches nothing.
+#
+# Consequence to remember: cs2 and valorant have NO live-match protection. It
+# fails open, so this is not a regression, but do not read `hides_match` in
+# cs2_markets.py / valorant_markets.py as evidence that they are covered.
 TITLE_KEYWORDS = {
     "lol": "LEAGUE OF LEGENDS",
     "cs2": "COUNTER-STRIKE",
@@ -79,6 +89,9 @@ def _team_key(raw: str | None) -> str | None:
     return base_key(raw) or None
 
 
+_warned_unmatched: set[str] = set()
+
+
 def get_match_states(sport: str) -> dict[frozenset, dict]:
     """{frozenset({team_key, team_key}): {"start": datetime, "status": str}}
 
@@ -90,6 +103,9 @@ def get_match_states(sport: str) -> dict[frozenset, dict]:
     if not keyword:
         return {}
     out: dict[frozenset, dict] = {}
+    # Every tournament title the feed actually carried, so a keyword that
+    # matches NOTHING can say what it saw instead of returning a silent {}.
+    titles_seen: set[str] = set()
     try:
         client = httpx.Client(timeout=25.0, headers=_HEADERS)
     except Exception:
@@ -105,7 +121,10 @@ def get_match_states(sport: str) -> dict[frozenset, dict]:
                 log.debug("flashscore esports feed %s/%s failed", offset, kind, exc_info=True)
                 continue
             for row in rows:
-                if keyword not in (row.get("tournament") or "").upper():
+                title = (row.get("tournament") or "").upper()
+                if title:
+                    titles_seen.add(title.split(":")[0].strip())
+                if keyword not in title:
                     continue
                 a, b = _team_key(row.get("AE")), _team_key(row.get("AF"))
                 started = row.get("AD")
@@ -124,6 +143,27 @@ def get_match_states(sport: str) -> dict[frozenset, dict]:
                     out[pair] = state
     finally:
         client.close()
+    # A LIVE-MATCH GUARD THAT MATCHES NOTHING IS NOT A GUARD (found 2026-08-10).
+    # `hides_match` is the only thing stopping an in-play esports match being
+    # recommended, and for cs2 and valorant it has NEVER fired: the f_36 feed
+    # carries LEAGUE OF LEGENDS only. Probed sport ids 1-89 -- no Counter-Strike
+    # and no Valorant anywhere on this host, so those TITLE_KEYWORDS entries
+    # cannot ever match. Returning {} looked identical to "no matches today",
+    # which is why it went unnoticed: callers treat absence as "no opinion".
+    #
+    # So say it out loud. The feed reaching us with rows, none of them ours, is
+    # a different fact from the feed being down, and only one of them means the
+    # sport is unprotected.
+    # Once per sport per process. The routers refresh this every 60s, and a
+    # warning repeated 60 times an hour is one nobody reads.
+    if not out and titles_seen and sport not in _warned_unmatched:
+        _warned_unmatched.add(sport)
+        log.warning(
+            "flashscore esports: NO %s matches -- keyword %r matched none of the "
+            "%d title(s) this feed carries (%s). hides_match cannot protect %s, so "
+            "an in-play match can still be recommended there.",
+            sport, keyword, len(titles_seen), ", ".join(sorted(titles_seen)[:6]), sport,
+        )
     return out
 
 
