@@ -146,6 +146,65 @@ def _prefix_matcher(*prefixes: str):
     return fn
 
 
+# Soccer's prefixes are DERIVED from the ingester, not typed out here.
+#
+# REAL GAP this closes (measured 2026-08-10). The hand-written list held seven
+# prefixes -- EPL, La Liga, Serie A, Bundesliga, Ligue 1, MLS, Premier League --
+# while kalshi_soccer_client actually ingests 178 series across ~79 families.
+# Everything outside those seven fell to the "other" catch-all and was
+# bulk-dismissed as not_relevant, including competitions this app PRICES TODAY:
+# KXLEAGUESCUPTOTAL (252 live Leagues Cup markets), KXLIGAMXGAME (MEX1),
+# KXBRASILEIROSPREAD/BBTTS/B1H (BRA1, which has its own fitted home advantage).
+#
+# A hand-maintained copy of a list that lives somewhere else drifts the moment
+# the other list grows -- which is how six of these leagues were added this month
+# without anyone touching this file. Reading the client's own constants means
+# adding a league to the ingester classifies it here for free.
+def _soccer_ticker_families() -> tuple[str, ...]:
+    """Every KX* series the soccer client knows, reduced to league families."""
+    try:
+        from app.clients import kalshi_soccer_client as _sc
+    except Exception:  # pragma: no cover - scanner must run even if a client breaks
+        return ("KXEPL", "KXLALIGA", "KXSERIEA", "KXBUNDESLIGA", "KXLIGUE1",
+                "KXMLS", "KXPREMIERLEAGUE")
+    tickers: set[str] = set()
+
+    def _walk(value):
+        if isinstance(value, str):
+            if value.startswith("KX"):
+                tickers.add(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                _walk(item)
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                _walk(item)
+
+    for name in dir(_sc):
+        if not name.startswith("__"):
+            _walk(getattr(_sc, name, None))
+    # Strip market-type suffixes so a NEW market type in a league already
+    # covered (a first-half total, say) classifies without another edit here --
+    # the same "catch the whole family" intent as the CFB fetcher. The length
+    # floor stops a strip leaving a stub so short it would swallow other sports.
+    suffixes = ("GAME", "SPREAD", "TOTAL", "BTTS", "FTTS", "RELEGATION", "TOP",
+                "WINNER", "CHAMPION", "ADVANCE", "1H", "2H", "SCORE", "TEAM",
+                "POINTS", "PLAYOFF")
+    families: set[str] = set()
+    for ticker in tickers:
+        base = ticker
+        shrinking = True
+        while shrinking:
+            shrinking = False
+            for suffix in sorted(suffixes, key=len, reverse=True):
+                if base.endswith(suffix) and len(base) - len(suffix) >= 8:
+                    base = base[: -len(suffix)]
+                    shrinking = True
+                    break
+        families.add(base)
+    return tuple(sorted(families))
+
+
 def _nfl_matcher(ticker: str, title: str) -> bool:
     """NFL is the one sport matched by SUBSTRING rather than ticker prefix, and
     that is not a style choice: real NFL series carry "NFL" mid-ticker
@@ -192,9 +251,7 @@ _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
     "mlb": _prefix_matcher("KXMLB"),
     "mma": _prefix_matcher("KXUFC"),
     "tennis": _prefix_matcher("KXATP", "KXWTA", "KXITF"),
-    "soccer": _prefix_matcher(
-        "KXEPL", "KXLALIGA", "KXSERIEA", "KXBUNDESLIGA", "KXLIGUE1", "KXMLS", "KXPREMIERLEAGUE"
-    ),
+    "soccer": _prefix_matcher(*_soccer_ticker_families()),
     "valorant": _prefix_matcher("KXVALORANT"),
     "cs2": _prefix_matcher("KXCS2"),
     "lol": _prefix_matcher("KXLOL", "KXLEAGUEWORLDS"),
