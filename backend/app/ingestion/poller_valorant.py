@@ -134,7 +134,7 @@ def refresh_kalshi_valorant_markets():
                     # _infer_start_time_from_kalshi).
                     occurrence = occurrence_by_code.get(code)
                     if match is not None and match.winner is None:
-                        apply_start(match, occurrence)
+                        apply_start(match, occurrence, source="kalshi")
                 else:
                     match_id_by_code[code] = None
 
@@ -170,7 +170,7 @@ def refresh_kalshi_valorant_markets():
                     match_id_by_series_event[event_ticker] = match.id if match else None
                     occurrence = occurrence_by_series_event.get(event_ticker)
                     if match is not None and match.winner is None:
-                        apply_start(match, occurrence)
+                        apply_start(match, occurrence, source="kalshi")
                 else:
                     match_id_by_series_event[event_ticker] = None
 
@@ -260,7 +260,7 @@ def refresh_polymarket_valorant_markets():
                     # occurrence_datetime is above.
                     start_time = start_time_by_slug.get(slug)
                     if match is not None and match.winner is None:
-                        apply_start(match, start_time)
+                        apply_start(match, start_time, source="polymarket")
                 else:
                     match_id_by_slug[slug] = None
 

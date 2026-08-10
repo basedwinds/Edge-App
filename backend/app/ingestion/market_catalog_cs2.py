@@ -136,7 +136,7 @@ def upsert_liquipedia_match(session: Session, row: dict) -> Cs2Match:
     # apply_start also keeps match_date in step with the real start -- see its
     # docstring for the user-reported wrong-date-in-the-UI case this closes.
     if match.winner is None:
-        apply_start(match, row.get("estimated_start_time"))
+        apply_start(match, row.get("estimated_start_time"), source="liquipedia")
     # match_by_names_only above matches the pair in EITHER order, so the row
     # can describe this fixture with the sides swapped. Re-orient before
     # writing -- writing these three positionally is what put "FALKE VENOM 2-0

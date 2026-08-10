@@ -136,7 +136,7 @@ def refresh_kalshi_lol_markets():
                     # date survived onto the match record.
                     occurrence = occurrence_by_code.get(code)
                     if match is not None and match.winner is None:
-                        apply_start(match, occurrence)
+                        apply_start(match, occurrence, source="kalshi")
                 else:
                     match_id_by_code[code] = None
 
@@ -172,7 +172,7 @@ def refresh_kalshi_lol_markets():
                     match = market_catalog_lol.find_or_create_upcoming_match(session, team_a, team_b, match_date=str(occurrence)[:10] if occurrence else None)
                     match_id_by_series_event[event_ticker] = match.id if match else None
                     if match is not None and match.winner is None:
-                        apply_start(match, occurrence)
+                        apply_start(match, occurrence, source="kalshi")
                 else:
                     match_id_by_series_event[event_ticker] = None
 
@@ -188,7 +188,7 @@ def refresh_kalshi_lol_markets():
                 # find_or_create_upcoming_match stamps today (the SCRAPE date).
                 match = market_catalog_lol.find_or_create_upcoming_match(session, row["team_a"], row["team_b"], match_date=str(occurrence)[:10] if occurrence else None)
                 if match is not None and match.winner is None:
-                    apply_start(match, occurrence)
+                    apply_start(match, occurrence, source="kalshi")
                 market_catalog_lol.upsert_kalshi_lol_total_maps_market(
                     session, row, match.id if match else None
                 )
@@ -238,7 +238,7 @@ def refresh_polymarket_lol_markets():
                     match = market_catalog_lol.find_or_create_upcoming_match(session, team_a, team_b, event_name=event_by_slug.get(slug), match_date=str(start)[:10] if start else None)
                     match_id_by_slug[slug] = match.id if match else None
                     if match is not None and match.winner is None:
-                        apply_start(match, start)
+                        apply_start(match, start, source="polymarket")
                 else:
                     match_id_by_slug[slug] = None
 

@@ -133,7 +133,7 @@ def upsert_leaguepedia_match(session: Session, row: dict) -> LolMatch:
     # THIS path, so the same staleness kept reappearing everywhere else; see
     # start_times.apply_start for the Valorant case that forced generalising it.
     if match.winner is None:
-        apply_start(match, row.get("estimated_start_time"))
+        apply_start(match, row.get("estimated_start_time"), source="leaguepedia")
     # match_by_names_only above matches the pair in EITHER order, so the row
     # can describe this fixture with the sides swapped. Re-orient before
     # writing -- writing these three positionally is what put "FALKE VENOM 2-0

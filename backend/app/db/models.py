@@ -400,6 +400,7 @@ class ValorantMatch(Base):
     event_name = Column(String, nullable=False)
     match_date = Column(String, nullable=False)  # ISO date
     estimated_start_time = Column(String, nullable=True)  # live-derived, "always overwrite while upcoming" pattern -- same as MmaFight/TennisMatch/SoccerMatch
+    start_time_source = Column(String, nullable=True)
     team_a = Column(String, nullable=False)
     team_b = Column(String, nullable=False)
     best_of = Column(Integer, nullable=True)  # 1, 3, or 5 -- see class docstring for why this is often backfilled rather than known upfront
@@ -447,6 +448,7 @@ class Cs2Match(Base):
     event_name = Column(String, nullable=False)
     match_date = Column(String, nullable=False)  # ISO date
     estimated_start_time = Column(String, nullable=True)  # real UNIX-epoch-derived UTC instant from Liquipedia's own timer widget -- NOT a rough guess the way ValorantMatch's often is, see cs2_data.py
+    start_time_source = Column(String, nullable=True)
     team_a = Column(String, nullable=False)
     team_b = Column(String, nullable=False)
     best_of = Column(Integer, nullable=True)  # known upfront from Liquipedia's listing (see class docstring); nullable only for defensive parsing gaps
@@ -538,6 +540,7 @@ class LolMatch(Base):
     event_name = Column(String, nullable=False)
     match_date = Column(String, nullable=False)  # ISO date
     estimated_start_time = Column(String, nullable=True)
+    start_time_source = Column(String, nullable=True)
     team_a = Column(String, nullable=False)
     team_b = Column(String, nullable=False)
     best_of = Column(Integer, nullable=True)

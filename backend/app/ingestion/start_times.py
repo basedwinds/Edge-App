@@ -80,7 +80,39 @@ def should_update_start(current: str | None, incoming: str | None,
     return not (already_started and moves_to_future)
 
 
-def apply_start(match, incoming: str | None, now: datetime.datetime | None = None) -> bool:
+# PRECEDENCE between the two platforms, for rows that carry a
+# `start_time_source` column. Same ladder tennis uses
+# (market_catalog_tennis._START_SOURCE_RANK) and for the same measured reason:
+# Kalshi's occurrence_datetime is byte-identical to its expected_expiration_time
+# on every series checked, so it is an EXPIRY, not a start.
+#
+# REAL BUG (measured 2026-08-10, one Kalshi pass then one Polymarket pass):
+# valorant fixtures 335/336/337 went 21:15Z -> 21:00Z -> 21:15Z and would have
+# done that on every cycle forever. Only 15-35 minutes here, because Kalshi's
+# valorant estimate happens to sit close -- the identical defect moved a TENNIS
+# row by six hours.
+#
+# A row whose model has no such column keeps the old behaviour exactly: rank
+# lookups fall back to equal, so nothing is blocked.
+_SOURCE_RANK = {
+    "kalshi": 1, "platform": 1,
+    "polymarket": 2,
+    # Scrapers publish a real schedule rather than a market expiry.
+    "vlr": 3, "liquipedia": 3, "leaguepedia": 3, "flashscore": 3,
+}
+
+
+def _source_allows(match, source: str | None) -> bool:
+    """False only when a WEAKER source would undo a better one."""
+    if source is None or not hasattr(match, "start_time_source"):
+        return True
+    incoming = _SOURCE_RANK.get(source, 2)
+    current = _SOURCE_RANK.get(getattr(match, "start_time_source", None) or "", 0)
+    return incoming >= current
+
+
+def apply_start(match, incoming: str | None, now: datetime.datetime | None = None,
+                source: str | None = None) -> bool:
     """Set `match.estimated_start_time` if the rule above allows it, AND keep
     `match.match_date` in agreement with it.
 
@@ -123,9 +155,13 @@ def apply_start(match, incoming: str | None, now: datetime.datetime | None = Non
     it would mean telling a fallback stamp apart from a real date, and since the
     pollers now pass real dates those two cases look identical.
     """
+    if not _source_allows(match, source):
+        return False
     if not should_update_start(match.estimated_start_time, incoming, match.match_date, now):
         return False
     match.estimated_start_time = incoming
+    if source is not None and hasattr(match, "start_time_source"):
+        match.start_time_source = source
     day = str(incoming)[:10] if incoming else None
     if day and len(day) == 10 and match.match_date != day:
         try:
