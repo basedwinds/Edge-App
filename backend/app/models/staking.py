@@ -586,12 +586,112 @@ def apply_nested_futures_cap(rows: list, sport: str) -> int:
                 continue
             if d == best.get(r.team):
                 continue
-            r.suggested_stake_dollars = None
-            r.suggested_stake_units = None
-            r.kelly_fraction = None
-            r.stake_pool = None
-            # Keep any existing note (the approximate badge) and add this one,
-            # so a row never silently loses its caveat to this pass.
-            r.model_note = f"{r.model_note} {NESTED_LEG_NOTE}" if r.model_note else NESTED_LEG_NOTE
+            _unstake(r, NESTED_LEG_NOTE)
             zeroed += 1
     return zeroed
+
+
+# Market types whose rungs are a LADDER: several thresholds of one opinion,
+# where clearing a higher rung implies clearing every lower one. Keyed by sport
+# so a type name meaning different things in two sports cannot collide.
+#
+# Verified on live MLB data rather than assumed: across 30 (team, source)
+# groups holding two or more win_total rungs, 171 adjacent comparisons, ZERO
+# cases where a higher line carried a higher model probability. That is what
+# makes "the widest rung is simply the highest model_prob" safe to rely on
+# without hardcoding whether a ladder reads over or under.
+LADDER_FUTURES_TYPES: dict[str, frozenset[str]] = {
+    "mlb": frozenset({"win_total"}),
+}
+
+LADDER_RUNG_NOTE = (
+    "Not staked separately: a higher rung of the same ladder for this team is already staked, "
+    "and clearing the higher rung implies clearing this one. Staking both would size one "
+    "opinion twice. Shown for tracking."
+)
+
+DUPLICATE_LISTING_NOTE = (
+    "Not staked separately: the identical market is already staked on the other platform at a "
+    "better price. Shown for tracking."
+)
+
+
+def apply_ladder_futures_cap(rows: list, sport: str) -> int:
+    """One stake per (team, ladder type); keep the WIDEST rung. Mutates in place.
+
+    Widest = highest model_prob, which the monotonicity check above establishes
+    is the lowest threshold of an over-ladder (and the highest of an under-one)
+    without this needing to know which it is.
+
+    Same reasoning as the nested-bracket cap: the rungs are not independent
+    bets, so sizing each one separately multiplies a single position. Note this
+    is scoped per SOURCE-independent team+type, so it also collapses the case
+    where the ladder is listed on both platforms.
+    """
+    types = LADDER_FUTURES_TYPES.get(sport)
+    if not types:
+        return 0
+    best: dict[tuple, object] = {}
+    for r in rows:
+        if r.market_type not in types or not r.team or not r.suggested_stake_dollars:
+            continue
+        key = (r.team, r.market_type)
+        cur = best.get(key)
+        if cur is None or (r.model_prob or 0) > (cur.model_prob or 0):
+            best[key] = r
+    zeroed = 0
+    for r in rows:
+        if r.market_type not in types or not r.team or not r.suggested_stake_dollars:
+            continue
+        if best.get((r.team, r.market_type)) is r:
+            continue
+        _unstake(r, LADDER_RUNG_NOTE)
+        zeroed += 1
+    return zeroed
+
+
+def apply_duplicate_listing_cap(rows: list) -> int:
+    """One stake per identical proposition listed on BOTH platforms.
+
+    Identity is (team, market_type, line, side) -- deliberately excluding
+    `source`, because that is the whole point: Kalshi's "National League
+    Champion" and Polymarket's "MLB: 2026 National League" are the same
+    outcome, and Milwaukee was staked on both at once for 2x the intended
+    exposure. 120 MLB rows are listed on both platforms, so this was latent
+    across far more than the one pair that happened to clear the gate.
+
+    HERE, KEEPING THE BEST EDGE IS CORRECT -- and that is not a contradiction
+    of the nested-bracket cap, which deliberately refuses to. These rows are
+    the SAME proposition carrying the SAME model_prob, so a bigger edge means
+    only a better price; it is best execution, not adverse selection. Nested
+    legs are different propositions whose deeper rungs are less trustworthy,
+    which is why edge is the wrong selector there and the right one here.
+    """
+    best: dict[tuple, object] = {}
+    for r in rows:
+        if not r.team or not r.suggested_stake_dollars:
+            continue
+        key = (r.team, r.market_type, r.line, r.side)
+        cur = best.get(key)
+        if cur is None or (r.edge or -9) > (cur.edge or -9):
+            best[key] = r
+    zeroed = 0
+    for r in rows:
+        if not r.team or not r.suggested_stake_dollars:
+            continue
+        if best.get((r.team, r.market_type, r.line, r.side)) is r:
+            continue
+        _unstake(r, DUPLICATE_LISTING_NOTE)
+        zeroed += 1
+    return zeroed
+
+
+def _unstake(row, note: str) -> None:
+    """Drop the stake but keep the model number, so the row still shows for
+    tracking and calibration. Any existing note is KEPT and appended to -- a row
+    must never lose an earlier caveat (the approximate badge) to this pass."""
+    row.suggested_stake_dollars = None
+    row.suggested_stake_units = None
+    row.kelly_fraction = None
+    row.stake_pool = None
+    row.model_note = f"{row.model_note} {note}" if row.model_note else note

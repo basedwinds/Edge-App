@@ -17,6 +17,8 @@ Futures use model_prob=None (no season-simulation model built for MLB yet).
 Reuses `_batch_latest_snapshots`/`_implied_prob` from routers/markets.py
 directly -- both are already fully sport-agnostic.
 """
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -40,10 +42,12 @@ from app.models.combine import combine_probability
 from app.models.ladder_sanity import find_resolved_entities
 from app.models.news_adjustment.schema import NewsAdjustment
 from app.models.season_sim_service_mlb import get_results as get_mlb_season_sim_results
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, apply_ladder_futures_cap, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/mlb", tags=["mlb"])
+
+log = logging.getLogger("mlb_markets")
 
 FUTURES_MARKET_TYPES = {
     "championship", "conference_champion", "division_winner",
@@ -368,6 +372,20 @@ def list_mlb_futures(session: Session = Depends(get_session)):
                 line_move_pp=None,
             )
         )
+    # One stake per opinion, in the BACKEND -- paper_logger gates on
+    # suggested_stake_dollars, so collapsing these only in the cross-sport list
+    # would still have logged them as independent paper bets and inflated both
+    # the exposure and the forward-CLV record.
+    #
+    # Ladder first, then duplicates. Order matters: the ladder pass picks the
+    # widest rung per team, and the duplicate pass then removes any second
+    # platform listing that same rung. Doing it the other way round would let a
+    # cross-platform pair of DIFFERENT rungs both survive.
+    laddered = apply_ladder_futures_cap(out, "mlb")
+    duplicated = apply_duplicate_listing_cap(out)
+    if laddered or duplicated:
+        log.info("mlb futures: unstaked %d extra ladder rungs and %d duplicate listings",
+                 laddered, duplicated)
     out.sort(key=lambda m: (m.market_type, -(m.implied_prob or 0)))
     return out
 
