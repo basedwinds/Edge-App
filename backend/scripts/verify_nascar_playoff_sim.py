@@ -83,6 +83,39 @@ a = sim.simulate_nascar_title(ratings, wins, points, 4, trials=800, seed=11)
 b = sim.simulate_nascar_title(ratings, wins, points, 4, trials=800, seed=11)
 check("same seed -> same answer", a == b)
 
+print("\n8) playoff points carry: regular-season wins must matter INSIDE the playoff")
+# Two drivers, IDENTICAL ratings. One won four races, the other none and got in
+# on points. Before playoff points were modelled these came out 0.0619 vs 0.0595
+# -- i.e. the playoff ranked purely on speed. This is that regression.
+pp_ratings = {f"X{i}": 1600 - i * 8 for i in range(20)}
+pp_ratings["WINNER"] = pp_ratings["POINTSGUY"] = 1550.0
+pp_wins = {f"X{i}": (1 if i < 6 else 0) for i in range(20)}
+pp_wins["WINNER"], pp_wins["POINTSGUY"] = 4, 0
+pp_points = {f"X{i}": 700 - i * 20 for i in range(20)}
+pp_points["WINNER"], pp_points["POINTSGUY"] = 500.0, 760.0
+pp = sim.simulate_nascar_title(pp_ratings, pp_wins, pp_points, 0, trials=6000, seed=5)
+check("a 4-win driver beats an equally rated 0-win driver by a clear margin",
+      pp["WINNER"] > pp["POINTSGUY"] * 2,
+      f'4 wins {pp["WINNER"]:.4f} vs 0 wins {pp["POINTSGUY"]:.4f}')
+
+mono = []
+for nw in (0, 1, 2, 3, 4):
+    pp_wins["WINNER"] = nw
+    mono.append(sim.simulate_nascar_title(pp_ratings, pp_wins, pp_points, 0,
+                                          trials=5000, seed=5)["WINNER"])
+check("more wins never lowers title odds (monotone)",
+      all(mono[i] <= mono[i + 1] + 0.005 for i in range(len(mono) - 1)),
+      " -> ".join(f"{v:.4f}" for v in mono))
+
+# An explicit all-zero override must reproduce the old speed-only behaviour --
+# this is what makes the playoff-points effect attributable rather than assumed.
+pp_wins["WINNER"] = 4
+flat = sim.simulate_nascar_title(pp_ratings, pp_wins, pp_points, 0, trials=6000, seed=5,
+                                 playoff_points={d: 0.0 for d in pp_ratings})
+check("zeroing playoff points collapses the gap back to noise",
+      abs(flat["WINNER"] - flat["POINTSGUY"]) < 0.02,
+      f'4 wins {flat["WINNER"]:.4f} vs 0 wins {flat["POINTSGUY"]:.4f}')
+
 print("\ntop 8 title odds:")
 for d, v in sorted(p.items(), key=lambda kv: -kv[1])[:8]:
     print(f"  {d}  rating={ratings[d]}  wins={wins[d]}  title={v:.4f}")

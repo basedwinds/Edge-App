@@ -12,6 +12,24 @@ THE FORMAT ENCODED HERE (constants below, isolated so they are cheap to correct)
   * Four rounds of 3, 3, 3 and 1 races, cutting 16 -> 12 -> 8 -> 4.
   * The Championship 4 is a single race: whichever of the four finishes highest
     is champion, regardless of the other 39 cars.
+  * Each round RESETS the points, then re-adds a driver's PLAYOFF POINTS (5 per
+    regular-season win). This is why a win in February still matters in October.
+  * Winning a race inside a round AUTO-ADVANCES that driver to the next round,
+    ahead of the points cut.
+
+WHAT THE FIRST VERSION GOT WRONG (fixed 2026-08-11). Rounds were seeded at zero
+and the only nod to winning was an ad-hoc "a win is decisive" tally bonus. So
+once the playoff began, accomplishment stopped existing: at IDENTICAL ratings a
+four-win driver and a driver who squeaked in on points came out 0.0619 vs
+0.0595 -- inside Monte Carlo noise. The sim ranked purely on speed.
+
+STAGE POINTS ARE NOT MODELLED, and this is a data limit, not a choice: NASCAR
+also awards 1 playoff point per stage win, and `race_events.result_json` stores
+only {order, pole} -- no stage results anywhere in this database. So playoff
+points here are a FLOOR (wins only). The regular-season champion's 15-point
+bonus is likewise omitted, since the sim tracks simulated wins but not simulated
+points. Both omissions understate the spread between winners and pointers;
+neither reverses its direction.
 
 HONESTLY LABELLED: unlike the WNBA bracket -- whose reseeding rule was RECOVERED
 from the 2024/25 postseasons in our own data -- this structure is encoded from
@@ -36,6 +54,18 @@ PLAYOFF_FIELD = 16
 ROUND_RACES = (3, 3, 3, 1)          # races per round
 ROUND_SURVIVORS = (12, 8, 4, 1)     # field size AFTER each round
 CHAMPIONSHIP_ROUND_SIZE = 4
+
+# Playoff points earned per regular-season race win. They are re-added at EVERY
+# round reset (rounds 1-3), which is what makes a race win worth far more than
+# the one race it was won in.
+PLAYOFF_POINTS_PER_WIN = 5
+
+# Cup race points by finishing position among the FULL field: 40 for the win,
+# then 35, 34, 33 ... down to a floor of 1.
+def _race_points(pos: int) -> int:
+    if pos <= 1:
+        return 40
+    return max(1, 37 - pos)
 # ----------------------------------------------------------------------------
 
 
@@ -72,6 +102,7 @@ def simulate_nascar_title(
     regular_races_left: int,
     trials: int = 4000,
     seed: int | None = None,
+    playoff_points: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """{driver: P(wins the Cup)}.
 
@@ -100,6 +131,14 @@ def simulate_nascar_title(
         for _r in range(max(0, regular_races_left)):
             sim_wins[_draw_order(field, w, rng)[0]] += 1
 
+        # Playoff points are derived from the wins THIS TRIAL produced, not from
+        # today's total -- a driver who wins twice more before the cut carries
+        # those ten points into every round, and freezing them would erase the
+        # main reason winning early matters.
+        pp = ({d: float(playoff_points.get(d, 0.0)) for d in field}
+              if playoff_points is not None
+              else {d: PLAYOFF_POINTS_PER_WIN * sim_wins[d] for d in field})
+
         winners = [d for d in field if sim_wins[d] > 0]
         rng.shuffle(winners)  # no ordering advantage among equal win-getters
         winners.sort(key=lambda d: -sim_wins[d])
@@ -114,17 +153,36 @@ def simulate_nascar_title(
             if survivors == 1:
                 # Championship race: best finisher AMONG THE FOUR takes the
                 # title. Everyone else on track is irrelevant to it, which is
-                # exactly what makes this not a points contest.
+                # exactly what makes this not a points contest. Playoff points
+                # deliberately do NOT apply here -- the final four are reset
+                # equal, which is the one place "ranks on speed" is correct.
                 champ = next(d for d in _draw_order(field, w, rng) if d in alive)
                 titles[champ] += 1
                 break
-            tally = {d: 0.0 for d in alive}
+
+            # EACH ROUND RESETS, THEN ADDS PLAYOFF POINTS. Seeding the round at
+            # zero was the defect: it made a 4-win driver and a 0-win driver who
+            # squeaked in on points identical once the playoff started (measured
+            # at equal ratings: 0.0619 vs 0.0595, i.e. noise). Accomplishment
+            # over the regular season is supposed to carry.
+            tally = {d: pp[d] for d in alive}
+            round_winners: list[str] = []
             for _r in range(races):
-                order = [d for d in _draw_order(field, w, rng) if d in alive]
-                for pos, d in enumerate(order):
-                    tally[d] += len(order) - pos          # better finish = more
-                if order:
-                    tally[order[0]] += len(order)         # a win is decisive
-            alive = sorted(alive, key=lambda d: (-tally[d], rng.random()))[:survivors]
+                full = _draw_order(field, w, rng)
+                for pos, d in enumerate(full, start=1):
+                    if d in tally:
+                        tally[d] += _race_points(pos)
+                # Only a PLAYOFF driver's win auto-advances; a non-playoff
+                # driver can and does win these races, which advances nobody.
+                if full and full[0] in tally and full[0] not in round_winners:
+                    round_winners.append(full[0])
+
+            # A win in the round advances you outright, ahead of points. This is
+            # the other half of the same rule and the reason the old code had an
+            # ad-hoc "a win is decisive" tally bonus standing in for it.
+            advanced = round_winners[:survivors]
+            rest = [d for d in alive if d not in advanced]
+            rest.sort(key=lambda d: (-tally[d], rng.random()))
+            alive = advanced + rest[: survivors - len(advanced)]
 
     return {d: round(titles[d] / trials, 4) for d in field}
