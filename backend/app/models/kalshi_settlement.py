@@ -65,6 +65,28 @@ _YES_MEANS_TEAM_WON = {
     "playoff_qualifier", "playoff_seed", "playoff_host", "division_order",
     "stage_of_elimination", "league_winner", "drivers_champion",
     "constructors_champion", "tournament_winner", "relegation", "mvp",
+    # ADDED 2026-08-11 after an audit found these were SILENTLY UNSETTLEABLE.
+    # A market_type absent from this set (and from _YES_MEANS_OVER_LINE) hits
+    # the `continue` below and is skipped with no log line, so ~506 active
+    # futures markets across eleven types could never settle -- and neither
+    # could the observation-log rows behind them. That is the mechanism behind
+    # "only a handful of futures bets have ever settled": not a pricing problem,
+    # a grading one, and it is invisible because nothing errors.
+    #
+    # Every one added here has the SAME shape as the entries above it: one
+    # outcome, yes = this team achieved it. Checked individually rather than
+    # pattern-matched on the name.
+    "best_record", "worst_record",          # NBA/MLB season-sim futures
+    "cfb_playoff", "cfb_quarterfinal", "cfb_title_conference",
+    "one_seed", "top4", "semifinal_qualifier",
+    "mls_cup_winner", "mls_conference_winner",
+    "championship",
+    # DELIBERATELY NOT ADDED: title_holder (priced by nothing -- the model
+    # failed its own walk-forward gate, so no bet can exist to settle), and
+    # race_winner / first_half_winner / second_half_winner / map_winner /
+    # set_winner, which are GAME markets already graded by their own sport's
+    # grader in bet_settlement.py. Adding a type that another path owns would
+    # give one bet two graders.
     # h2h_wins is a season-long PAIR: Kalshi lists each side as its own market
     # (KXNFLH2HWINS-27TBPIT-PIT and ...-TB), so the ticker fixes which team the
     # yes side belongs to and settlement resolves BY TICKER. Rule text is
