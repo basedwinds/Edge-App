@@ -65,6 +65,22 @@ _YES_MEANS_TEAM_WON = {
     "playoff_qualifier", "playoff_seed", "playoff_host", "division_order",
     "stage_of_elimination", "league_winner", "drivers_champion",
     "constructors_champion", "tournament_winner", "relegation", "mvp",
+    # h2h_wins is a season-long PAIR: Kalshi lists each side as its own market
+    # (KXNFLH2HWINS-27TBPIT-PIT and ...-TB), so the ticker fixes which team the
+    # yes side belongs to and settlement resolves BY TICKER. Rule text is
+    # explicit -- "If Pittsburgh records more wins than Tampa Bay ... resolves to
+    # Yes" -- which is the same one-outcome-the-bet-is-for relation as the
+    # outright futures above.
+    #
+    # It was the ONLY one of the five currently-stakeable NFL futures types with
+    # no settlement path (6 of 22 recommendations), so those bets would have sat
+    # pending forever and produced no evidence.
+    #
+    # Checked all 22 live markets: ticker suffix, stored team and yes_sub_title
+    # agree on 20; the other two differ only by abbreviation convention (ticker
+    # LAR vs our LA = Los Angeles R, JAC vs our JAX = Jacksonville). Neither is a
+    # crossed side, and settlement does not read the abbreviation anyway.
+    "h2h_wins",
 }
 
 # THRESHOLD LADDERS -- "yes" means the total CLEARED the line, not that a named
