@@ -519,6 +519,17 @@ def incoherent_group_legs(session: Session) -> list[dict]:
     Only an EXCESS fires, same as the flat check: a conference summing above 1
     has invented probability, while one summing below it usually just has
     entrants the model cannot rate.
+
+    SOCCER IS NOT COVERED HERE, and the reason is a prerequisite rather than a
+    decision. Its legs are the same per-group shape (league winner sums to 1 per
+    league, relegation to that league's automatic-drop count), but
+    season_sim_soccer.simulate_season() is called INSIDE the futures request
+    handler -- soccer_markets.py builds `sim_by_league` per request and there is
+    no module-level or TTL cache anywhere. CFB was addable precisely because
+    poller_cfb._CONF_SIM already holds its result.
+    So covering soccer means first caching those per-league sims somewhere a
+    cheap check can read, which is a change to the live soccer pricing path and
+    wants doing deliberately, not as a rider on this.
     """
     out: list[dict] = []
     try:
