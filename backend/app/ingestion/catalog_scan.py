@@ -248,7 +248,10 @@ def _nfl_matcher(ticker: str, title: str) -> bool:
 _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
     "nfl": _nfl_matcher,
     "nba": _prefix_matcher("KXNBA"),
-    "mlb": _prefix_matcher("KXMLB"),
+    # KXTEAMSINWS ("Teams in MLB Finals") is ingested by kalshi_mlb_client but
+    # does not start with KXMLB, so it fell to the catch-all and was dismissed
+    # as not_relevant. Found by client_matcher_drift(), not by eye.
+    "mlb": _prefix_matcher("KXMLB", "KXTEAMSINWS"),
     "mma": _prefix_matcher("KXUFC"),
     "tennis": _prefix_matcher("KXATP", "KXWTA", "KXITF"),
     "soccer": _prefix_matcher(*_soccer_ticker_families()),
@@ -1089,3 +1092,72 @@ def scan_catalog(session: Session) -> list[CatalogEntry]:
     if newly_flagged:
         log.info("catalog scan: %d new series/events flagged for review", len(newly_flagged))
     return newly_flagged
+
+
+# Which client module owns each sport's Kalshi series, so a matcher can be
+# checked against the list it is supposed to mirror rather than against nobody.
+_SPORT_CLIENT_MODULES = {
+    "mlb": "kalshi_mlb_client", "nba": "kalshi_nba_client", "wnba": "kalshi_wnba_client",
+    "tennis": "kalshi_tennis_client", "mma": "kalshi_mma_client", "racing": "kalshi_racing_client",
+    "cfb": "kalshi_cfb_client", "cs2": "kalshi_cs2_client", "lol": "kalshi_lol_client",
+    "valorant": "kalshi_valorant_client", "cod": "kalshi_cod_client", "soccer": "kalshi_soccer_client",
+}
+
+
+def _client_tickers(module) -> set[str]:
+    found: set[str] = set()
+
+    def walk(value):
+        if isinstance(value, str):
+            if value.startswith("KX"):
+                found.add(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                walk(item)
+
+    for name in dir(module):
+        if not name.startswith("__"):
+            walk(getattr(module, name, None))
+    return found
+
+
+def client_matcher_drift() -> list[str]:
+    """Series a sport INGESTS but its own catalog matcher does not claim.
+
+    Every one of these is invisible in the same specific way: it falls to the
+    "other" catch-all and gets bulk-dismissed as not_relevant in a sweep of
+    untracked sports, while the app happily prices it.
+
+    Measured 2026-08-10, which is why this exists rather than a note: soccer's
+    matcher named SEVEN prefixes against 178 ingested series, so Leagues Cup
+    (252 live priced markets), Liga MX and the whole Brasileiro family sat
+    dismissed. MLB had one, KXTEAMSINWS. Both were found by running this check,
+    not by anyone noticing.
+
+    A hand-written copy of a list that lives elsewhere drifts the moment the
+    other list grows, and nothing errors when it does -- so the copy has to be
+    audited by code.
+    """
+    import importlib
+
+    problems: list[str] = []
+    for sport, module_name in sorted(_SPORT_CLIENT_MODULES.items()):
+        matcher = _KALSHI_SPORT_MATCHERS.get(sport)
+        if matcher is None:
+            continue
+        try:
+            module = importlib.import_module(f"app.clients.{module_name}")
+        except Exception:  # pragma: no cover - a broken client is its own alarm
+            continue
+        unmatched = sorted(t for t in _client_tickers(module) if not matcher(t, ""))
+        if unmatched:
+            problems.append(
+                f"{sport}: catalog matcher does not claim {len(unmatched)} series its own "
+                f"client ingests ({', '.join(unmatched[:4])}"
+                f"{', ...' if len(unmatched) > 4 else ''}) -- they will fall to the "
+                f"'other' catch-all and be dismissed as not_relevant"
+            )
+    return problems

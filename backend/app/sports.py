@@ -188,6 +188,15 @@ def check_registry_consistency() -> list[str]:
     except Exception as exc:  # pragma: no cover - defensive only
         problems.append(f"registry check could not inspect catalog_scan: {exc}")
 
+    # A matcher that has fallen behind its own ingester hides live, priced
+    # markets under the "other" catch-all -- see catalog_scan.client_matcher_drift
+    # for the two cases this found on the day it was written.
+    try:
+        from app.ingestion.catalog_scan import client_matcher_drift
+        problems.extend(client_matcher_drift())
+    except Exception as exc:  # pragma: no cover - defensive only
+        problems.append(f"registry check could not audit matcher drift: {exc}")
+
     # has_futures_endpoint vs the REAL routing table.
     #
     # Checked against routes rather than trusted, because the hand-maintained
