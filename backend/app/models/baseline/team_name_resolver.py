@@ -40,7 +40,24 @@ import unicodedata
 
 # One trailing corporate token is dropped. Order matters only in that the
 # longest match is tried first (see _name_key).
-CORPORATE_SUFFIXES = ("esports club", "e sports", "esports", "gaming", "club")
+#
+# "team" is here for the same reason it is stripped as a LEADING token below --
+# it is decoration on either end, and the market and the scraper disagree about
+# which end. Measured across all three titles' active market teams before
+# shipping: exactly TWO teams gained a rating (CS2 "9z" -> "9z Team", 147 games;
+# "BetBoom" -> "BetBoom Team", 178 games -- both major orgs, and both sitting in
+# the BLAST Porto and Esports World Cup fields), ZERO were repointed, and ZERO
+# lost one. LoL and Valorant were unaffected.
+#
+# The cost, stated rather than hidden: two orgs whose two spellings have
+# COMPARABLE history now share a key and are refused as ambiguous rather than
+# each resolving to itself -- CS2 "1WIN" (25 games) vs "1win Team" (29), and
+# Valorant "NEKOMA TEAM" (10) vs "Nekoma Club" (7). That is build_canonical_by_key
+# working as designed: comparable claimants are a real ambiguity and the
+# dominance ratio deliberately refuses them. Neither org is in a live market, and
+# a spelling that has its own history still keeps its own rating either way --
+# only a zero-history market spelling landing on those keys would go unresolved.
+CORPORATE_SUFFIXES = ("esports club", "e sports", "esports", "gaming", "club", "team")
 
 
 def name_key(name: str) -> str:
