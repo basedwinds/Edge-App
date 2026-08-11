@@ -602,6 +602,15 @@ def apply_nested_futures_cap(rows: list, sport: str) -> int:
 # without hardcoding whether a ladder reads over or under.
 LADDER_FUTURES_TYPES: dict[str, frozenset[str]] = {
     "mlb": frozenset({"win_total"}),
+    # NFL, added 2026-08-11 after AFC East total wins was staked at BOTH
+    # "over 30" and "over 32" at once -- one directional opinion sized twice,
+    # since clearing 32 clears 30.
+    #
+    # exact_win_total is deliberately NOT here. It is not a ladder: "exactly
+    # 10 wins" is not implied by "exactly 11", so the rungs are genuinely
+    # different propositions and collapsing them would drop a real bet. Only
+    # cumulative over/under types belong in this map.
+    "nfl": frozenset({"win_total", "division_wins"}),
 }
 
 LADDER_RUNG_NOTE = (

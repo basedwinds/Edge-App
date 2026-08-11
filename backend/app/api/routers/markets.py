@@ -51,7 +51,7 @@ from app.models.division_markets import (
 from app.ingestion.market_matcher import split_teams_blob, KALSHI_TEAM_ABBRS, to_nflverse_abbr
 from app.models.stat_leaders import get_stat_leader_totals, compute_leader_scores
 from app.models.season_projections import get_prior_season_stats, prob_exceeds_season_total, project_season_total
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars, is_weekly_market_type
+from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, apply_ladder_futures_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars, is_weekly_market_type
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 from app.api.routers.settings import get_pool_dollars, get_unit_dollars, get_staking_params, get_flat_params
 from app.data.divisions import DIVISIONS
@@ -1235,6 +1235,19 @@ def list_futures(session: Session = Depends(get_session)):
                 model_note=PLAYER_STAT_TRACKING_NOTE if tracking_only and model_prob is not None else None,
             )
         )
+    # THE CAPS EXIST; THIS ROUTE NEVER CALLED THEM (found 2026-08-11 while the
+    # user was about to record these as placed paper bets).
+    #
+    # Measured on the live list: 7 of 30 staked futures were the SAME outcome on
+    # both platforms -- PIT/DEN/MIN/SEA division winner and CLE/DEN/JAX to make
+    # the postseason -- each sized twice, $35 of $75. The two platforms label
+    # the same market differently ("AFC North Division Winner" vs "Pro Football:
+    # AFC North Champion"), so nothing downstream could tell they were one
+    # position. apply_duplicate_listing_cap keys on (team, market_type, line,
+    # side) precisely so labels cannot hide it, and its docstring already says
+    # futures need no fixture scope. It simply was not wired in here.
+    apply_ladder_futures_cap(out, "nfl")
+    apply_duplicate_listing_cap(out)
     out.sort(key=lambda m: (m.market_type, m.group_label or "", m.team or "", m.line or 0, -(m.implied_prob or 0)))
     return out
 
