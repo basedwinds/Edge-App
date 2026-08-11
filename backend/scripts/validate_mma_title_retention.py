@@ -42,27 +42,53 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.ingestion import ufc_data  # noqa: E402
+from app.models.baseline.elo_mma import MmaEloState, predict_and_update, win_prob  # noqa: E402
 from fit_mma_title_retention import load_title_fights  # noqa: E402
 
 VANTAGE_MONTH, VANTAGE_DAY = 8, 11
 STALE_DAYS = 365
 FIRST_YEAR = 2013          # modern era; the 1990s tournament rows are excluded upstream
 MIN_PRIOR_FIGHTS = 6       # per division, before it can be fitted at all
+HAZARD = "flat"            # set by main(); "flat" = first-pass Poisson, "gap" = FIX A
+RETENTION = "division"     # "division" = pooled average, "elo" = FIX B, champion-specific
+FIELD_SIZE = 6             # how many recent title-fight participants make up "the field"
+
+_ALL_FIGHTS_CACHE: list | None = None
+_ELO_BY_YEAR: dict[int, MmaEloState] = {}
+
+
+def _elo_state_before(year: int) -> MmaEloState:
+    """Ratings replayed over every UFC fight BEFORE 1 Jan of `year`.
+
+    Walk-forward by construction: elo_service_mma.refresh_ratings() replays the
+    whole cache, so the only change needed for a no-leakage state is to stop the
+    replay at the cutoff. Cached per year -- 13 replays, not 13 x divisions.
+    """
+    global _ALL_FIGHTS_CACHE
+    if year in _ELO_BY_YEAR:
+        return _ELO_BY_YEAR[year]
+    if _ALL_FIGHTS_CACHE is None:
+        rows = ufc_data.load_fights()
+        for r in rows:
+            r["_d"] = r.get("event_date") or r.get("date")
+        _ALL_FIGHTS_CACHE = sorted(rows, key=lambda r: str(r.get("_d") or ""))
+    cutoff = f"{year:04d}-01-01"
+    state = MmaEloState()
+    for f in _ALL_FIGHTS_CACHE:
+        d = str(f.get("_d") or "")
+        if not d or d >= cutoff:
+            continue
+        predict_and_update(state, f)
+    _ELO_BY_YEAR[year] = state
+    return state
 
 
 def _division(fight) -> str:
     return (fight["weight_class"] or "").replace("Interim ", "").strip()
 
 
-def main() -> None:
-    fights = [f for f in load_title_fights() if not f["interim"] and f["decisive"]]
-    print(f"decisive non-interim title fights in archive: {len(fights)}")
-    if not fights:
-        return
-    print(f"date range: {fights[0]['date']} .. {fights[-1]['date']}")
-
-    years = sorted({f["date"].year for f in fights})
-    years = [y for y in years if y >= FIRST_YEAR and y < max(years)]
+def _run(fights, years) -> None:
     rows, skipped_stale, skipped_thin = [], 0, 0
 
     for y in years:
@@ -89,12 +115,45 @@ def main() -> None:
                 continue
             champ = last["winner_name"]
 
-            # HAZARD, fitted pre-Y: title fights per year in this division.
+            # HAZARD. Two variants, because which one is being tested matters:
+            #
+            #   flat  -- title fights per year, Poisson. This is the FIRST-PASS
+            #            hazard, and fit_mma_title_retention's FAILURE 2 is
+            #            exactly that it "ignores the schedule".
+            #   gap   -- FIX A from the second pass: the empirical distribution
+            #            of spacings between consecutive title fights in this
+            #            division, asked CONDITIONALLY -- given the belt has
+            #            already been idle `elapsed` days, what share of
+            #            historical gaps would have completed within the
+            #            remaining window? That is what makes it schedule-aware
+            #            without an announcement feed.
             span_years = max((hist[-1]["date"] - hist[0]["date"]).days / 365.25, 0.5)
             rate = len(hist) / span_years
-            p_fight = 1.0 - math.exp(-rate * window_years)
+            p_fight_flat = 1.0 - math.exp(-rate * window_years)
 
-            # RETENTION, fitted pre-Y: how often the defending champion won.
+            gaps = [(hist[i]["date"] - hist[i - 1]["date"]).days
+                    for i in range(1, len(hist))]
+            elapsed = (vantage - last["date"]).days
+            window_days = (year_end - vantage).days
+            at_risk = [g for g in gaps if g > elapsed]
+            if at_risk:
+                completing = [g for g in at_risk if g <= elapsed + window_days]
+                p_fight_gap = len(completing) / len(at_risk)
+            else:
+                # Every historical gap is already shorter than the current idle
+                # spell -- the belt is overdue, so a fight is likelier than the
+                # base rate, not less. Fall back rather than assert 0.
+                p_fight_gap = p_fight_flat
+            p_fight = p_fight_gap if HAZARD == "gap" else p_fight_flat
+
+            # RETENTION. Two variants, same reason as the hazard:
+            #
+            #   division -- how often the defending champion won, pooled over the
+            #               division. FAILURE 1 in fit_: every champion is then
+            #               equally likely to lose.
+            #   elo      -- FIX B: this champion's Elo win probability against the
+            #               division's recent title-fight participants. Ratings are
+            #               replayed only up to 1 Jan of Y, so no leakage.
             defended = held = 0
             chain = None
             for f in hist:
@@ -103,7 +162,26 @@ def main() -> None:
                     if f["winner_name"] == chain:
                         held += 1
                 chain = f["winner_name"]
-            retention = (held / defended) if defended >= 3 else 0.5
+            retention_div = (held / defended) if defended >= 3 else 0.5
+
+            if RETENTION == "elo":
+                state = _elo_state_before(y)
+                champ_id = last["winner_id"]
+                field: list[str] = []
+                for f in reversed(before):
+                    for fid in (f.get("winner_id"), f.get("loser_id")):
+                        if fid and fid != champ_id and fid not in field:
+                            field.append(fid)
+                    if len(field) >= FIELD_SIZE:
+                        break
+                if champ_id and field:
+                    cr = state.get(champ_id)
+                    probs = [win_prob(cr, state.get(o)) for o in field[:FIELD_SIZE]]
+                    retention = sum(probs) / len(probs)
+                else:
+                    retention = retention_div
+            else:
+                retention = retention_div
 
             p_hold = 1.0 - p_fight * (1.0 - retention)
 
@@ -116,7 +194,7 @@ def main() -> None:
 
     if not rows:
         print("no scorable division-years")
-        return
+        return rows
 
     n = len(rows)
     base = sum(r["held"] for r in rows) / n
@@ -153,6 +231,29 @@ def main() -> None:
         sel = by_year[y]
         print(f"  {y}: n={len(sel):2d}  actual {sum(s['held'] for s in sel) / len(sel):.2f}  "
               f"pred {sum(s['p'] for s in sel) / len(sel):.2f}")
+    return rows
+
+
+def main() -> dict:
+    global HAZARD, RETENTION
+    fights = [f for f in load_title_fights() if not f["interim"] and f["decisive"]]
+    print(f"decisive non-interim title fights in archive: {len(fights)}")
+    if not fights:
+        return
+    print(f"date range: {fights[0]['date']} .. {fights[-1]['date']}")
+    years = sorted({f["date"].year for f in fights})
+    years = [y for y in years if y >= FIRST_YEAR and y < max(years)]
+    # flat+division is the FIRST-PASS model; gap+elo is FIX A + FIX B, i.e. the
+    # variant the live code would actually price off. Both middles are run so the
+    # contribution of each fix is separable rather than inferred.
+    out = {}
+    for h, r in (("flat", "division"), ("gap", "division"),
+                 ("flat", "elo"), ("gap", "elo")):
+        HAZARD, RETENTION = h, r
+        bar = "=" * 62
+        print(f"\n{bar}\nHAZARD = {h}   RETENTION = {r}\n{bar}")
+        out[(h, r)] = _run(fights, years)
+    return out
 
 
 if __name__ == "__main__":

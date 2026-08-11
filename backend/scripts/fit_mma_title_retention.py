@@ -173,6 +173,7 @@ def load_title_fights():
             "interim": "Interim" in (wc or ""),
             "winner_id": (winner or {}).get("fighter_id"),
             "winner_name": (winner or {}).get("fighter_name"),
+            "loser_id": (loser or {}).get("fighter_id"),
             "loser_name": (loser or {}).get("fighter_name"),
             "decisive": winner is not None,  # draws/NCs leave the belt where it was
         })
