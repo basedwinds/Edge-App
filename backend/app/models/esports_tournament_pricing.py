@@ -162,13 +162,87 @@ def skip_reason(group_label: str | None, field_size: int = 0) -> str | None:
     return None
 
 
+INCOMPLETE_FIELD_REASON = (
+    "Not priced: too much of this field is unrated. The bracket simulator can only enter teams "
+    "it has a rating for, and it answers \"who wins among the entrants\" -- so every dropped team's "
+    "win probability is silently handed to the ones that remain. Here the market prices the "
+    "missing teams high enough that pricing the remainder would overstate them by more than "
+    "the staking gate, so the group is left unpriced rather than answered with an inflated number."
+)
+
+
+def _covered_mass(group, priced_ids, implied_by_market) -> float | None:
+    """Share of the group's market probability sitting on teams the sim could rate.
+
+    WHY THIS EXISTS. simulate_tournament_winner normalises over the field it is
+    GIVEN, so its output always sums to 1.0 -- across the rated teams only. Every
+    unrated team's win probability is therefore redistributed onto the survivors,
+    and the resulting "edge" is an artifact of who happened to be rated. Measured
+    live: LCK Challengers League had 3 of 10 teams rated holding 14.9% of the
+    market's mass, and the sim gave those three 100% of the title -- a 6.7x
+    inflation that put a +27pp edge and a real $2.50 stake on KT Rolster
+    Challengers. Same defect class as the sim-leg coherence checks in
+    integrity_checks.py: mutually exclusive legs must sum to a known constant.
+
+    The market is used ONLY for this scalar -- how much probability the teams the
+    model cannot rate collectively hold. The relative ordering among rated teams,
+    which is where any edge comes from, stays entirely model-derived.
+
+    Returns None when the distortion cannot be MEASURED -- i.e. some unrated leg
+    has no price at all. An unpriced leg is not a zero-probability leg, and
+    treating a missing snapshot as "nothing missing" would restore the exact bug
+    this guards (presence is not sufficiency).
+    """
+    total = 0.0
+    covered = 0.0
+    for m in group:
+        p = implied_by_market.get(m.id)
+        if p is None:
+            if m.id in priced_ids:
+                continue  # a rated leg with no price only shrinks `covered`, safe
+            return None   # an UNRATED leg with no price: the miss is unmeasurable
+        total += p
+        if m.id in priced_ids:
+            covered += p
+    if total <= 0:
+        return None
+    return covered / total
+
+
+# Minimum share of the market's mass the rated teams must hold for the group to
+# be priced at all. Below it the group is refused rather than rescaled.
+# Rescaling is mathematically right at any coverage, but once the model speaks
+# for a small minority of the field the SCALAR -- not the model -- is doing the
+# work, and "who wins among these three" has drifted too far from the question
+# the market is asking. 0.40 clears every legitimate field measured live (the
+# worst was CBLOL/BLAST at ~87% covered, and Circuito Desafiante at 62%) and
+# refuses only LCK Challengers League, where 3 rated teams held 14.9%.
+MIN_FIELD_COVERAGE = 0.40
+
+
 def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_OF,
-                             trials: int = DEFAULT_TRIALS, event_state_for=None) -> dict[int, float]:
+                             trials: int = DEFAULT_TRIALS, event_state_for=None,
+                             implied_by_market: dict[int, float | None] | None = None,
+                             refusals: dict[str, str] | None = None) -> dict[int, float]:
     """Returns {market_id: model_prob} for the tournament_winner markets it can
     price. `elo_service` is a title's elo_service_* module (needs
     get_team_rating + get_series_distribution). Markets whose team is unrated,
     whose tournament is a season-long aggregate (not a single bracket), or in a
-    <2-rated-team field, are simply absent from the result."""
+    <2-rated-team field, are simply absent from the result.
+
+    `implied_by_market` maps market id -> market implied probability. Pass it
+    whenever the caller has snapshots (all three routers do): it is what lets a
+    partially-rated field be rescaled to the mass it actually covers instead of
+    inheriting the dropped teams' probability. WITHOUT it a partial field is
+    REFUSED rather than priced -- the conservative direction, so that a caller
+    which forgets to pass prices cannot silently reintroduce the inflation.
+
+    `refusals`, if passed, is FILLED IN with {group_label: reason} for every
+    group the field-completeness gate turned away, so the routers can explain the
+    blank rather than render an unexplained empty cell. A guard whose effect the
+    user cannot see reads exactly like a guard that never ran.
+    """
+    implied_by_market = implied_by_market or {}
     by_tournament: dict[str, list] = defaultdict(list)
     skipped_labels: set[str] = set()
     for m in markets:
@@ -223,7 +297,29 @@ def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_O
             sim = simulate_tournament_winner(field, win_prob_fn, trials=trials)
         if sim is None:
             continue
+
+        # FIELD COMPLETENESS. sim sums to 1.0 over the teams it was GIVEN, so if
+        # any team was dropped for want of a rating the survivors have absorbed
+        # its win probability. Rescale to the mass the rated teams actually hold
+        # (or refuse the group outright when they hold too little); see
+        # _covered_mass for the live 6.7x case this was found on.
+        rated_names = {name for name, _ in field}
+        rated_ids = {m.id for m in group if m.team in rated_names and m.team in sim}
+        if len(rated_names) < len({m.team for m in group if m.team}):
+            coverage = _covered_mass(group, rated_ids, implied_by_market)
+            if coverage is None or coverage < MIN_FIELD_COVERAGE:
+                log.info("tournament %r NOT priced: rated field covers %s of market mass "
+                         "(need >= %.2f)", _label,
+                         "an unmeasurable share" if coverage is None else f"{coverage:.1%}",
+                         MIN_FIELD_COVERAGE)
+                if refusals is not None:
+                    refusals[_label] = INCOMPLETE_FIELD_REASON
+                continue
+            scale = coverage
+        else:
+            scale = 1.0
+
         for m in group:
             if m.team and m.team in sim:
-                out[m.id] = round(sim[m.team], 4)
+                out[m.id] = round(sim[m.team] * scale, 4)
     return out

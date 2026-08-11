@@ -195,7 +195,11 @@ def list_cs2_futures(session: Session = Depends(get_session)):
         if _p is not None and _p >= 0.5 and _m.team:
             _winner_by_group[g] = _m.team
 
-    priced = price_tournament_winners(markets, elo_service_cs2)
+    _implied_by_market = {_m.id: _implied_prob(snapshots_by_market.get(_m.id)) for _m in markets}
+    _field_refusals: dict[str, str] = {}
+    priced = price_tournament_winners(markets, elo_service_cs2,
+                                      implied_by_market=_implied_by_market,
+                                      refusals=_field_refusals)
     # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
     # kelly_fraction=None on the reasoning that the bracket is an approximation.
     # That reasoning was inverted: the paper logger only records rows the app
@@ -260,7 +264,10 @@ def list_cs2_futures(session: Session = Depends(get_session)):
                     # Explain the blank rather than leaving it mysterious: a user
                     # who sees an empty model column has no way to tell "not
                     # modelled yet" from "deliberately out of scope".
-                    else skip_reason(m.group_label, _group_sizes.get(m.group_label or '', 0))
+                    # Field-completeness refusal first: it is the only cause that
+                    # depends on WHO ELSE is in the field rather than on this row.
+                    else _field_refusals.get(m.group_label or '')
+                    or skip_reason(m.group_label, _group_sizes.get(m.group_label or '', 0))
                     # Third cause, and the only one the label cannot reveal: the
                     # team itself is outside the rated pool.
                     or (UNRATED_TEAM_REASON if (m.team and elo_service_cs2.get_team_rating(m.team) is None) else None)
