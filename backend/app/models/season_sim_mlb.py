@@ -188,11 +188,19 @@ def run_simulation(
 
         max_wins = max(wins.values())
         min_wins = min(wins.values())
+        # TIES SPLIT THE CREDIT -- see season_sim_nba.py for the case that
+        # exposed this. Only one team finishes best or worst, so each leg must
+        # sum to 1.0; a full count to each of k tied teams sums to k. MLB is the
+        # mildest of the three (162 games rarely tie at the extremes) but the
+        # arithmetic is wrong at any rate, and best_record/worst_record are
+        # priced markets here -- 30 rows each.
+        n_best = sum(1 for t in all_teams if wins[t] == max_wins)
+        n_worst = sum(1 for t in all_teams if wins[t] == min_wins)
         for t in all_teams:
             if wins[t] == max_wins:
-                tallies[t]["best_record"] += 1
+                tallies[t]["best_record"] += 1.0 / n_best
             if wins[t] == min_wins:
-                tallies[t]["worst_record"] += 1
+                tallies[t]["worst_record"] += 1.0 / n_worst
             tallies[t]["win_hist"][min(wins[t], MAX_REG_WINS)] += 1
         for i in range(min(max_wins, MAX_REG_WINS) + 1):
             any_wins_ge_hist[i] += 1

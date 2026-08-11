@@ -231,11 +231,27 @@ def run_simulation(
         trial_has_undefeated = False
         max_wins = max(wins.values())
         min_wins = min(wins.values())
+        # TIES SPLIT THE CREDIT -- see season_sim_nba.py for the case that
+        # exposed this. Only one team finishes best or worst, so each leg must
+        # sum to 1.0 across the league; giving a full count to each of k tied
+        # teams sums to k instead. Measured live 2026-08-11 before the fix, NFL
+        # best_record summed to 1.49 over 32 teams.
+        #
+        # NFL is the WORST case for this, not the mildest: a 17-game season ties
+        # at the top constantly, where a 162-game MLB season rarely does. Nothing
+        # here was broken by bad data -- this is 49% of a probability being
+        # invented by arithmetic on a complete, correct schedule.
+        #
+        # `undefeated` is deliberately NOT split: it is not a one-winner market,
+        # several teams can go undefeated in the same trial, so a full count each
+        # is right there.
+        n_best = sum(1 for t in all_teams if wins[t] == max_wins)
+        n_worst = sum(1 for t in all_teams if wins[t] == min_wins)
         for t in all_teams:
             if wins[t] == max_wins:
-                tallies[t]["best_record"] += 1
+                tallies[t]["best_record"] += 1.0 / n_best
             if wins[t] == min_wins:
-                tallies[t]["worst_record"] += 1
+                tallies[t]["worst_record"] += 1.0 / n_worst
             if total_games.get(t) and wins[t] == total_games[t]:
                 tallies[t]["undefeated"] += 1
                 trial_has_undefeated = True

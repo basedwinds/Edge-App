@@ -28,7 +28,8 @@ from app.db.models import Market, RaceEvent
 from app.models import racing_sim
 from app.models.baseline import racing_ratings, racing_championship
 from app.models.staking import (
-    FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, size_stake_dollars,
+    FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading,
+    kelly_fraction, size_stake_dollars,
 )
 
 router = APIRouter(prefix="/racing", tags=["racing"])
@@ -541,6 +542,23 @@ def list_racing_markets(session: Session = Depends(get_session)):
             row.suggested_stake_units = round(stake / unit_dollars, 2) if (stake is not None and unit_dollars) else None
             row.stake_pool = (("futures" if _is_champ else "weekly") if stake is not None else None)
             out.append(row)
+    # ONE STAKE PER DRIVER PER PROPOSITION, ACROSS BOTH PLATFORMS.
+    #
+    # Racing was the only futures-carrying router never given this cap, and it
+    # is the one with the most duplication: measured 2026-08-11, the NASCAR
+    # Cup Drivers' Championship lists 71 rows for 37 drivers (35 Kalshi + 36
+    # Polymarket) and IndyCar 50 rows for 27 drivers, so 34 and 23 drivers
+    # respectively appear on both books. Tyler Reddick sits at 0.075 on Kalshi
+    # and 0.09 on Polymarket -- one outcome, two rows, and nothing stopped both
+    # being staked for 2x the intended exposure on a season-long position.
+    #
+    # Latent rather than live when found (no racing championship edge currently
+    # clears the gate), which is exactly when it is cheapest to close.
+    #
+    # entity_attr="driver": these rows carry `driver`, not `team`, and no
+    # `side`. Passing the default would have collapsed every racing row onto a
+    # single key and unstaked nearly all of them.
+    apply_duplicate_listing_cap(out, entity_attr="driver")
     out.sort(key=lambda r: (r.series, r.event or "", r.market_type, -(r.model_prob or -1)))
     return out
 

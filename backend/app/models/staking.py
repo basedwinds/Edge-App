@@ -659,7 +659,8 @@ def apply_ladder_futures_cap(rows: list, sport: str) -> int:
     return zeroed
 
 
-def apply_duplicate_listing_cap(rows: list, fixture_attr: str | None = None) -> int:
+def apply_duplicate_listing_cap(rows: list, fixture_attr: str | None = None,
+                                entity_attr: str = "team") -> int:
     """One stake per identical proposition listed on BOTH platforms.
 
     Identity is (team, market_type, line, side) -- deliberately excluding
@@ -676,17 +677,26 @@ def apply_duplicate_listing_cap(rows: list, fixture_attr: str | None = None) -> 
     legs are different propositions whose deeper rungs are less trustworthy,
     which is why edge is the wrong selector there and the right one here.
     """
+    def _entity(r):
+        # `entity_attr` exists because not every row model calls it `team`.
+        # Racing rows carry `driver` and have no `side` at all, so reading
+        # r.team/r.side directly would raise on them -- or, worse, silently
+        # collapse every racing row onto one key and unstake almost all of them.
+        # Found 2026-08-11 while extending this cap to racing, BEFORE wiring it.
+        return getattr(r, entity_attr, None)
+
     def _key(r):
         # fixture_attr scopes the identity to ONE real-world event. Futures need
         # no such scope (a team has one season), but a tennis player appears in
         # many matches, so without it two different matches for the same player
         # would collapse into one and a legitimate second bet would be dropped.
         fixture = getattr(r, fixture_attr, None) if fixture_attr else None
-        return (fixture, r.team, r.market_type, r.line, r.side)
+        return (fixture, _entity(r), r.market_type, getattr(r, "line", None),
+                getattr(r, "side", None))
 
     best: dict[tuple, object] = {}
     for r in rows:
-        if not r.team or not r.suggested_stake_dollars:
+        if not _entity(r) or not r.suggested_stake_dollars:
             continue
         key = _key(r)
         cur = best.get(key)
@@ -694,7 +704,7 @@ def apply_duplicate_listing_cap(rows: list, fixture_attr: str | None = None) -> 
             best[key] = r
     zeroed = 0
     for r in rows:
-        if not r.team or not r.suggested_stake_dollars:
+        if not _entity(r) or not r.suggested_stake_dollars:
             continue
         if best.get(_key(r)) is r:
             continue
