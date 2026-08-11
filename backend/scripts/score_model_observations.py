@@ -69,9 +69,40 @@ def summarise(rows) -> dict | None:
         "edge_vs_market": mean_diff,
         "ci_low": mean_diff - 1.96 * se,
         "ci_high": mean_diff + 1.96 * se,
-        "model_mean_prob": statistics.mean(m for m, k, o in pairs),
-        "actual_rate": statistics.mean(o for m, k, o in pairs),
+        "calibration": _worst_bucket(pairs),
     }
+
+
+# CALIBRATION MUST BE BUCKETED, and this is not a refinement -- the obvious
+# version is worthless here. Every two-sided market is logged as BOTH sides, so
+# the probabilities sum to 1 and the mean model probability is 0.500 for every
+# sport by construction, as is the mean outcome. Comparing those two means
+# therefore always reads "perfectly calibrated" no matter what the model does.
+# The first version of this script printed exactly that and it fooled me into
+# reading 0.500 as evidence the model was inert.
+#
+# Bucketing survives the symmetry: within the rows where the model said ~0.8,
+# the outcome rate has to be ~0.8 or the model is miscalibrated, and pairing a
+# confident side with its mirrored underdog side cannot hide it.
+_BUCKETS = ((0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0))
+
+
+def _worst_bucket(pairs) -> str:
+    """The probability band where predicted and actual diverge most."""
+    worst = None
+    for low, high in _BUCKETS:
+        rows = [(m, o) for m, k, o in pairs if low <= m < high or (high == 1.0 and m == 1.0)]
+        if len(rows) < 20:  # too few to say anything
+            continue
+        predicted = statistics.mean(m for m, o in rows)
+        actual = statistics.mean(o for m, o in rows)
+        gap = abs(predicted - actual)
+        if worst is None or gap > worst[0]:
+            worst = (gap, low, high, predicted, actual, len(rows))
+    if worst is None:
+        return "(no band with n>=20)"
+    _, low, high, predicted, actual, n = worst
+    return f"{low:.1f}-{high:.1f}: said {predicted:.2f}, got {actual:.2f} (n={n})"
 
 
 def main() -> int:
@@ -112,23 +143,24 @@ def main() -> int:
     print(f"settled observations: {len(settled)}   groups scored: {len(scored)}"
           f"   (skipped {skipped} under n={args.min_n})")
     print()
-    print(f"{'group':28s} {'n':>5s} {'model':>7s} {'market':>7s} {'diff':>8s} "
-          f"{'95% CI':>18s}  {'calib (model vs actual)':>24s}")
+    print(f"{'group':22s} {'n':>5s} {'model':>7s} {'market':>7s} {'diff':>8s} "
+          f"{'95% CI':>18s}  worst-calibrated band")
     for r in scored:
         verdict = ""
         if r["ci_low"] > 0:
             verdict = "  MODEL BEATS MARKET"
         elif r["ci_high"] < 0:
             verdict = "  <-- MARKET BEATS MODEL, look here"
-        print(f"{r['key']:28s} {r['n']:5d} {r['model_brier']:7.4f} {r['market_brier']:7.4f} "
+        print(f"{r['key']:22s} {r['n']:5d} {r['model_brier']:7.4f} {r['market_brier']:7.4f} "
               f"{r['edge_vs_market']:+8.4f} [{r['ci_low']:+.4f},{r['ci_high']:+.4f}]"
-              f"   {r['model_mean_prob']:.3f} vs {r['actual_rate']:.3f}{verdict}")
+              f"  {r['calibration']}{verdict}")
     print()
     print("diff = market Brier minus model Brier; POSITIVE means the model is more")
     print("accurate than the price. A CI spanning zero means not yet distinguishable.")
-    print("calib compares the model's average probability with how often it actually")
-    print("happened -- a persistent gap is a recalibration candidate, a sport whose CI")
-    print("sits clearly below zero is a REBUILD candidate.")
+    print("the band shown is where predicted and actual diverge MOST. A persistent gap")
+    print("there is a recalibration candidate; a sport whose CI sits clearly below zero")
+    print("is a rebuild candidate. Means are useless here -- both sides of every market")
+    print("are logged, so mean probability is 0.500 by construction. See _worst_bucket.")
     return 0
 
 
