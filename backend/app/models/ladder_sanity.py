@@ -516,7 +516,39 @@ def pair_looks_live_by_surge(
     # of 0 and is not a live match, however fast its volume then climbs.
     if base < PAIR_SURGE_MIN_BASE:
         return False
-    return current >= PAIR_SURGE_GROWTH * base
+    if current >= PAIR_SURGE_GROWTH * base:
+        return True
+
+    # SECOND ARM: ALREADY live, as opposed to going live DURING the window.
+    #
+    # The growth test above measures volume growth INSIDE the lookback window,
+    # so it detects the TRANSITION into live. A match that started well before
+    # the window opened has already piled up in-play volume, which lands in
+    # `base` and flattens the ratio -- the longer it has been running, the more
+    # invisible it becomes to a growth test.
+    #
+    # REAL BET THIS COST (2026-08-11, user-reported): Emily Sartz-Lunde vs Alice
+    # Ferlito, ITF women. Market never traded until 11:16, then ran
+    # 0.50 -> 0.70 -> 0.07 -> 0.40 on climbing volume. The bet was placed at
+    # 13:27, over two hours in, and settled 25 minutes later. Every other gate
+    # missed it too: the stored start said 16:00Z because it came from Kalshi
+    # (an EXPIRATION estimate, not a start), so no timestamp check could fire.
+    # This rule failed on the growth ratio ALONE -- 2.31x against a 3.0x bar --
+    # while swing (0.33 vs 0.25), combined volume (33,285 vs 5,000) and base
+    # (14,423 vs 50) all cleared comfortably.
+    #
+    # So: a large price TRAVEL on a market that has genuinely traded size is
+    # itself live evidence, whatever the ratio. Swing is what separates this
+    # from a market that merely opened -- the control case Rottoli vs Ferrari
+    # opened with a base of 0, and a real upcoming match (Sabalenka vs
+    # Uchijima) swings 0.010 against the 0.25 bar here.
+    #
+    # MEASURED BEFORE SHIPPING, on all 712 active tennis moneyline markets: this
+    # arm flags 4 fixtures the growth test misses, and all four had already
+    # started according to their own INDEPENDENT start times (tennisexplorer and
+    # polymarket, not Kalshi) -- 10:00, 11:51, 12:01 and 12:30 UTC against a
+    # 14:30 measurement. Zero genuinely-upcoming matches newly blocked.
+    return max(swings) >= PAIR_SURGE_MIN_SWING and current >= PAIR_SURGE_MIN_VOLUME
 
 # Futures market types where exactly ONE entity can win, so a leg trading at
 # near-certainty means the whole group is decided. Deliberately explicit rather
