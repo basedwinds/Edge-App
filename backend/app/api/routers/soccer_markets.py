@@ -73,6 +73,12 @@ from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/soccer", tags=["soccer"])
 
+# {"data": {league: SeasonSimResult}} from the most recent futures pass. Populated
+# write-only inside list_soccer_futures purely so integrity_checks can assert the
+# per-league coherence invariants without re-running the Monte Carlo. Empty until
+# that endpoint has been hit once.
+_LAST_SIM_BY_LEAGUE: dict = {}
+
 GAME_MARKET_TYPES = {
     "moneyline_3way", "game_spread", "game_total", "btts",
     # Second batch (added 2026-07-19) -- see module docstring.
@@ -1045,6 +1051,25 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             state, canonical_teams, division, n_simulations=3000, second_tier_state=second_tier_state,
             starting_table=starting_table, played_pairs=played_pairs,
         )
+
+    # STASH THE PER-LEAGUE SIMS FOR THE INTEGRITY CHECK.
+    #
+    # Write-only, after the fact: this records what was just computed and changes
+    # nothing about how anything is priced. It exists because soccer is the last
+    # sim-backed futures sport with no coherence guard, and the reason is purely
+    # that its sims are built PER REQUEST here -- CFB was coverable only because
+    # poller_cfb._CONF_SIM already held its result for a cheap check to read
+    # (see integrity_checks.incoherent_group_legs).
+    #
+    # Soccer's one-winner legs are per-league: league_winner sums to 1 in each
+    # league, relegation to that league's automatic-drop count. With this in
+    # place a group-aware check can assert both without re-running a 3,000-trial
+    # Monte Carlo inside the health endpoint.
+    #
+    # Last-write-wins and deliberately unlocked: a stale or half-populated read
+    # can only make the CHECK quieter, never mis-price a market, so it needs no
+    # synchronisation.
+    _LAST_SIM_BY_LEAGUE["data"] = dict(sim_by_league)
 
     # One cached simulation prices every MLS Cup and conference-bracket row (see
     # _MLS_PLAYOFF_MARKET_TYPES). Cached rather than run here because assembling
