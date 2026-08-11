@@ -54,10 +54,35 @@ def name_key(name: str) -> str:
     t = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
     t = re.sub(r"[^a-z0-9]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
+    # A LEADING "team" IS DECORATION, and dropping it is worth a real bug.
+    #
+    # User-reported 2026-08-11: JiJieHao was priced 65.3% to beat Spirit, one of
+    # the best teams in the world. The market says "Spirit"; the scraper says
+    # "Team Spirit". Those were two rating keys -- 1533.9 off THREE maps against
+    # 2093.1 off 197 -- so the elite side was priced as an unrated newcomer and
+    # the recommendation named the wrong winner. A 559-point Elo error.
+    #
+    # It is not one team: nine CS2 pairs split this way, including Liquid (5
+    # maps vs Team Liquid's 211), Falcons (1 vs 205) and Vitality (1 vs 201) --
+    # four of the strongest teams in the game, each mispriced whenever the
+    # market used the short spelling.
+    #
+    # Only a LEADING token is stripped, and only the bare word "team": trailing
+    # corporate tokens are already handled below, and "Team" mid-name (Team
+    # Spirit Academy vs Spirit Academy) still collapses correctly because both
+    # sides lose the same prefix. Verified before shipping with the self-play
+    # disproof this module's docstring prescribes -- across all nine pairs,
+    # neither spelling ever played the other, so none are distinct orgs.
+    t = re.sub(r"^team\s+", "", t)
     for suffix in sorted(CORPORATE_SUFFIXES, key=len, reverse=True):
         if t.endswith(" " + suffix):
             return t[: -len(suffix) - 1].strip()
     return t
+
+
+# How much more history the canonical spelling needs before it may claim a name
+# that has real appearances of its own. 197-vs-3 must resolve; 7-vs-7 must not.
+_DOMINANCE_RATIO = 5
 
 
 def build_canonical_by_key(match_counts: dict[str, int], min_games: int) -> dict[str, str]:
@@ -76,6 +101,20 @@ def build_canonical_by_key(match_counts: dict[str, int], min_games: int) -> dict
         strong = [n for n in names if match_counts.get(n, 0) >= min_games]
         if len(strong) == 1:
             out[key] = strong[0]
+        elif len(strong) > 1:
+            # TWO SPELLINGS BOTH CLEARING min_games USED TO MEAN "REFUSE", and
+            # that silently dropped the worst real case: "Spirit" had exactly 3
+            # settled maps and "Team Spirit" 197, so the key was thrown away and
+            # an elite team kept pricing off a 3-map stub.
+            #
+            # Refusing is still right when the two are COMPARABLE -- that is a
+            # genuine ambiguity and merging could pick the wrong org. It is not
+            # right when one spelling owns virtually all the history. So the key
+            # resolves only when the leader DOMINATES the runner-up.
+            ranked = sorted(strong, key=lambda n: -match_counts.get(n, 0))
+            top, second = match_counts.get(ranked[0], 0), match_counts.get(ranked[1], 0)
+            if second > 0 and top >= _DOMINANCE_RATIO * second:
+                out[key] = ranked[0]
 
     # ALSO INDEX A SPACE-FREE KEY. name_key collapses punctuation INTO spaces
     # but keeps them, so "The Mongolz" and "TheMongolz" land on different keys
@@ -106,9 +145,20 @@ def resolve(team: str, match_counts: dict[str, int], canonical_by_key: dict[str,
     """The spelling that owns this team's history, or the input unchanged."""
     if not team:
         return team
-    if match_counts.get(team, 0) >= min_games:
-        return team              # already has its own real history -- never redirect
     key = name_key(team)
+    own = match_counts.get(team, 0)
+    if own >= min_games:
+        # Having its own history is normally reason enough never to redirect --
+        # but a DOMINATED spelling is the exception this missed. "Spirit" cleared
+        # min_games with 3 maps while "Team Spirit" held 197, so the early return
+        # fired and the redirect never happened. Only a canonical that dominates
+        # by the same ratio may override, so a team with real history is never
+        # pulled onto a comparable neighbour.
+        canonical = canonical_by_key.get(key) or canonical_by_key.get(key.replace(" ", ""))
+        if (canonical and canonical != team
+                and match_counts.get(canonical, 0) >= _DOMINANCE_RATIO * own):
+            return canonical
+        return team
     # Try the spaced key first, then the space-free one. BOTH halves are needed:
     # build_canonical_by_key indexes the space-free key, but the QUERY still
     # folds to a spaced key, so "Nongshim Red Force" would look up
