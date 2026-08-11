@@ -561,6 +561,65 @@ def incoherent_group_legs(session: Session) -> list[dict]:
                       f"{counts[c]} teams but exactly one can win it -- the excess is "
                       f"invented probability and any edge off it is fictional",
         })
+    out.extend(_soccer_group_legs())
+    return out
+
+
+# (SeasonSimResult attribute, what it must sum to per league, label).
+#
+# Only the three that are PURE ARITHMETIC -- exactly one team wins a league, two
+# finish top-2, four finish top-4 -- so none of these encodes a rulebook fact.
+#
+# relegation_prob is deliberately excluded: season_sim_soccer documents it as an
+# explicit LOWER BOUND, because Bundesliga and Ligue 1 decide their last drop via
+# a playoff the sim does not model, so its sum is legitimately below the nominal
+# count and asserting one would be asserting a rule the model never claimed.
+# top_half_prob is excluded for depending on league size.
+_SOCCER_GROUP_LEGS = [
+    ("champion_prob", 1.0, "league_winner"),
+    ("top2_prob", 2.0, "top2"),
+    ("top4_prob", 4.0, "top4"),
+]
+
+
+def _soccer_group_legs() -> list[dict]:
+    """Soccer's per-league one-winner invariants, from the sim stashed by the
+    futures router (soccer_markets._LAST_SIM_BY_LEAGUE).
+
+    Soccer's sims are built PER REQUEST rather than by a poller, so this reads a
+    write-only stash of the last futures pass rather than re-running a 3,000-trial
+    Monte Carlo inside the health endpoint. Empty before that endpoint has been
+    hit once, which reports nothing rather than erroring.
+    """
+    out: list[dict] = []
+    try:
+        from app.api.routers import soccer_markets
+        sims = (getattr(soccer_markets, "_LAST_SIM_BY_LEAGUE", {}) or {}).get("data") or {}
+    except Exception:
+        return out
+    for league, res in sorted(sims.items()):
+        if res is None:
+            continue
+        for attr, target, label in _SOCCER_GROUP_LEGS:
+            probs = getattr(res, attr, None) or {}
+            vals = []
+            for p in probs.values():
+                if p is None:
+                    continue
+                v = float(p)
+                vals.append(v / 100.0 if v > 1.0 else v)
+            if not vals:
+                continue
+            total = sum(vals)
+            if total <= target + _SIM_LEG_TOLERANCE:
+                continue
+            out.append({
+                "sport": "soccer", "leg": label, "group": league,
+                "sum": round(total, 4), "expected": target, "teams": len(vals),
+                "detail": f"soccer {label} for {league} sums to {total:.3f} across "
+                          f"{len(vals)} teams but exactly {target:g} can happen -- the "
+                          f"excess is invented probability and any edge off it is fictional",
+            })
     return out
 
 
