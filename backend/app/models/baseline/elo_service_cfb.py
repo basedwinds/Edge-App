@@ -161,13 +161,108 @@ def refresh_ratings():
     )
 
 
+# --- CROSS-TIER CORRECTION -----------------------------------------------------
+# P5 conferences. Everything else FBS (American, C-USA, MAC, Mountain West, Sun
+# Belt) plus the Independents is treated as the other pool.
+_P5_CONFERENCES = frozenset({
+    "Atlantic Coast Conference", "Big 12 Conference", "Big Ten Conference",
+    "Pac-12 Conference", "Southeastern Conference",
+})
+
+# Elo points added to the P5 side of a P5-vs-non-P5 game.
+#
+# WHY THIS EXISTS. G5/FCS teams play overwhelmingly each other, so their rating
+# pool floats free of the P5 scale and nothing inside it ever pulls it back.
+# Measured walk-forward over 4,836 real games (2021-2025), predictions taken
+# only once both teams had 8+ games:
+#
+#     cross-tier, oriented on the G5 side   n= 578  pred 0.3460 actual 0.2474  +9.86pp
+#     G5 at home vs P5                      n= 170  pred 0.5201 actual 0.4294  +9.07pp
+#     P5 at home vs G5                      n= 408  pred 0.7265 actual 0.8284 -10.19pp
+#     G5 v G5                               n=1023  pred 0.5803 actual 0.5543  +2.61pp
+#     P5 v P5                               n=1449  pred 0.5854 actual 0.5549  +3.05pp
+#
+# The two cross-tier rows are MIRROR IMAGES -- the sign flips with orientation
+# and the magnitude holds -- which is pool drift, not noise. Same-tier games
+# carry only the ~3pp home-favourite tilt present everywhere, so the defect is
+# specifically cross-tier. `is_weakly_connected` does not catch it (it returns
+# False for CONN, an Independent rated 1639 against a mostly-G5 slate).
+#
+# 100 is an INTERIOR optimum, fitted on the 637 cross-tier games:
+#
+#     D      pred   actual    bias     brier
+#     0     0.6596  0.6986  -0.0390   0.16824
+#    75     0.6779  0.6986  -0.0207   0.16031
+#   100     0.6827  0.6986  -0.0159   0.15996   <- best
+#   125     0.6868  0.6986  -0.0118   0.16060
+#   150     0.6904  0.6986  -0.0082   0.16215
+#
+# Leave-one-season-out: 4 of 4 held-out seasons improve over D=0 (picks
+# 100/75/100/100). Bias -3.9pp -> -1.6pp, Brier ~5% relative.
+#
+# PREDICTION-TIME ONLY. refresh_ratings() updates Elo from the UNADJUSTED
+# probability, deliberately: correcting a pool and then feeding the correction
+# back into that same pool's ratings would re-scale it against itself and the
+# offset would drift toward zero.
+CROSS_TIER_ELO_ADJ = 100.0
+_conferences_cache: dict | None = None
+
+
+def _conference_of(team: str) -> str | None:
+    """Lazy read of data/cfb_conferences.json. Loaded HERE rather than imported
+    from season_sim_cfb because that module imports this one."""
+    global _conferences_cache
+    if _conferences_cache is None:
+        import json
+        from pathlib import Path
+        # parents[4] is the REPO ROOT from backend/app/models/baseline/ --
+        # parents[3] is `backend`, which has no data/ dir. Caught by testing the
+        # lookup rather than the path: every adjustment silently returned 0.
+        p = Path(__file__).resolve().parents[4] / "data" / "cfb_conferences.json"
+        try:
+            # The FILE is {conference: [team abbreviations]} -- it has to be
+            # INVERTED to {abbr: conference}, the same way
+            # season_sim_cfb.load_conferences does. Reading it raw made every
+            # lookup return None and every adjustment silently 0, which is
+            # exactly what a broken correction looks like from the outside:
+            # nothing changes and nothing errors.
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            _conferences_cache = {abbr: conf for conf, abbrs in raw.items()
+                                  for abbr in (abbrs or []) if abbr}
+        except Exception:
+            log.warning("cfb conferences unreadable; cross-tier correction disabled")
+            _conferences_cache = {}
+    return _conferences_cache.get(team)
+
+
+def cross_tier_adjustment(home_team: str, away_team: str) -> float:
+    """Elo to add to the HOME side. 0 unless exactly one side is P5.
+
+    Fails to 0 for any team whose conference is unknown, so an unmapped name
+    can never invent an adjustment."""
+    ch, ca = _conference_of(home_team), _conference_of(away_team)
+    if ch is None or ca is None:
+        return 0.0
+    hp5, ap5 = ch in _P5_CONFERENCES, ca in _P5_CONFERENCES
+    if hp5 == ap5:
+        return 0.0
+    return CROSS_TIER_ELO_ADJ if hp5 else -CROSS_TIER_ELO_ADJ
+# -------------------------------------------------------------------------------
+
+
 def get_home_win_prob(home_team: str, away_team: str, neutral: bool = False) -> float | None:
     """P(home team wins). None when ratings aren't warm yet -- callers leave the
-    market unpriced rather than pricing off a cold cache."""
+    market unpriced rather than pricing off a cold cache.
+
+    THE SINGLE CHOKE POINT for CFB win probability: game markets, the season
+    win-total sim and the conference sim all price through here (season_sim_cfb
+    calls it in both simulate() and simulate_conferences()). That is why the
+    cross-tier correction lives here and not at a call site -- the `rating()`
+    use in simulate() is only a ranking TIEBREAK, not a price."""
     state = _cache.get("state")
     if state is None:
         return None
-    adv = effective_home_field_adv(neutral)
+    adv = effective_home_field_adv(neutral) + cross_tier_adjustment(home_team, away_team)
     return win_prob(state.get(home_team), state.get(away_team), adv)
 
 
