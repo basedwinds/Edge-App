@@ -344,10 +344,38 @@ def refresh_valorant_map_results():
 
 
 def run_full_refresh_valorant():
-    refresh_valorant_matches()
-    refresh_valorant_ratings()
-    refresh_kalshi_valorant_markets()
-    refresh_polymarket_valorant_markets()
-    refresh_valorant_map_results()
+    """REAL OUTAGE this fixes (found live 2026-08-11): /valorant/futures went
+    from 36 priced rows to 0 of 203, and every Valorant moneyline with it,
+    because `get_team_rating` returned None for all 93 market teams. The ratings
+    themselves were fine -- calling refresh_ratings() by hand rebuilt 4,524
+    teams from the historical cache in seconds (Paper Rex 1759.2). The in-process
+    cache was simply never refilled.
+
+    Cause is the ordering below: refresh_valorant_matches() scrapes vlr.gg and
+    ran FIRST, so when that scrape started failing or hanging, every later step
+    -- including the ratings -- was starved. This is the same bug poller_cs2.py
+    documented on 2026-08-02, whose own note observed that "valorant (identical
+    structure, working scraper) stayed current". Valorant was left unfixed
+    because its scraper worked at the time. It doesn't now.
+
+    ORDER IS THE PROTECTION, not the try/except: a Cloudflare-gated scrape can
+    HANG rather than raise, and no exception handler survives that. So the steps
+    run cheapest-and-most-reliable first, with the scrape last.
+
+    RATINGS MOVED AHEAD OF THE SCRAPE -- and this is the one place this differs
+    from the CS2 fix, which still leaves its ratings behind the scrape and so
+    retains the same latent starvation. Ratings do NOT need this cycle's scrape:
+    they train from the 24,100-match historical cache plus ValorantMatch rows
+    already in the DB. Running them first costs at most one cycle (5 min) of
+    match freshness and buys immunity from the scrape entirely."""
+    # Each step isolated so a raising one cannot starve the rest; ordering is
+    # what protects against a hanging one.
+    for step in (refresh_polymarket_valorant_markets, refresh_kalshi_valorant_markets,
+                 refresh_valorant_ratings, refresh_valorant_matches,
+                 refresh_valorant_map_results):
+        try:
+            step()
+        except Exception:
+            log.exception("valorant refresh step %s failed; continuing", step.__name__)
     # Roster-change scrape removed 2026-07-23 -- see poller_cs2.py's note (badge
     # retired for esports, no accuracy penalty, so no reason to scrape vlr.gg).

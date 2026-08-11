@@ -458,8 +458,15 @@ def run_full_refresh_cs2():
     # and refresh_cs2_matches can hang outright rather than raise -- which
     # try/except cannot survive, so ORDER is the only real protection a step
     # has. Putting the cheap, reliable step first costs the others nothing.
+    # RATINGS MOVED AHEAD OF THE SCRAPE 2026-08-11. This function already
+    # protected PRICES from a hanging refresh_cs2_matches, but left ratings
+    # behind it -- so the same hang would still leave every cs2 team unrated and
+    # the whole sport unpriced. That is not hypothetical: it is exactly what
+    # happened to valorant today (36 priced rows -> 0, see poller_valorant.py).
+    # Ratings train from the historical cache plus CS2Match rows already in the
+    # DB, so they never needed this cycle's scrape.
     for step in (refresh_polymarket_cs2_markets, refresh_kalshi_cs2_markets,
-                 refresh_cs2_matches, refresh_cs2_ratings):
+                 refresh_cs2_ratings, refresh_cs2_matches):
         try:
             step()
         except Exception:
