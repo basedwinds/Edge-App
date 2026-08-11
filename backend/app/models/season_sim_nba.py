@@ -195,11 +195,23 @@ def run_simulation(
 
         max_wins = max(wins.values())
         min_wins = min(wins.values())
+        # TIES SPLIT THE CREDIT. Giving every tied team a full count made these
+        # two legs incoherent: only one team can finish best or worst, so each
+        # must sum to 1.0 across the league, and awarding 1.0 to each of k tied
+        # teams sums to k. Measured live 2026-08-11 before the fix, worst_record
+        # summed to 20.68 across 30 teams with five of them at exactly 1.0000.
+        #
+        # The partial-schedule bug that produced those ties is gated separately
+        # in season_sim_service_nba.refresh(); this is the arithmetic being right
+        # regardless, because genuine ties for best/worst record do happen in a
+        # real 82-game season and 1.0-each would be wrong there too.
+        n_best = sum(1 for t in all_teams if wins[t] == max_wins)
+        n_worst = sum(1 for t in all_teams if wins[t] == min_wins)
         for t in all_teams:
             if wins[t] == max_wins:
-                tallies[t]["best_record"] += 1
+                tallies[t]["best_record"] += 1.0 / n_best
             if wins[t] == min_wins:
-                tallies[t]["worst_record"] += 1
+                tallies[t]["worst_record"] += 1.0 / n_worst
             tallies[t]["win_hist"][min(wins[t], MAX_REG_WINS)] += 1
         for i in range(min(max_wins, MAX_REG_WINS) + 1):
             any_wins_ge_hist[i] += 1
