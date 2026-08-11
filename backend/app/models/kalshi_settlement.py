@@ -37,7 +37,39 @@ from app.db.models import Market, PlacedBet
 log = logging.getLogger("kalshi_settlement")
 
 # Market types whose Kalshi "yes" resolution means bet.team won outright.
-_YES_MEANS_TEAM_WON = {"moneyline", "series_winner", "match_winner"}
+# Market types where Kalshi's own "yes" means THIS BET WON.
+#
+# WHY FUTURES BELONG HERE (measured 2026-08-11). Futures could not settle by ANY
+# route: bet_settlement's grader tables cover exactly ONE futures type (top_n) of
+# eighteen, and this whitelist covered none. 3,927 active futures markets had no
+# path to a result, which is the whole explanation for "only 8 futures bets ever
+# settled" -- the futures book was structurally incapable of producing evidence,
+# so no amount of careful pricing or sizing could ever be validated.
+#
+# The semantics line up exactly. Each of these markets is ONE outcome that the
+# bet is FOR: a division_winner ticker names one team, stage_of_elimination one
+# stage, division_order one permutation, tournament_winner one entrant. Kalshi
+# resolving that market "yes" means the thing the bet backed happened. That is
+# the same relationship moneyline already relies on, which is why they can share
+# this table instead of needing eighteen new graders.
+#
+# Verified before adding: all 394 placed futures bets carry side=None, i.e. the
+# market's YES side, and the sized paths only ever back the listed outcome. The
+# _NO_SIDE guard below makes that an enforced precondition rather than an
+# assumption -- if a NO-side position ever appears it is left pending for a human
+# instead of being paid backwards.
+_YES_MEANS_TEAM_WON = {
+    "moneyline", "series_winner", "match_winner",
+    # single-outcome futures
+    "division_winner", "conference_champion", "super_bowl_champion",
+    "playoff_qualifier", "playoff_seed", "playoff_host", "division_order",
+    "stage_of_elimination", "league_winner", "drivers_champion",
+    "constructors_champion", "tournament_winner", "relegation", "mvp",
+}
+
+# A bet on the NO side inverts the mapping below, so it must never reach it.
+# Nothing produces these today; the guard exists so that stays true.
+_NO_SIDE_VALUES = {"no", "under", "not"}
 
 _SETTLED_STATUSES = {"settled", "finalized", "determined"}
 
@@ -81,6 +113,12 @@ def settle_pending_from_kalshi(session: Session, bets: list[PlacedBet]) -> int:
         # the old type forever. See bet_settlement.effective_market_type for the
         # 499 bets that cost.
         if (market.market_type or bet.market_type) not in _YES_MEANS_TEAM_WON:
+            continue
+        if str(bet.side or "").lower() in _NO_SIDE_VALUES:
+            # "yes" would mean this bet LOST. Leave it for a human rather than
+            # pay it backwards -- see _NO_SIDE_VALUES.
+            log.warning("kalshi settlement: skipping NO-side bet %s (%s); mapping is yes=won only",
+                        bet.id, bet.market_type)
             continue
         status, result = _market_result(market.source_ticker)
         if status is None:
