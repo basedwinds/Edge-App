@@ -209,6 +209,44 @@ def get_team_rating(team: str) -> float | None:
     return state.get(resolved)
 
 
+def get_field_ratings(teams: list[str]) -> dict[str, float]:
+    """{team: rating} for a whole tournament field, from ONE pool.
+
+    REAL DEFECT this fixes. price_tournament_winners built its field with
+    get_team_rating, which reads the CLEAN Primary pool only, while its
+    win_prob_fn uses get_series_distribution, which falls back to the EXPANDED
+    pool. So the field builder dropped teams the pricer could price perfectly
+    well, and (before the field-completeness guard) handed their win probability
+    to whoever happened to be Primary-rated. Measured live: T1 Esports Academy
+    has 128 games and a 1644 rating in the expanded pool and the field builder
+    saw None; likewise HLE Challengers (31), RED Academy (33), RMD Gaming (21),
+    7REX (19), Ei Nerd Esports (19), Team Solid (15). Whole Challengers and
+    Circuito Desafiante fields were invisible to a model that could rate them.
+
+    ROUTING MIRRORS get_series_distribution's, one field instead of one pair: if
+    EVERY team clears MIN_GAMES in the clean pool, use the clean pool, so
+    Primary-only fields stay byte-identical to the pre-expansion model. If any
+    team does not, use the expanded pool for the ENTIRE field.
+
+    Never MIXED, deliberately. The two pools are trained independently and are
+    not on a common scale -- Estral Esports is 1553 clean and 1627 expanded --
+    so drawing some of a field from each would seed a bracket off a comparison
+    between two different rating systems.
+    """
+    state = _cache.get("state")
+    if state is None:
+        return {}
+    resolved = {t: resolve_team_name(t) for t in teams if t}
+    if all(state.games_played(r) >= MIN_GAMES for r in resolved.values()):
+        return {t: state.get(r) for t, r in resolved.items()}
+    exp = _cache.get("state_exp")
+    if exp is None:
+        return {t: state.get(r) for t, r in resolved.items()
+                if state.games_played(r) >= MIN_GAMES}
+    return {t: exp.get(r) for t, r in resolved.items()
+            if exp.games_played(r) >= MIN_GAMES}
+
+
 def get_matchup_ratings(team_a: str, team_b: str) -> dict | None:
     """The ratings the PRICE was actually computed from, plus their evidence.
 

@@ -227,9 +227,11 @@ def list_lol_futures(session: Session = Depends(get_session)):
     # fields), so the existing sim applies unchanged.
     _implied_by_market = {_m.id: _implied_prob(snapshots_by_market.get(_m.id)) for _m in markets}
     _field_refusals: dict[str, str] = {}
+    _unfielded: dict[int, str] = {}
     priced = price_tournament_winners([m for m in markets if _is_win_bracket_future(m)], elo_service_lol,
                                       implied_by_market=_implied_by_market,
-                                      refusals=_field_refusals)
+                                      refusals=_field_refusals,
+                                      unfielded=_unfielded)
     _weekly, _futures_pool = get_lol_pool_dollars(session)
     _unit = get_unit_dollars(session)
     _fk, _msf, _mineg = get_staking_params(session)
@@ -291,6 +293,7 @@ def list_lol_futures(session: Session = Depends(get_session)):
                     # Field-completeness refusal first: it is the only cause that
                     # depends on WHO ELSE is in the field rather than on this row.
                     else _field_refusals.get(m.group_label or '')
+                    or _unfielded.get(m.id)
                     or skip_reason(m.group_label, _group_sizes.get(m.group_label or '', 0))
                     # Third cause, and the only one the label cannot reveal: the
                     # team itself is outside the rated pool.

@@ -162,6 +162,14 @@ def skip_reason(group_label: str | None, field_size: int = 0) -> str | None:
     return None
 
 
+THIN_HISTORY_REASON = (
+    "Not priced: this team is rated, but on too few games for the rating to be trusted here. "
+    "The bracket simulator holds a field to the same minimum match count that gating a single "
+    "match uses, because a team seeded off three or four games would carry that noise through "
+    "every round of the simulation. Its rating is still shown; it is simply not staked on."
+)
+
+
 INCOMPLETE_FIELD_REASON = (
     "Not priced: too much of this field is unrated. The bracket simulator can only enter teams "
     "it has a rating for, and it answers \"who wins among the entrants\" -- so every dropped team's "
@@ -223,7 +231,8 @@ MIN_FIELD_COVERAGE = 0.40
 def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_OF,
                              trials: int = DEFAULT_TRIALS, event_state_for=None,
                              implied_by_market: dict[int, float | None] | None = None,
-                             refusals: dict[str, str] | None = None) -> dict[int, float]:
+                             refusals: dict[str, str] | None = None,
+                             unfielded: dict[int, str] | None = None) -> dict[int, float]:
     """Returns {market_id: model_prob} for the tournament_winner markets it can
     price. `elo_service` is a title's elo_service_* module (needs
     get_team_rating + get_series_distribution). Markets whose team is unrated,
@@ -265,13 +274,36 @@ def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_O
         # in case a team somehow has two markets in one tournament).
         seen: set[str] = set()
         field: list[tuple[str, float]] = []
+        # Prefer a FIELD-level rating lookup where the title has one. LoL keeps
+        # two independently-trained pools and get_team_rating reads only the
+        # clean Primary one, while win_prob_fn (get_series_distribution) falls
+        # back to the expanded pool -- so the per-team lookup dropped teams the
+        # pricer could price. get_field_ratings routes the whole field through
+        # one pool, mirroring get_series_distribution's own pairwise rule.
+        # Titles with a single pool (CS2, Valorant) have no such function and
+        # keep the per-team path unchanged.
+        _field_lookup = getattr(elo_service, "get_field_ratings", None)
+        _ratings = (_field_lookup([m.team for m in group if m.team])
+                    if _field_lookup else None)
         for m in group:
             if not m.team or m.team in seen:
                 continue
-            rating = elo_service.get_team_rating(m.team)
+            rating = (_ratings.get(m.team) if _ratings is not None
+                      else elo_service.get_team_rating(m.team))
             if rating is not None:
                 seen.add(m.team)
                 field.append((m.team, rating))
+            elif unfielded is not None:
+                # WHY THE PRICER OWNS THIS TEXT. The routers used to infer the
+                # blank themselves by re-asking get_team_rating, which is a
+                # DIFFERENT question than the one the field builder asks -- a
+                # team can hold a rating and still be too thin to field, and
+                # that row then rendered a blank with no explanation at all.
+                # Recording it here keeps the reason and the omission as one
+                # decision instead of two that can drift.
+                unfielded[m.id] = (THIN_HISTORY_REASON
+                                   if elo_service.get_team_rating(m.team) is not None
+                                   else "")
 
         if not _is_single_event(_label, len(group)):
             continue  # season-long aggregate / not a single bracket -- leave unpriced
