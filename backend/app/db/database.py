@@ -35,6 +35,13 @@ Base = declarative_base()
 
 _MISSING_COLUMNS_BY_TABLE = {
     "soccer_matches": [("first_scorer", "VARCHAR"), ("start_time_source", "VARCHAR")],
+    # model_observations was created BEFORE Call of Duty existed. The model class
+    # gained cod_match_id when CoD shipped; this map did not, so the column was
+    # never added to the live table and EVERY query against the forward
+    # observation log raised OperationalError -- the log that exists to score
+    # models against outcomes was simply dead, and silently, because nothing
+    # reads it on a normal request path.
+    "model_observations": [("cod_match_id", "VARCHAR")],
     "valorant_matches": [("start_time_source", "VARCHAR")],
     "cs2_matches": [("start_time_source", "VARCHAR")],
     "lol_matches": [("start_time_source", "VARCHAR")],
