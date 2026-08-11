@@ -269,6 +269,13 @@ def health_check(session: Session = Depends(get_session)):
         # Measured 2026-08-11: NBA worst_record summed to 20.68 across 30 teams,
         # five of them at 1.0000 at once, four staked $2.50 each at +78 to +90pp
         # "edges". Nothing in this report would have shown it.
+        # Registered explicitly, like every check here: health.py maps integrity
+        # results to issues BY NAME, so a check added to run_all alone would run
+        # every cycle and have its rows silently dropped.
+        for row in results.get("incoherent_group_legs", []):
+            _issue(issues, "error", "incoherent_sim_leg", row.get("sport"),
+                   row.get("detail") or f"{row.get('sport')} {row.get('leg')} group "
+                                        f"{row.get('group')} sums to {row.get('sum')}.")
         for row in results.get("incoherent_sim_legs", []):
             _issue(issues, "error", "incoherent_sim_leg", row.get("sport"),
                    row.get("detail") or f"{row.get('sport')} {row.get('leg')} sums to "

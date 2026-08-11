@@ -503,6 +503,56 @@ def incoherent_sim_legs(session: Session) -> list[dict]:
     return out
 
 
+def incoherent_group_legs(session: Session) -> list[dict]:
+    """One-winner legs that are scoped PER GROUP rather than league-wide.
+
+    The flat check above cannot express these: CFB's conference champion sums to
+    the number of conferences, not to 1. Grouping first makes each conference its
+    own invariant -- exactly one team wins each -- which is the same arithmetic
+    the NBA bug violated, applied to the LARGEST futures book in the app (1,380
+    CFB rows, 46 staked).
+
+    Reads the conference sim from poller_cfb._CONF_SIM, where refresh_cfb_
+    conference_sim caches it. An empty cache means the sim has not run and is
+    reported as nothing, not as an error.
+
+    Only an EXCESS fires, same as the flat check: a conference summing above 1
+    has invented probability, while one summing below it usually just has
+    entrants the model cannot rate.
+    """
+    out: list[dict] = []
+    try:
+        from app.ingestion import poller_cfb
+        from app.models.season_sim_cfb import load_conferences
+        data = (getattr(poller_cfb, "_CONF_SIM", {}) or {}).get("data") or {}
+        champ = data.get("champion") or {}
+        conf_of = load_conferences() or {}
+    except Exception:
+        return out
+    if not champ or not conf_of:
+        return out
+    by_conf: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for team, p in champ.items():
+        c = conf_of.get(team)
+        if c is None or p is None:
+            continue
+        v = float(p)
+        by_conf[c] = by_conf.get(c, 0.0) + (v / 100.0 if v > 1.0 else v)
+        counts[c] = counts.get(c, 0) + 1
+    for c, total in sorted(by_conf.items()):
+        if total <= 1.0 + _SIM_LEG_TOLERANCE:
+            continue
+        out.append({
+            "sport": "cfb", "leg": "conference_champion", "group": c,
+            "sum": round(total, 4), "expected": 1.0, "teams": counts[c],
+            "detail": f"cfb conference_champion for {c} sums to {total:.3f} across "
+                      f"{counts[c]} teams but exactly one can win it -- the excess is "
+                      f"invented probability and any edge off it is fictional",
+        })
+    return out
+
+
 def run_all(session: Session, cache: dict | None = None) -> dict:
     """Every invariant, as {check_name: rows}. Never raises -- a check that
     fails is reported as an error string rather than taking the whole report
@@ -523,6 +573,7 @@ def run_all(session: Session, cache: dict | None = None) -> dict:
         "foreign_league_seasons": foreign_league_seasons,
         "duplicated_paper_bets": duplicated_paper_bets,
         "incoherent_sim_legs": incoherent_sim_legs,
+        "incoherent_group_legs": incoherent_group_legs,
     }
     cache = {} if cache is None else cache
     out: dict = {}
