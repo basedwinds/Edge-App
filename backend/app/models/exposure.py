@@ -54,6 +54,20 @@ TOTAL_EXPOSURE_CAP_PCT = 0.60  # invariant: futures_pct + game_pct must equal th
 DEFAULT_FUTURES_EXPOSURE_CAP_PCT = 0.20
 DEFAULT_GAME_EXPOSURE_CAP_PCT = 0.40
 
+# THESE NUMBERS ARE NOT THE ONES THE APP ACTUALLY REACHES. The cross-sport
+# recommendation page (frontend/src/pages/Combined.tsx, GLOBAL_CAP_PCT) applies
+# its OWN ceiling to the same quantity -- 30% game / 10% futures, also net of
+# outstanding bets -- and being stricter, it is what binds in practice. A slate
+# can never be funded past 30% even though this file would allow 40%.
+#
+# That layering is intentional: a recommendation list should sit inside the hard
+# safety stop, not on top of it. But it means the 40/20 here is a BACKSTOP, not
+# the working limit, and quoting it as "the cap" is wrong -- the user sees 30/10.
+# Verified 2026-08-11: $170 outstanding, so neither ceiling is close to binding.
+#
+# CHANGE BOTH OR NEITHER. Raising this alone does nothing; lowering the frontend
+# alone silently tightens the app with no trace in this file.
+
 # No single sport may hold more than this share of the FUTURES side.
 #
 # The obvious alternative -- rank every futures candidate by edge and fill from

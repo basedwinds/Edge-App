@@ -92,7 +92,24 @@ type SportPlan = { ranked: RecommendedBetRow[]; ceilings: Record<"weekly" | "fut
  *
  * Futures are separate and smaller because they do NOT recycle: a season
  * future locks capital until spring, so it cannot share a budget sized
- * around turnover. */
+ * around turnover.
+ *
+ * THIS IS NOT THE ONLY BANKROLL CAP, AND THE TWO DO NOT MATCH ON PURPOSE.
+ * backend models/exposure.py caps OUTSTANDING real exposure at 40% game /
+ * 20% futures (60% total). This caps the same quantity -- it subtracts
+ * `liveWeekly`/`liveFutures` before allowing new rows -- but at 30% / 10%.
+ *
+ * So there are two independent ceilings on one number and THE STRICTER ONE
+ * BINDS, which is always this file: a slate can never be funded past 30% even
+ * though exposure.py would permit 40%. That ordering is deliberate (a
+ * recommendation list should be tighter than the hard safety stop behind it),
+ * but it means exposure.py's 40/20 is effectively unreachable through this
+ * page, and anyone reading only one of the two files will quote a number the
+ * app never actually enforces. Measured 2026-08-11: $170 outstanding against
+ * this file's $600, so neither is close to binding today.
+ *
+ * If you change the appetite, change BOTH or the looser one silently does
+ * nothing. */
 const GLOBAL_CAP_PCT = { weekly: 0.30, futures: 0.10 } as const;
 
 type CombinedPlan = { plans: SportPlan[]; globalCeilings: Record<"weekly" | "futures", number> };
