@@ -61,11 +61,20 @@ from typing import Callable
 
 # Shown on every futures row this model prices, so the approximation is never
 # hidden behind a bare number (see esports_tournament_pricing.py + the futures
-# routers). model_validated stays False and these rows are not staked.
+# routers). model_validated stays False.
+#
+# THE TEXT USED TO SAY "not staked" AND THAT WENT STALE (fixed 2026-08-11).
+# CS2/LoL/Valorant tournament futures were flipped to staked on 2026-08-02 --
+# precisely so they would become paper bets and accrue forward CLV -- but this
+# shared constant was not updated. The result was a row recommending a real
+# $2.50 stake (Valorant, Paper Rex) while its own reasoning drawer told the user
+# it was not staked. A label that contradicts the number beside it is worse than
+# no label, because the user reads it as the reason for the number.
 TOURNAMENT_SIM_NOTE = (
     "Priced by an Elo-seeded double-elimination bracket simulation. The real "
-    "draw isn't known, so seeding is by rating — approximate, shown for "
-    "tracking, not staked."
+    "draw isn't known, so seeding is by rating — approximate, and not "
+    "backtested. Staked only when the edge survives at the ask; many of these "
+    "markets are too wide to cross."
 )
 
 DEFAULT_TRIALS = 20000
