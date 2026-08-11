@@ -124,6 +124,12 @@ _KALSHI_TENNIS_SERIES_PREFIXES = (
     "KXATPMATCH-", "KXWTAMATCH-", "KXATPCHALLENGERMATCH-", "KXWTACHALLENGERMATCH-",
     "KXITFMATCH-", "KXITFWMATCH-",
     "KXATPSETWINNER-", "KXWTASETWINNER-", "KXATPGSPREAD-", "KXATPGTOTAL-", "KXATPEXACTMATCH-",
+    # KXWTAGTOTAL launched after the original ATP-only survey (re-probed
+    # 2026-08-11). It MUST be listed here as well as in the client: the client
+    # decides what gets fetched, this tuple decides what can be joined to a
+    # fixture, and a series present in one but not the other ingests rows that
+    # resolve to nothing.
+    "KXWTAGTOTAL-",
 )
 
 

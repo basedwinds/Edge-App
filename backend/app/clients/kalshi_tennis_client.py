@@ -32,12 +32,19 @@ MONEYLINE_SERIES = {
     ("wta", "itf"): "KXITFWMATCH",
 }
 
-# Confirmed live 2026-07-18: game spread/total are ATP-ONLY on Kalshi --
-# KXWTAGSPREAD/KXWTAGTOTAL both 404, no WTA equivalent exists at all. Set
-# winner and exact-match-score DO exist for both tours.
+# RE-PROBED 2026-08-11, and the earlier note was OUT OF DATE. It read: "game
+# spread/total are ATP-ONLY -- KXWTAGSPREAD/KXWTAGTOTAL both 404". That was true
+# on 2026-07-18 and is no longer true: Kalshi has since launched KXWTAGTOTAL
+# (39 open markets when the catalog scanner surfaced it). KXWTAGSPREAD is STILL
+# 404, so the asymmetry is real and only the total sibling gained a WTA tour.
+#
+# A 404 means "not launched YET", not "will never exist" -- that is why this is
+# a tuple now rather than a single ticker. A series added to it costs one extra
+# events call; a series left out is inventory the app cannot see at all, and
+# nothing errors to tell you.
 SET_WINNER_SERIES = {"atp": "KXATPSETWINNER", "wta": "KXWTASETWINNER"}
 GAME_SPREAD_SERIES = "KXATPGSPREAD"
-GAME_TOTAL_SERIES = "KXATPGTOTAL"
+GAME_TOTAL_SERIES = ("KXATPGTOTAL", "KXWTAGTOTAL")
 EXACT_MATCH_SERIES = "KXATPEXACTMATCH"
 
 # Tournament-winner futures (confirmed live 2026-07-19): "Who wins THIS
@@ -189,27 +196,33 @@ def get_game_spread_markets() -> list[dict]:
 
 
 def get_game_total_markets() -> list[dict]:
-    """ATP only. yes_sub_title is "Over X.5 games" (no player name -- game
-    total is match-level, not per-player); title has both real player names
-    embedded ("{A} vs {B}: Total Games"), used for match resolution."""
+    """Both tours (see GAME_TOTAL_SERIES). yes_sub_title is "Over X.5 games"
+    (no player name -- game total is match-level, not per-player); title has
+    both real player names embedded ("{A} vs {B}: Total Games"), used for match
+    resolution. Tour is not tracked on the row: the event suffix already joins
+    to the right match, exactly as it does for the moneyline series."""
     rows = []
-    for ev in get_open_events(GAME_TOTAL_SERIES):
-        match_suffix = kalshi_match_suffix(ev["event_ticker"])
-        if match_suffix is None:
-            continue
-        try:
-            markets = get_markets_for_event(ev["event_ticker"])
-        except Exception:
-            continue
-        for m in markets:
-            rows.append({
-                "event_ticker": ev["event_ticker"],
-                "match_suffix": match_suffix,
-                "ticker": m["ticker"],
-                "event_title": ev.get("title", ""),
-                "line": _to_float(m.get("floor_strike")),
-                **_common_fields(m),
-            })
+    for series in GAME_TOTAL_SERIES:
+        for ev in get_open_events(series):
+            match_suffix = kalshi_match_suffix(ev["event_ticker"])
+            if match_suffix is None:
+                continue
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                # Per EVENT, not per series -- one bad event must not cost the
+                # rest of its tour, and a tour that 404s wholesale simply yields
+                # no events rather than raising.
+                continue
+            for m in markets:
+                rows.append({
+                    "event_ticker": ev["event_ticker"],
+                    "match_suffix": match_suffix,
+                    "ticker": m["ticker"],
+                    "event_title": ev.get("title", ""),
+                    "line": _to_float(m.get("floor_strike")),
+                    **_common_fields(m),
+                })
     return rows
 
 
