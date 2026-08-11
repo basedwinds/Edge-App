@@ -401,6 +401,94 @@ def duplicated_paper_bets(session: Session, days: int = 3) -> list[dict]:
     ]
 
 
+# (module, result key, what the key must sum to across all teams, label).
+#
+# Every entry is a MUTUALLY EXCLUSIVE outcome, so the league-wide sum is fixed by
+# arithmetic, not by the model: exactly one team finishes best, one finishes
+# worst, one wins the title, and exactly two win a pennant/conference. Division
+# legs are deliberately absent -- their total depends on how many divisions a
+# league has, and encoding that here would be a rulebook fact this file has no
+# business holding.
+_SIM_LEG_INVARIANTS = [
+    ("app.models.season_sim_service", "best_record_pct", 1.0, "nfl"),
+    ("app.models.season_sim_service", "worst_record_pct", 1.0, "nfl"),
+    ("app.models.season_sim_service_nba", "best_record_pct", 1.0, "nba"),
+    ("app.models.season_sim_service_nba", "worst_record_pct", 1.0, "nba"),
+    ("app.models.season_sim_service_nba", "championship_pct", 1.0, "nba"),
+    ("app.models.season_sim_service_nba", "conf_champ_pct", 2.0, "nba"),
+    ("app.models.season_sim_service_mlb", "best_record_pct", 1.0, "mlb"),
+    ("app.models.season_sim_service_mlb", "worst_record_pct", 1.0, "mlb"),
+    ("app.models.season_sim_service_mlb", "championship_pct", 1.0, "mlb"),
+    ("app.models.season_sim_service_mlb", "pennant_pct", 2.0, "mlb"),
+]
+_SIM_LEG_TOLERANCE = 0.05
+
+
+def incoherent_sim_legs(session: Session) -> list[dict]:
+    """Season-sim legs whose league-wide probabilities do not add up.
+
+    FOUND A LIVE MONEY BUG THE FIRST TIME IT WAS RUN BY HAND (2026-08-11). NBA
+    worst_record summed to 20.68 across 30 teams, with five teams simultaneously
+    at 1.0000 -- and four of them were staked $2.50 each against a market pricing
+    them 0.11-0.225, the largest apparent edges in the whole futures book at +78
+    to +90pp. Two independent causes, both invisible to every other check:
+    a schedule only 13% published (so the sim ranked teams by how many games
+    ESPN had listed for them) and ties awarding a full count to each tied team.
+    NFL best_record was separately at 1.49 on a COMPLETE schedule, purely from
+    the tie arithmetic.
+
+    Nothing re-ran that sum afterwards, which is what this is for.
+
+    MEASURED ON THE SIM, NOT ON THE RENDERED ROWS, and that distinction matters:
+    the futures endpoints list the same outcome once per platform, so summing
+    what the page shows double-counts every Kalshi/Polymarket pair. Doing it that
+    way is what made the racing championships look broken at exactly 2.00 when
+    the model was in fact coherent (1.000 over distinct drivers). The sim output
+    has one entry per team and no such ambiguity.
+
+    ONLY AN EXCESS IS REPORTED. A sum ABOVE the target is always a defect --
+    probability invented from nowhere. A sum BELOW it usually just means entrants
+    the model cannot rate yet, which is normal and is why tennis' 0.71 is fine.
+
+    Reads the in-process sim caches, so it is free; an empty cache (the sim has
+    not run, or refused an incomplete schedule) reports nothing rather than
+    erroring, since that is a different condition with its own logging.
+    """
+    import importlib
+
+    out: list[dict] = []
+    for mod_name, key, target, sport in _SIM_LEG_INVARIANTS:
+        try:
+            mod = importlib.import_module(mod_name)
+            results = mod.get_results() or {}
+        except Exception:
+            continue
+        vals = []
+        for team, row in results.items():
+            if team.startswith("_") or not isinstance(row, dict):
+                continue
+            v = row.get(key)
+            if v is None:
+                continue
+            v = float(v)
+            vals.append(v / 100.0 if v > 1.0 else v)
+        if not vals:
+            continue
+        total = sum(vals)
+        if total <= target + _SIM_LEG_TOLERANCE:
+            continue
+        worst = max(vals)
+        out.append({
+            "sport": sport, "leg": key, "sum": round(total, 4), "expected": target,
+            "teams": len(vals), "max_single_team": round(worst, 4),
+            "detail": f"{sport} {key} sums to {total:.3f} across {len(vals)} teams "
+                      f"but exactly {target:g} can happen -- the excess is invented "
+                      f"probability, and any edge computed from it is fictional "
+                      f"(largest single value {worst:.3f})",
+        })
+    return out
+
+
 def run_all(session: Session, cache: dict | None = None) -> dict:
     """Every invariant, as {check_name: rows}. Never raises -- a check that
     fails is reported as an error string rather than taking the whole report
@@ -420,6 +508,7 @@ def run_all(session: Session, cache: dict | None = None) -> dict:
         "stale_bet_market_types": stale_bet_market_types,
         "foreign_league_seasons": foreign_league_seasons,
         "duplicated_paper_bets": duplicated_paper_bets,
+        "incoherent_sim_legs": incoherent_sim_legs,
     }
     cache = {} if cache is None else cache
     out: dict = {}

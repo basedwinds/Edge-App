@@ -259,6 +259,20 @@ def health_check(session: Session = Depends(get_session)):
             if row.get("count"):
                 _issue(issues, "info", "stale_bet_market_type", row.get("sport"),
                        f"{row['count']} bets stored as '{row['bet_says']}' sit on markets now typed '{row['market_says']}' — the market was re-typed under them. Settlement uses the market's live type, so these grade correctly; flagged so a NEW re-typing is visible.")
+        # ERROR, not warning, and the only check here that rates one. Every other
+        # issue above describes data that is stale, missing or mislabelled --
+        # annoying, but it does not invent a number. This one fires when a
+        # mutually-exclusive leg sums past what can actually happen, which means
+        # the model has manufactured probability, and the app stakes wherever
+        # model > market. That is not a data-quality note; it is money.
+        #
+        # Measured 2026-08-11: NBA worst_record summed to 20.68 across 30 teams,
+        # five of them at 1.0000 at once, four staked $2.50 each at +78 to +90pp
+        # "edges". Nothing in this report would have shown it.
+        for row in results.get("incoherent_sim_legs", []):
+            _issue(issues, "error", "incoherent_sim_leg", row.get("sport"),
+                   row.get("detail") or f"{row.get('sport')} {row.get('leg')} sums to "
+                                        f"{row.get('sum')} but only {row.get('expected')} can happen.")
     except Exception:
         log.exception("integrity checks failed")
 
