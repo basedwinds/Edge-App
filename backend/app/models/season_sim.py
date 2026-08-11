@@ -57,15 +57,43 @@ MAX_REG_WINS = 17  # current NFL regular season length; win-count histograms bel
 #
 # Brier 0.1507 -> 0.1444.
 #
-# EVIDENCE IS WEAKER THAN CFB'S AND THE NUMBER REFLECTS THAT. Leave-one-season-out
-# improved only 3 of 5 folds (2021 and 2023 got worse) and the fitted sigma ranged
-# 100-150, where CFB improved all 4 folds at a tight 225-250. So this takes the
-# LOW end of that range -- 100 was the modal fold pick -- rather than the 125 that
-# minimises full-sample gap. The DIRECTION is not in doubt: the sim demonstrably
-# does not represent pre-season roster turnover, and unmodelled uncertainty can
-# only ever produce overconfidence. The magnitude is the uncertain part, so it is
-# deliberately under-applied.
-TEAM_STRENGTH_SIGMA = 100.0
+# RE-FITTED 2026-08-11 ON 25 SEASONS: 100 -> 150.
+#
+# The 100 was fitted over 2021-2025 and its own comment recorded the problem:
+# leave-one-season-out improved only 3 of 5 folds, the fitted sigma ranged
+# 100-150, and the low end was taken because "the magnitude is the uncertain
+# part, so it is deliberately under-applied".
+#
+# THAT AMBIGUITY WAS A SAMPLE-SIZE ARTIFACT, and the sample was never the
+# constraint -- the schedule cache holds 27 complete seasons (1999-2025) and the
+# fit used the last five. Re-run over 25 scorable seasons
+# (scripts/fit_nfl_season_sigma.py), the surface is no longer ambiguous:
+#
+#     sigma     brier      mean |calibration gap|
+#         0    0.15749     0.0883
+#       100    0.12065     0.0489   <- shipped until today
+#       150    0.11237     0.0439   <- best calibration
+#       200    0.11221     0.0500   <- best brier, by 0.00016
+#       250    0.11407     0.0574
+#       500    0.12172     0.0873
+#
+# Leave-one-season-out is now UNANIMOUS where it used to be 3-of-5: all 25 folds
+# prefer 200 over 100 on held-out Brier, and 23 of 25 actually score better out
+# of sample. Both 150 and 200 beat 100 by ~7% relative Brier. So the direction
+# is settled and the old value was simply too small.
+#
+# 150 RATHER THAN 200, on purpose. The two criteria disagree, and by very
+# different margins: Brier prefers 200 by 0.00016 (0.14%, noise), while the
+# calibration gap prefers 150 by 0.0061 (12%). Sigma exists to correct
+# overconfidence -- that is what the gap measures and what this parameter is for
+# -- and 200 visibly OVER-corrects it (0.0439 -> 0.0500). Taking the calibration
+# optimum keeps the original instinct to err on the conservative side while
+# following five times the evidence.
+#
+# NOT A NEWER SEASON: 2026 has 1 of 321 games played, so nothing here comes from
+# a fresh year. The gain came from going backwards through seasons that were
+# always available.
+TEAM_STRENGTH_SIGMA = 150.0
 
 
 def _simulate_game(ratings: dict, home: str, away: str, home_field_adv: float, rng: random.Random,
