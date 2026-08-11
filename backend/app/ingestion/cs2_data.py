@@ -41,9 +41,13 @@ vlr.gg's split /matches vs /matches/results."""
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import time
 
 import httpx
 from bs4 import BeautifulSoup
+
+log = logging.getLogger("cs2_data")
 
 MATCHES_URL = "https://liquipedia.net/counterstrike/Liquipedia:Matches"
 
@@ -201,11 +205,64 @@ def _parse_match_info(match_info, default_event_name: str = "", default_tourname
     }
 
 
+# --- 429 COOLDOWN -------------------------------------------------------------
+# Liquipedia is rate-limiting this endpoint (confirmed live 2026-08-11: a single
+# request returned 429). The poller calls this every 5 minutes, so without a
+# cooldown the app fires ~288 refused requests a day at a host that has ALREADY
+# IP-banned it once, over a CoD crawl. That ban's lesson was recorded at the time
+# as "retry-forever was worse than the ban", and this module was still doing
+# exactly that.
+#
+# Backs off exponentially from 30 minutes to a 12-hour ceiling, honouring
+# Retry-After when the server sends one, and resets the moment a request
+# succeeds. Returns [] while cooling down rather than raising: CS2 does not
+# depend on this feed any more (measured the same day -- 0 of 78 upcoming
+# fixtures come from Liquipedia, they arrive via Kalshi/Polymarket, and best_of
+# is 73/78 covered without it), so a quiet skip is honest rather than lossy.
+_COOLDOWN_MIN_S = 30 * 60
+_COOLDOWN_MAX_S = 12 * 60 * 60
+_cooldown_until = 0.0
+_cooldown_step = 0.0
+
+
+def _in_cooldown() -> bool:
+    return time.monotonic() < _cooldown_until
+
+
+def _start_cooldown(retry_after: str | None) -> None:
+    global _cooldown_until, _cooldown_step
+    wait = None
+    if retry_after:
+        try:
+            wait = float(retry_after)
+        except ValueError:
+            wait = None
+    if wait is None:
+        _cooldown_step = min(max(_cooldown_step * 2, _COOLDOWN_MIN_S), _COOLDOWN_MAX_S)
+        wait = _cooldown_step
+    _cooldown_until = time.monotonic() + wait
+    log.warning("liquipedia rate-limited; backing off %.0f min (no requests until then)", wait / 60)
+
+
+def _clear_cooldown() -> None:
+    global _cooldown_until, _cooldown_step
+    _cooldown_until, _cooldown_step = 0.0, 0.0
+
+
 def fetch_matches() -> list[dict]:
     """Liquipedia:Matches's own live listing IS the schedule (both upcoming
-    AND recently-decided) -- see module docstring."""
+    AND recently-decided) -- see module docstring.
+
+    Returns [] while rate-limited; see the cooldown block above."""
+    if _in_cooldown():
+        log.info("liquipedia still in cooldown; skipping fetch")
+        return []
     resp = _client.get(MATCHES_URL)
+    if resp.status_code == 429:
+        _start_cooldown(resp.headers.get("Retry-After"))
+        return []
     resp.raise_for_status()
+    _clear_cooldown()
     soup = BeautifulSoup(resp.text, "html.parser")
     matches = []
     for match_info in soup.find_all("div", class_="match-info"):
