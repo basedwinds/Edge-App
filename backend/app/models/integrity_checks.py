@@ -420,7 +420,21 @@ _SIM_LEG_INVARIANTS = [
     ("app.models.season_sim_service_mlb", "worst_record_pct", 1.0, "mlb"),
     ("app.models.season_sim_service_mlb", "championship_pct", 1.0, "mlb"),
     ("app.models.season_sim_service_mlb", "pennant_pct", 2.0, "mlb"),
+    # WNBA has no conferences -- the top 8 records league-wide make the playoffs
+    # and exactly one team is the 1-seed, so this one IS a flat league-wide sum.
+    ("app.models.season_sim_service_wnba", "one_seed", 1.0, "wnba"),
 ]
+
+# CFB AND SOCCER ARE DELIBERATELY ABSENT, and it is a structural limit rather
+# than an oversight. Their one-winner legs are PER GROUP: CFB's conference
+# champion sums to the number of conferences (11), and soccer's league winner
+# and relegation sum per league, once for each. A flat league-wide sum would
+# compare them against the wrong target and fire constantly.
+#
+# Covering them needs a second invariant shape -- group the rows by conference /
+# league first, then assert each GROUP sums to 1 (or to that league's relegation
+# count). Worth doing: CFB is the largest futures book at 1,380 rows and 46
+# staked, and it is exactly the shape of book the NBA bug appeared in.
 _SIM_LEG_TOLERANCE = 0.05
 
 
