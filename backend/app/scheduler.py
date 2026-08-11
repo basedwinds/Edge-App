@@ -182,6 +182,36 @@ def run_market_cleanup():
         session.close()
 
 
+
+def refresh_exposure_snapshot():
+    """Rebuild the bankroll-capacity snapshot that the sizing caps read.
+
+    It was previously rebuilt ONLY when the Settings page was saved. After a
+    restart the snapshot is empty, and an empty snapshot makes
+    remaining_for_unit_scale return None -- which every caller treats as
+    UNCAPPED. So the exposure ceilings did nothing at all until someone happened
+    to open Settings and press save. Refreshed on the poll cycle instead, so
+    they hold from startup.
+    """
+    from app.models import exposure
+    from app.api.routers.settings import (
+        BANKROLL_KEY, DEFAULT_BANKROLL, FUTURES_EXPOSURE_CAP_PCT_KEY,
+        GAME_EXPOSURE_CAP_PCT_KEY, _get_float,
+    )
+    session = SessionLocal()
+    try:
+        exposure.refresh_snapshot(
+            session,
+            _get_float(session, BANKROLL_KEY, DEFAULT_BANKROLL),
+            _get_float(session, FUTURES_EXPOSURE_CAP_PCT_KEY, exposure.DEFAULT_FUTURES_EXPOSURE_CAP_PCT),
+            _get_float(session, GAME_EXPOSURE_CAP_PCT_KEY, exposure.DEFAULT_GAME_EXPOSURE_CAP_PCT),
+        )
+    except Exception:  # a cap must never be able to break pricing
+        log.exception("exposure snapshot refresh failed; sizing continues uncapped")
+    finally:
+        session.close()
+
+
 def run_catalog_scan():
     """Daily, not every-5-min like run_full_refresh -- this hits Kalshi's
     full /series?category=Sports and Polymarket's full NFL event list
@@ -278,6 +308,14 @@ def start():
     # Cost is bounded too: it reads each sport's market route, and those are
     # served from the 180s response cache that the cache warmer keeps hot, so
     # this is mostly cache reads rather than 12 full recomputes.
+    scheduler.add_job(
+        refresh_exposure_snapshot,
+        "interval",
+        minutes=5,
+        id="exposure_snapshot",
+        next_run_time=base_tick + timedelta(seconds=30),
+        replace_existing=True,
+    )
     scheduler.add_job(
         observation_logger.refresh,
         "interval",
