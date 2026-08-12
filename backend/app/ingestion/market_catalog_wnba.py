@@ -134,6 +134,36 @@ def upsert_kalshi_wnba_spread_market(session: Session, row: dict, wnba_game_id: 
     return market
 
 
+def upsert_kalshi_wnba_team_total_market(session: Session, row: dict, wnba_game_id: str | None) -> Market:
+    """Per-team total ladder ("Will <Team> score over X.5 points?").
+
+    Identical row shape to the spread ladder -- per-team, carries a line -- so
+    this is the spread upsert with a different market_type. side is "over"
+    because Kalshi lists a single-sided ladder, matching the game total.
+    """
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type="team_total", sport="wnba",
+        )
+        session.add(market)
+    market.wnba_game_id = wnba_game_id
+    market.team = to_espn_abbr(row["team_abbr_kalshi"])
+    market.line = row["line"]
+    market.side = "over"
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(
+        MarketSnapshot(
+            market_id=market.id, ts=datetime.datetime.utcnow(),
+            yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
+            last_price=row.get("last_price"), volume=row.get("volume"),
+        )
+    )
+    return market
+
+
 def upsert_kalshi_wnba_total_market(session: Session, row: dict, wnba_game_id: str | None) -> Market:
     """Game-level total ladder. side="over" because Kalshi lists a single-sided
     ladder ("Over X.5 points scored?"), same as NBA/NFL."""

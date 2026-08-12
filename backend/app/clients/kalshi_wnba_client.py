@@ -17,6 +17,12 @@ BASE = "https://api.elections.kalshi.com/trade-api/v2"
 MONEYLINE_SERIES = "KXWNBAGAME"
 SPREAD_SERIES = "KXWNBASPREAD"
 TOTAL_SERIES = "KXWNBATOTAL"
+# PER-TEAM total ("Will New York score over 97.5 points?"), added 2026-08-11.
+# 54 open markets with a real book -- 4,196 volume, a bid on every leg. Same
+# per-team ladder SHAPE as the half spreads, so it reuses _ladder_rows: the team
+# is parsed off the ticker suffix ("...-NY98" -> "NY"), NOT off yes_sub_title,
+# which here is the whole sentence "New York over 97.5 points".
+TEAM_TOTAL_SERIES = "KXWNBATEAMTOTAL"
 # Half markets. All six are live with real settled history (528/528/176/282/
 # 698/658 settled 2026-08-02), priced by game_lines_wnba's measured half
 # constants. The winner series carry no floor_strike (they are "which team wins
@@ -154,6 +160,11 @@ def get_spread_markets() -> list[dict]:
 def get_total_markets() -> list[dict]:
     """Game-level ladder: "Over X.5 points scored" (no team side)."""
     return _ladder_rows(TOTAL_SERIES, with_team=False)
+
+
+def get_team_total_markets() -> list[dict]:
+    """Per-TEAM ladder: "Will <Team> score over X.5 points?"."""
+    return _ladder_rows(TEAM_TOTAL_SERIES, with_team=True)
 
 
 def get_half_winner_markets(half: int) -> list[dict]:

@@ -132,6 +132,59 @@ def prob_over(line: float, home_scoring: dict | None, away_scoring: dict | None)
     return 1.0 - _norm_cdf(line, mu, std)
 
 
+# --- One team's score (KXWNBATEAMTOTAL) --------------------------------------
+# MEASURED walk-forward over 390 team-games from 195 finished 2026 games (the
+# same expanding-average, MIN_GAMES-gated setup the live path uses), 2026-08-11.
+#
+# TEAM_POINTS_STD IS NOT TOTAL_STD / sqrt(2). That shortcut assumes the two
+# sides' scores are independent and gives 15.10; the measured value is 12.31,
+# 23% narrower. The reason is in the data: residual correlation between the home
+# and away scores is +0.46, because both are driven by the same game pace. Using
+# the independence figure would have priced every team total far too wide.
+TEAM_POINTS_STD = 12.31
+
+# A HOME-COURT SCORING EFFECT THE GAME MODEL HAS NO TERM FOR. expected_team_points
+# is symmetric -- it averages what a team scores with what its opponent concedes
+# and knows nothing about venue -- but the measured residuals are NOT symmetric:
+# home +3.58, away +0.56. The ~3pp asymmetry is the home effect; the shared part
+# is the same upward drift the combined-total model also carries (its residual
+# mean is +4.14 against a shipped std of 21.35, i.e. TOTAL is biased low too).
+# That is a pre-existing issue in prob_over and is deliberately NOT changed here
+# -- flagged rather than silently "fixed" under cover of a different feature.
+#
+# HELD OUT BEFORE SHIPPING, not just fitted. Offsets fitted on the first 60% of
+# team-games (+2.69 / -1.14) and scored on the remaining 156, at each team's own
+# expected line (the hardest, 50/50 case):
+#     no offsets, TOTAL_STD/sqrt2   Brier 0.25371
+#     no offsets, measured std      Brier 0.25437
+#     WITH offsets, measured std    Brier 0.24597   <- shipped
+# The width alone changes almost nothing at an at-the-money line, as expected;
+# the offsets are what carry the gain. Constants below are refitted on the full
+# sample, which is why they differ from the train-only pair above.
+TEAM_POINTS_HOME_OFFSET = 3.58
+TEAM_POINTS_AWAY_OFFSET = 0.56
+
+
+def expected_team_points_venue(scoring: dict | None, opponent_scoring: dict | None,
+                               team_is_home: bool) -> float:
+    """expected_team_points plus the measured venue offset."""
+    base = expected_team_points(scoring, opponent_scoring)
+    return base + (TEAM_POINTS_HOME_OFFSET if team_is_home else TEAM_POINTS_AWAY_OFFSET)
+
+
+def prob_team_over(line: float, scoring: dict | None, opponent_scoring: dict | None,
+                   team_is_home: bool) -> float:
+    """P(this one team's score exceeds `line`).
+
+    Falls back to the league average through expected_team_points when either
+    side is below scoring_ratings_wnba.MIN_GAMES -- same measured-correct
+    early-season behaviour as expected_total, and the caller still gets a real
+    number rather than None.
+    """
+    mu = expected_team_points_venue(scoring, opponent_scoring, team_is_home)
+    return 1.0 - _norm_cdf(line, mu, TEAM_POINTS_STD)
+
+
 # --- Halves ------------------------------------------------------------------
 # Kalshi runs six live WNBA half series (1H/2H winner, spread and total) with
 # real settled history -- 528/528/176/282/698/658 settled markets as of

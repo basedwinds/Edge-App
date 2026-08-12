@@ -38,7 +38,7 @@ from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has
 router = APIRouter(prefix="/wnba", tags=["wnba"])
 
 GAME_MARKET_TYPES = {
-    "moneyline", "spread", "total",
+    "moneyline", "spread", "total", "team_total",
     # Halves are namespaced by half rather than sharing the game types: a 1H
     # spread is a different distribution from a game spread (margin std 10.39 vs
     # 14.21), and the CLV gate + calibration report both bucket by market_type,
@@ -162,6 +162,29 @@ def _total_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
     p = game_lines_wnba.prob_over(m.line, scoring.get(game.home_team), scoring.get(game.away_team))
     # Kalshi lists WNBA totals as "over" markets; honour an "under" if one appears
     # rather than pricing it as its own opposite.
+    if (m.side or "over").lower() == "under":
+        p = 1.0 - p
+    return round(p, 4)
+
+
+def _team_total_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
+    """P(this one team clears its own points line).
+
+    Venue matters here in a way it does not for the combined total: the measured
+    residual is +3.58 for the home side against +0.56 for the away side, so which
+    team is at home has to reach the model. Getting that backwards would bias
+    every line by ~3 points -- see game_lines_wnba.TEAM_POINTS_HOME_OFFSET.
+    """
+    if m.line is None or not m.team:
+        return None
+    if m.team == game.home_team:
+        team_is_home, opp = True, game.away_team
+    elif m.team == game.away_team:
+        team_is_home, opp = False, game.home_team
+    else:
+        # A team that is not in this game -- do not guess a side.
+        return None
+    p = game_lines_wnba.prob_team_over(m.line, scoring.get(m.team), scoring.get(opp), team_is_home)
     if (m.side or "over").lower() == "under":
         p = 1.0 - p
     return round(p, 4)
@@ -319,6 +342,8 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 model_prob = _spread_model_prob(m, game)
             elif no_baseline_reason is None and m.market_type == "total":
                 model_prob = _total_model_prob(m, game, scoring)
+            elif no_baseline_reason is None and m.market_type == "team_total":
+                model_prob = _team_total_model_prob(m, game, scoring)
             elif no_baseline_reason is None and "_half_" in m.market_type:
                 model_prob = _half_model_prob(m, game, scoring)
 

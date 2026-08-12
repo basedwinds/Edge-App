@@ -120,6 +120,7 @@ def refresh_kalshi_wnba_spread_total():
     game_index = _load_game_index_readonly()
     spreads = kalshi_wnba_client.get_spread_markets()
     totals = kalshi_wnba_client.get_total_markets()
+    team_totals = kalshi_wnba_client.get_team_total_markets()
     with db_write_lock():
         session = SessionLocal()
         try:
@@ -134,9 +135,14 @@ def refresh_kalshi_wnba_spread_total():
                 matched += game_id is not None
                 unmatched += game_id is None
                 market_catalog_wnba.upsert_kalshi_wnba_total_market(session, row, game_id)
+            for row in team_totals:
+                game_id = match_kalshi_event_ticker(row["event_ticker"], game_index)
+                matched += game_id is not None
+                unmatched += game_id is None
+                market_catalog_wnba.upsert_kalshi_wnba_team_total_market(session, row, game_id)
             session.commit()
-            log.info("kalshi wnba spread/total: %d spread + %d total rows, %d matched, %d unmatched",
-                     len(spreads), len(totals), matched, unmatched)
+            log.info("kalshi wnba spread/total: %d spread + %d total + %d team_total rows, %d matched, %d unmatched",
+                     len(spreads), len(totals), len(team_totals), matched, unmatched)
         finally:
             session.close()
 
