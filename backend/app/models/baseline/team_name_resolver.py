@@ -90,9 +90,62 @@ CORPORATE_SUFFIXES = ("esports club", "e sports", "esports", "gaming", "club", "
 # Young Ninjas (4) are real distinct rosters. And because the merge still goes
 # through build_canonical_by_key, _DOMINANCE_RATIO remains the backstop: 172-vs-5
 # resolves, a 7-vs-7 coincidence would not.
+#
+# SCOPE NOTE: this map is SHARED by cs2/lol/valorant, so every entry must be an
+# ORG-LEVEL truth rather than a per-title convenience. All of the below are the
+# same organisation in every title it fields a roster in, which is why sharing is
+# safe here; an alias true in only one title would need a per-title map.
+#
+# Valorant sweep, 2026-08-12 (same script, vlr crawl vs live feed). 11 candidates,
+# the resolver already merged 6 (FNATIC/Fnatic, Barca/Barca with cedilla,
+# PCIFIC/Pcific, ENVY/Team Envy, FURIA, Gen.G). The rest were real, and note the
+# two that matter most rate the STUB HIGHER than the truth -- the direction that
+# invents a favourite:
+#
+#     TEC Esports    5, 1526  vs  Titan Esports Club  123, 1401
+#     JD Gaming      5, 1511  vs  JDG Esports         123, 1405
+#     XLG Gaming     2, 1537  vs  Xi Lai Gaming       177, 1598
+#     DRX            3, 1464  vs  KIWOOM DRX          265, 1555
+#
+# "drx" -> "kiwoom drx" is a SPONSOR PREFIX, not an acronym, and lol_team_aliases
+# rightly refuses sponsor renames as a general rule. It is admissible here only
+# because the leading-token mechanism makes it safe in the one way that matters:
+# "DRX Challengers" expands to "kiwoom drx challengers" and stays a separate key
+# from the main roster, which is exactly the collision that docstring warns about.
+# It also survives a sponsor change -- if the org drops Kiwoom, both the feed and
+# the crawl spelling still fold onto the same key, preserving continuity.
+# VALUES ARE THE BARE ORG NAME, WITH CORPORATE TOKENS ALREADY REMOVED, because
+# expansion happens BEFORE the single trailing-suffix strip below. Getting this
+# wrong fails silently in the safe direction (no merge), which is how the first
+# attempt here was caught: "tec" -> "titan esports club" turned "TEC Esports"
+# into "titan esports club esports", which strips ONE suffix to "titan esports
+# club" -- while "Titan Esports Club" strips "esports club" to "titan". Two keys,
+# no merge. Write the value as whatever the canonical spelling itself reduces to.
 ACRONYM_EXPANSIONS = {
     "nip": "ninjas in pyjamas",
     "navi": "natus vincere",
+    "tec": "titan",
+    "jdg": "jd",
+    "xlg": "xi lai",
+    # "drx": "kiwoom drx" WAS HERE AND WAS REMOVED AFTER MEASURING IT.
+    #
+    # It is the only SPONSOR PREFIX ever tried in this map rather than a true
+    # acronym, and it broke a different title. LoL carries both "DRX
+    # Challengers" and "Kiwoom DRX Challengers"; expanding the leading "drx"
+    # collapsed them onto one key where neither spelling dominates the other, so
+    # build_canonical_by_key discarded the key and BOTH went unrated. LoL's
+    # unrated count went 59 -> 60 and "DRX Challengers" lost a rating it had.
+    #
+    # That is the failure this module's docstring calls strictly worse than the
+    # split it replaces, and it cost a real Valorant fix to avoid (Valorant's
+    # DRX is 3 series against KIWOOM DRX's 265). Kept out anyway: a dropped
+    # alias costs coverage, a wrong one pays out the wrong side.
+    #
+    # To recover it properly, ACRONYM_EXPANSIONS needs to be PER-TITLE -- thread
+    # an `expansions` argument through name_key/build_canonical_by_key/resolve
+    # and let each elo_service pass its own. Every entry above is an org-level
+    # truth that holds in all three titles, so the shared map is correct for
+    # them; "drx" is the first that is not.
 }
 
 
