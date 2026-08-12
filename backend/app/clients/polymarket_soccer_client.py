@@ -617,6 +617,28 @@ LEAGUE_WINNER_EVENT_SLUGS = {
     "SC0":  "2027-soccer-scottish-premiership-winner",
     "T1":   "2027-soccer-sper-lig-winner",
     "N1":   "2027-soccer-eredivisie-winner",
+    # WAVE 2 (2026-08-12): leagues football-data.co.uk does not carry, whose
+    # ratings now come from the ESPN crawl in
+    # scripts/build_espn_soccer_league_caches.py (27,601 matches, 2019-2026).
+    # Held back from the first wave on purpose until the club-form resolver
+    # landed -- without it these would have been ~400 permanently unpriced rows,
+    # since ESPN's own spellings differ from the market's the same way
+    # football-data's do.
+    "COL1": "2026-soccer-colombia-primera-a-finalizacion-winner",
+    "USL1": "2026-soccer-usl-championship-winner",
+    "URU1": "2026-soccer-uruguayan-primera-divisin-winner",
+    "ROU1": "2027-soccer-romania-superliga-winner",
+    "GUA1": "2026-soccer-liga-nacional-guatemala-winner",
+    "ECU1": "2026-soccer-ligapro-serie-a-ecuador-winner",
+    "CRC1": "2026-soccer-liga-fpd-costa-rica-winner",
+    "VEN1": "2026-soccer-venezuelan-primera-divisin-winner",
+    "KSA1": "2027-soccer-saudi-professional-league-winner",
+    "RSA1": "2027-soccer-south-africa-premiership-winner",
+    "AUT1": "2027-soccer-austrian-bundesliga-winner",
+    "SUI1": "2027-soccer-swiss-super-league-winner",
+    "AUS1": "2027-soccer-a-league-soccer-winner",
+    "IRL1": "2026-soccer-league-of-ireland-premier-division-winner",
+    "NWSL": "2026-soccer-nwsl-winner",
 }
 
 
