@@ -428,6 +428,63 @@ def _leagues_cup_prediction(match: SoccerMatch | None):
     return predict_leagues_cup_match(hk, hl, ak, al, states)
 
 
+# How far above this competition's REAL scoring a prediction has to sit before
+# the drawer says so. 25% is not a fitted constant -- it is a "look at this
+# twice" line, chosen because the Miami/Leon case that prompted it was +57%
+# while the rest of the slate sat inside +/-20% of the realised mean.
+_GOAL_OUTLIER_RATIO = 1.25
+_MIN_COMPLETED_FOR_PLAUSIBILITY = 8
+
+
+def _competition_goal_plausibility(session: Session, match: SoccerMatch, dist):
+    """Compare the model's expected goals to what this competition ACTUALLY
+    produces, and say so in the drawer.
+
+    WHY. A cross-league model can be correctly fitted and still be untrustworthy
+    at a particular point. Miami vs Leon (2026-08-13) priced at 4.39 expected
+    goals -- the highest in the competition, against a slate mean of 3.10 and a
+    realised mean of 2.80 over completed matches -- and produced a +28.9pp
+    moneyline edge and a +34.2pp spread edge that the app staked. Nothing in the
+    app contradicted it: `implausible_disagreement` is an odds-RATIO guard (10x)
+    and 48.5% -> 77.4% is only 1.6x, so it sails through the mid-price blind
+    spot.
+
+    This does NOT gate the bet. It is deliberately informational: the model may
+    well be right that a given fixture is a shootout, and silently refusing to
+    price the tail of a fitted model is its own error. But the person deciding
+    whether to place it should see that the number is the extreme of its
+    competition before they do, not after it settles."""
+    if dist is None:
+        return None
+    predicted = dist.expected_home_goals + dist.expected_away_goals
+    completed = (
+        session.query(SoccerMatch)
+        .filter(SoccerMatch.league == match.league,
+                SoccerMatch.home_goals_ft.isnot(None),
+                SoccerMatch.away_goals_ft.isnot(None))
+        .all()
+    )
+    if len(completed) < _MIN_COMPLETED_FOR_PLAUSIBILITY:
+        return None   # no honest base rate yet -- say nothing rather than guess
+    totals = [c.home_goals_ft + c.away_goals_ft for c in completed]
+    actual = sum(totals) / len(totals)
+    if actual <= 0:
+        return None
+    ratio = predicted / actual
+    if ratio >= _GOAL_OUTLIER_RATIO:
+        verdict = (f"UNUSUALLY HIGH -- {ratio:.2f}x the realised rate. Treat a large edge here as "
+                   "the model being evaluated at the extreme of its range, not as a free bet.")
+    elif ratio <= 1 / _GOAL_OUTLIER_RATIO:
+        verdict = f"unusually low -- {ratio:.2f}x the realised rate."
+    else:
+        verdict = "in line with this competition."
+    return ReasoningFactorOut(
+        label="Goal expectation vs this competition",
+        detail=(f"Model expects {predicted:.2f} total goals; {match.league} has actually averaged "
+                f"{actual:.2f} over {len(completed)} completed matches. {verdict}"),
+    )
+
+
 # --- NATIONAL TEAMS (2026-08-09) -------------------------------------------
 # Fixtures are stored under "INTL", the same code the ratings use. Pricing goes
 # through predict_national_match, which refuses any CROSS-CONFEDERATION pairing:
@@ -1396,14 +1453,49 @@ def get_soccer_market_reasoning(market_id: int, session: Session = Depends(get_s
 
     factors = []
     if match is not None:
-        dist = elo_service_soccer.get_match_distribution(match.league, match.home_team, match.away_team)
-        home_n = elo_service_soccer.get_team_match_count(match.league, match.home_team)
-        away_n = elo_service_soccer.get_team_match_count(match.league, match.away_team)
-        factors.append(ReasoningFactorOut(label="League", detail=f"{match.league} ({match.season})"))
+        # CROSS-LEAGUE FIXTURES DO NOT HAVE A POOL OF THEIR OWN.
+        #
+        # REAL BUG (user-reported 2026-08-12: "Miami vs Leon both show 0 ranked
+        # matches -- do we have enough data to trust this?"). The three lookups
+        # below were keyed on `match.league`, which for a Leagues Cup fixture is
+        # the literal string "LEAGUES_CUP" -- a competition, not a rating pool.
+        # No such pool exists, so the drawer reported 0 rated matches for BOTH
+        # clubs and no expected goals, on a row the app had priced and staked
+        # $10 on. The truth was Inter Miami 219 rated matches and Club Leon 530,
+        # in the MLS and MEX1 pools that predict_leagues_cup_match actually uses.
+        #
+        # The pricing path was right the whole time -- predict_leagues_cup_match
+        # REFUSES a club with get_count <= 0 rather than inventing a default
+        # rating, so a priced Leagues Cup row already proved both clubs were
+        # rated. Only the explainer was wrong, which is the worst place for it:
+        # the drawer exists to tell you whether to believe the number.
+        # Same class as the esports rating-lookup/pricing-path split.
+        lc_pred = _leagues_cup_prediction(match)
+        if lc_pred is not None:
+            dist = lc_pred.distribution
+            home_n = elo_service_soccer.get_team_match_count(lc_pred.home_league, match.home_team)
+            away_n = elo_service_soccer.get_team_match_count(lc_pred.away_league, match.away_team)
+            pool_note = f" [{lc_pred.home_league} vs {lc_pred.away_league}]"
+        else:
+            dist = elo_service_soccer.get_match_distribution(match.league, match.home_team, match.away_team)
+            home_n = elo_service_soccer.get_team_match_count(match.league, match.home_team)
+            away_n = elo_service_soccer.get_team_match_count(match.league, match.away_team)
+            pool_note = ""
+        factors.append(ReasoningFactorOut(label="League", detail=f"{match.league} ({match.season}){pool_note}"))
         factors.append(ReasoningFactorOut(
             label="Team match history",
             detail=f"{match.home_team}: {home_n} rated matches, {match.away_team}: {away_n} rated matches",
         ))
+        if lc_pred is not None:
+            factors.append(ReasoningFactorOut(
+                label="Cross-league strength offset",
+                detail=(f"{lc_pred.home_league} vs {lc_pred.away_league}, gap {lc_pred.strength_gap:+.3f} log-goals. "
+                        "Fitted on 172 completed Leagues Cup matches held out by season; "
+                        "venue term measured at ~0 because the competition is played at neutral sites."),
+            ))
+            plaus = _competition_goal_plausibility(session, match, dist)
+            if plaus is not None:
+                factors.append(plaus)
         if dist is not None:
             factors.append(ReasoningFactorOut(
                 label="Model expected goals",
@@ -1413,6 +1505,17 @@ def get_soccer_market_reasoning(market_id: int, session: Session = Depends(get_s
                 label="Model outcome split",
                 detail=f"Home {dist.prob_home_win()*100:.1f}% / Draw {dist.prob_draw()*100:.1f}% / Away {dist.prob_away_win()*100:.1f}%",
             ))
+        # The leagues_cup_* family had no Pick line either, so even once the
+        # numbers appeared the drawer never said what the bet actually was.
+        if m.market_type == "leagues_cup_spread" and m.team is not None and m.line is not None:
+            factors.append(ReasoningFactorOut(label="Pick", detail=f"{m.team} wins by more than {m.line} goals"))
+        if m.market_type == "leagues_cup_total" and m.line is not None:
+            factors.append(ReasoningFactorOut(label="Pick", detail=f"Over {m.line} total goals"))
+        if m.market_type == "leagues_cup_btts":
+            factors.append(ReasoningFactorOut(label="Pick", detail="Both teams to score"))
+        if m.market_type == "leagues_cup_moneyline_3way":
+            pick = "Draw" if m.side == "draw" else (m.team or "—")
+            factors.append(ReasoningFactorOut(label="Pick", detail=f"{pick} (90 minutes)"))
         if m.market_type in ("game_spread", "first_half_spread", "second_half_spread") and m.team is not None and m.line is not None:
             half_note = " (1st half)" if m.market_type == "first_half_spread" else " (2nd half)" if m.market_type == "second_half_spread" else ""
             factors.append(ReasoningFactorOut(label="Pick", detail=f"{m.team} wins by more than {m.line} goals{half_note}"))
@@ -1500,9 +1603,27 @@ def get_soccer_market_reasoning(market_id: int, session: Session = Depends(get_s
         "this way -- its ratings are still fit from real results, just never checked against a market "
         "baseline."
     )
+    if _leagues_cup_prediction(match) is not None:
+        methodology = (
+            "A CROSS-LEAGUE model, not the domestic one (see leagues_cup_match.py). Each club keeps its own "
+            "league's attack/defence ratings -- Inter Miami's from MLS, a Liga MX club's from MEX1 -- which are "
+            "not comparable on their own, so a fitted strength offset bridges them. The offset was fitted on 172 "
+            "completed Leagues Cup matches and held out BY SEASON, improving Poisson deviance in three of four "
+            "held-out seasons. The venue term was MEASURED rather than assumed and came out at ~0, because the "
+            "competition is played at neutral or near-neutral US sites -- reusing the domestic home advantage "
+            "would have applied a ~30% scoring boost that does not exist. It refuses to price any pairing that "
+            "is not MLS vs Liga MX, and refuses any club with no rated history rather than using a default "
+            "rating. model_validated stays false: the offset predicts GOALS better than assuming the leagues "
+            "are equal, which is a weaker claim than beating a market price."
+        )
     insight = ""
     if match is not None:
-        dist = elo_service_soccer.get_match_distribution(match.league, match.home_team, match.away_team)
+        _lc = _leagues_cup_prediction(match)
+        # Same cross-league fix as the factors above -- match.league is
+        # "LEAGUES_CUP", which is a competition and not a rating pool, so the
+        # domestic lookup returns None and the narrative silently goes blank.
+        dist = (_lc.distribution if _lc is not None
+                else elo_service_soccer.get_match_distribution(match.league, match.home_team, match.away_team))
         if dist is not None:
             sseed = f"{match.home_team}|{match.away_team}|{dist.expected_home_goals:.2f}|{dist.expected_away_goals:.2f}"
             eh, ea = dist.expected_home_goals, dist.expected_away_goals
