@@ -17,6 +17,7 @@ mechanism in this app designed to turn "no average edge" into "edge in the
 buckets that survive."
 """
 import statistics
+import threading
 import time
 from collections import defaultdict
 
@@ -44,13 +45,58 @@ _CONTAMINATION_PP = 0.20
 _STATS_TTL_SECONDS = 300
 _stats_cache: dict = {"at": 0.0, "value": None}
 
+# SINGLE-FLIGHT + SERVE-STALE. Measured 2026-08-11: one cold call costs 21
+# SECONDS -- it recomputes CLV for all 26,905 placed bets, and compute_bet_clv
+# does a per-bet game lookup against a 34.5M-row MarketSnapshot table.
+#
+# The TTL alone was not enough, and py-spy showed why: with no lock, EVERY
+# request that arrives after the TTL expires starts its own recompute. Two
+# request threads were caught in the identical
+# _get_game <- compute_bet_clv <- bucket_clv_stats stack at the same moment,
+# and /mlb/markets, /wnba/markets, /soccer/markets and /nba/futures were all
+# timing out at 120s while /settings answered in 1.9s. That is a thundering
+# herd, not slow code.
+#
+# So: at most ONE thread ever recomputes. Everyone else immediately gets the
+# previous value, even if slightly stale -- CLV moves as games close (minutes to
+# hours), so a few seconds of staleness cannot change a gating decision.
+_refresh_lock = threading.Lock()
+
 
 def bucket_clv_stats(session: Session) -> dict[tuple[str, str], dict]:
     """{(sport, market_type): {n, avg_clv_pp}} over bets with a real closing
-    line (compute_bet_clv status == "closed"). TTL-cached (see _STATS_TTL)."""
+    line (compute_bet_clv status == "closed").
+
+    Never blocks on a refresh that another thread is already doing, and never
+    blocks at all on a cold cache -- see _refresh_lock.
+    """
     now = time.time()
     if _stats_cache["value"] is not None and now - _stats_cache["at"] < _STATS_TTL_SECONDS:
         return _stats_cache["value"]
+
+    if not _refresh_lock.acquire(blocking=False):
+        # Someone else is already paying the 21s. Serve what we have rather than
+        # queue up behind them.
+        #
+        # An EMPTY dict on a cold cache is the correct fallback, not a stall:
+        # is_bucket_enabled treats an unknown bucket as ENABLED (see its
+        # docstring -- "not enough data to judge -> don't suppress"), so a
+        # missing stats dict makes the gate permissive, which is exactly its
+        # documented default posture. It can never silently SUPPRESS a bucket.
+        return _stats_cache["value"] or {}
+    try:
+        # Re-check under the lock: another thread may have finished while this
+        # one was acquiring.
+        now = time.time()
+        if _stats_cache["value"] is not None and now - _stats_cache["at"] < _STATS_TTL_SECONDS:
+            return _stats_cache["value"]
+        return _compute_bucket_clv_stats(session, now)
+    finally:
+        _refresh_lock.release()
+
+
+def _compute_bucket_clv_stats(session: Session, now: float) -> dict[tuple[str, str], dict]:
+    """The real work. Only ever called with _refresh_lock held."""
     buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
     rec_buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
     for bet in session.query(PlacedBet).all():
