@@ -74,19 +74,69 @@ def cache_path(code: str) -> Path:
     return DATA_DIR / f"espn_soccer_{code.lower()}_matches_cache.json"
 
 
-def derive_season_shape(dates: list[str]) -> tuple[int, bool]:
-    """(season_start_month, is_split_year) from the league's own match months.
+def _season_counts(dates: list[str], start_month: int) -> list[int]:
+    """Matches per season under a given start month, dropping the first and last
+    (always partial -- the crawl window cuts them)."""
+    seasons: collections.Counter = collections.Counter()
+    for d in dates:
+        year, month = int(d[:4]), int(d[5:7])
+        seasons[year if month >= start_month else year - 1] += 1
+    ordered = [seasons[k] for k in sorted(seasons)]
+    return ordered[1:-1] if len(ordered) > 2 else ordered
 
-    The quietest calendar month is the off-season; the season starts the month
-    after it. A season starting in January IS the calendar year; anything else
-    spans two, which is what the "YYYY-YY" label exists for.
+
+def _uniformity(counts: list[int]) -> float:
+    """Coefficient of variation; lower is a better fit. A league plays roughly
+    the same number of matches every season, so the CORRECT boundary is the one
+    that makes the per-season counts flat."""
+    if not counts or len(counts) < 2:
+        return float("inf")
+    mean = sum(counts) / len(counts)
+    if mean <= 0:
+        return float("inf")
+    var = sum((c - mean) ** 2 for c in counts) / len(counts)
+    return (var ** 0.5) / mean
+
+
+CALENDAR_BOUNDARY_MONTHS = (1, 2)
+
+
+def derive_season_shape(dates: list[str]) -> tuple[int, bool]:
+    """(season_start_month, is_split_year) from the deepest off-season trough.
+
+    The season starts the month AFTER the league's quietest month, so the
+    boundary never falls in a busy period -- which is the only failure that
+    really costs anything, because a boundary mid-season fires
+    SEASON_REGRESSION while the season is still being played.
+
+    THE BUG THIS FIXES was the calendar-vs-split test, not the trough. The
+    first version said "start month != January => split year", which labelled
+    ALL FIFTEEN leagues Aug-May, Colombia and NWSL included. A trough at the
+    YEAR BOUNDARY means the calendar year already IS the season, and such a
+    league's quietest month is December or January, so its start month comes
+    out as January or February -- hence CALENDAR_BOUNDARY_MONTHS.
+
+    (A uniformity fit over all twelve boundaries was tried in between and was
+    worse: every month inside an off-season gap produces the identical grouping,
+    so the fit cannot discriminate among them and picked May for Colombia --
+    squarely mid-season.)
+
+    Checked against the real calendars, this agrees for 14 of 15 leagues.
+    AUSTRIA is the exception and is left as-is deliberately: it has TWO troughs,
+    a June off-season and a deeper Dec-Feb winter break, so it resolves to
+    calendar-year and will regress at the winter break rather than in summer.
+    That is a January transfer window with real squad turnover, so regressing
+    there is defensible rather than merely tolerable -- but it is an
+    approximation, and it is written down here rather than special-cased.
     """
     months = collections.Counter(int(d[5:7]) for d in dates if len(d) >= 7)
     if not months:
         return 1, False
     quietest = min(range(1, 13), key=lambda m: months.get(m, 0))
     start_month = quietest % 12 + 1
-    return start_month, start_month != 1
+    if start_month in CALENDAR_BOUNDARY_MONTHS:
+        return 1, False
+    return start_month, True
 
 
 def make_labeller(start_month: int, split: bool):
