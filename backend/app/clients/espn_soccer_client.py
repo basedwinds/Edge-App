@@ -453,6 +453,110 @@ def fetch_season_range(start: dt.date, end: dt.date) -> list[dict]:
     return events
 
 
+# ---------------------------------------------------------------------------
+# GENERALISED, PER-SLUG VARIANTS (2026-08-12)
+#
+# The three functions above are hardcoded to SCOREBOARD_URL (usa.1) and stamp
+# league="MLS", because MLS was the only ESPN-sourced league when they were
+# written. Everything about them generalises -- the scoreboard shape is
+# identical for every league slug -- so these take the slug and the league code
+# rather than duplicating the parser per league.
+#
+# WHY THIS MATTERS: ESPN turns out to serve real, deep history for many leagues
+# football-data.co.uk does not cover. Verified 2026-08-12 over 2022-2025
+# completed matches: Colombia col.1 1,787 · USL usa.usl.1 1,693 · Uruguay
+# uru.1 1,195 · Romania rou.1 1,184 · Guatemala gua.1 1,039 · Ecuador ecu.1
+# 1,038 · Costa Rica crc.1 1,036 · Venezuela ven.1 961 · Saudi ksa.1 952 ·
+# South Africa rsa.1 906 · Austria aut.1 774 · Switzerland sui.1 768 ·
+# A-League aus.1 700 · Ireland irl.1 697 · NWSL usa.nwsl 652.
+#
+# NOTE the ESPN core-API league index (sports.core.api.espn.com/v2/sports/
+# soccer/leagues, 214 entries) is a LOWER BOUND, not the truth: irl.1, rou.1
+# and sui.1 all serve scoreboard data without appearing in it. Probe the
+# scoreboard to decide whether a league is usable; use the index only to
+# discover candidate slugs.
+_SCOREBOARD_TEMPLATE = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
+
+
+def fetch_range_for(slug: str, start: dt.date, end: dt.date) -> list[dict]:
+    """fetch_range for an arbitrary league slug. Same swallow-and-return-[]
+    posture: one bad window must not abort a multi-year cache build."""
+    params = {"dates": f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}", "limit": 1000}
+    try:
+        resp = httpx.get(_SCOREBOARD_TEMPLATE.format(slug=slug), params=params, timeout=30.0)
+        resp.raise_for_status()
+        return resp.json().get("events", [])
+    except Exception:
+        return []
+
+
+def fetch_season_range_for(slug: str, start: dt.date, end: dt.date) -> list[dict]:
+    events: list[dict] = []
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + dt.timedelta(days=CHUNK_DAYS - 1), end)
+        events.extend(fetch_range_for(slug, cursor, chunk_end))
+        cursor = chunk_end + dt.timedelta(days=1)
+    return events
+
+
+def parse_final_events_for(raw_events: list[dict], league: str,
+                           season_label) -> list[dict]:
+    """parse_final_events for an arbitrary league.
+
+    `season_label` is a callable(match_date) -> str rather than a constant,
+    because THE SEASON STRING IS NOT COSMETIC: elo_soccer's
+    start_season_if_new() fires SEASON_REGRESSION (1/3 of the way back to
+    league average) every time it changes. Label a split-year league by
+    calendar year and every club gets regressed mid-season, every season.
+    Callers derive the label from each league's own observed match-month
+    distribution -- see build_espn_league_cache."""
+    out = []
+    for e in raw_events:
+        comps = e.get("competitions") or []
+        if not comps:
+            continue
+        comp = comps[0]
+        if (((comp.get("status") or {}).get("type") or {}).get("name")) != "STATUS_FULL_TIME":
+            continue
+        competitors = comp.get("competitors") or []
+        home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+        away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+        if home is None or away is None:
+            continue
+        try:
+            home_goals = int(home.get("score"))
+            away_goals = int(away.get("score"))
+        except (TypeError, ValueError):
+            continue
+        home_name = (home.get("team") or {}).get("displayName")
+        away_name = (away.get("team") or {}).get("displayName")
+        if not home_name or not away_name:
+            continue
+        event_date = e.get("date")
+        match_date = event_date[:10] if event_date else None
+        if match_date is None:
+            continue
+        out.append({
+            "source": "espn",
+            "source_match_id": f"espn:{league}:{e.get('id')}",
+            "league": league,
+            "season": season_label(match_date),
+            "match_date": match_date,
+            "home_team": home_name,
+            "away_team": away_name,
+            "home_goals_ft": home_goals,
+            "away_goals_ft": away_goals,
+            "home_goals_ht": None,
+            "away_goals_ht": None,
+            "result_ft": "H" if home_goals > away_goals else ("A" if away_goals > home_goals else "D"),
+            "home_odds": None,
+            "draw_odds": None,
+            "away_odds": None,
+        })
+    return out
+
+
 def parse_final_events(raw_events: list[dict]) -> list[dict]:
     """Keeps only events ESPN marks fully completed ("STATUS_FULL_TIME") --
     in-progress/scheduled/postponed rows have no real final score to train

@@ -46,7 +46,7 @@ from sqlalchemy.orm import Session
 from app.api.routers.markets import _batch_latest_snapshots, _edge_sentence, _implied_prob, _seeded_choice
 from app.api.routers.settings import get_soccer_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut, SoccerMarketOut
-from app.clients import kalshi_soccer_client
+from app.clients import kalshi_soccer_client, polymarket_soccer_client
 from app.clients.football_data_client import PROMOTION_SOURCE_DIVISION
 from app.db.database import get_session
 from app.db.models import Market, MarketSnapshot, SoccerMatch, SoccerNewsAdjustmentCache
@@ -914,6 +914,16 @@ def list_soccer_markets(session: Session = Depends(get_session)):
 _MARKET_TYPE_LABEL_TO_DIVISION = {
     ("league_winner", label): division for division, (_, label) in kalshi_soccer_client.LEAGUE_WINNER_SERIES.items()
 }
+# POLYMARKET'S SIDE OF league_winner resolves by EVENT SLUG, not by label --
+# see _futures_division. Its group_label is Polymarket's own event title
+# ("Eredivisie: 2026-27 Winner"), which shares no text with Kalshi's
+# ("Eredivisie Champion") AND carries the season in it, so a label map would
+# have to be re-edited every season. The slug is what we asked for by name, so
+# it is exact and stable.
+_POLYMARKET_SLUG_TO_DIVISION = {
+    slug: division
+    for division, slug in polymarket_soccer_client.LEAGUE_WINNER_EVENT_SLUGS.items()
+}
 _MARKET_TYPE_LABEL_TO_DIVISION.update({
     ("relegation", label): division for division, (_, label) in kalshi_soccer_client.RELEGATION_SERIES.items()
 })
@@ -999,8 +1009,29 @@ _SIM_PROB_FIELD_BY_MARKET_TYPE = {
 }
 
 
-def _futures_division(m: Market) -> str | None:
-    return _MARKET_TYPE_LABEL_TO_DIVISION.get((m.market_type, m.group_label or ""))
+def _futures_division(m) -> str | None:
+    """CALLED WITH TWO DIFFERENT TYPES, which is why every access here is a
+    getattr: the ORM `Market` while rows are being built, and the pydantic
+    `FuturesMarketOut` afterwards (the mid-season-note pass at the end of
+    list_soccer_futures). Reading `m.source_event_id` directly 500'd the whole
+    route, because the output model has no such field.
+
+    Polymarket league_winner rows carry their league in the event SLUG, which is
+    exact and season-stable -- its group_label is Polymarket's own title and
+    embeds the season ("Eredivisie: 2026-27 Winner"), so a label map would need
+    re-editing every year. The output model already carries the resolved
+    division as `league`, so that is preferred once it exists.
+    """
+    division = getattr(m, "league", None)
+    if division:
+        return division
+    slug = getattr(m, "source_event_id", None)
+    if slug:
+        division = _POLYMARKET_SLUG_TO_DIVISION.get(slug)
+        if division:
+            return division
+    return _MARKET_TYPE_LABEL_TO_DIVISION.get(
+        (getattr(m, "market_type", None), getattr(m, "group_label", None) or ""))
 
 
 @router.get("/futures", response_model=list[FuturesMarketOut])

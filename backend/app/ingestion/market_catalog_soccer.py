@@ -435,6 +435,38 @@ def upsert_kalshi_soccer_league_winner_market(session: Session, row: dict) -> Ma
     return market
 
 
+def upsert_polymarket_soccer_league_winner_row(session: Session, row: dict) -> Market:
+    """Polymarket's side of the season-title market -- same shape as the Kalshi
+    league_winner above (season-long, no soccer_match_id), so both venues land
+    on one market_type and the router prices them identically.
+
+    The division is carried by `group_label`, NOT by a column: `markets` has no
+    `league` field, and the router resolves a futures row's rating pool through
+    _MARKET_TYPE_LABEL_TO_DIVISION[(market_type, group_label)]. So the label
+    written here has to be registered in that map -- see soccer_markets.py's
+    POLYMARKET_LEAGUE_WINNER_LABELS. Setting a `league` attribute instead would
+    have been silently dropped by SQLAlchemy and left every row unpriced.
+
+    N1 arrives on BOTH venues now (see the client's own note on Polymarket
+    finally listing Dutch football), so these rows MUST go through
+    apply_duplicate_listing_cap or one title gets staked twice.
+    """
+    source_ticker = f"{row['condition_id']}-league_winner"
+    market = session.query(Market).filter_by(source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker, source_event_id=row["event_slug"],
+            market_type="league_winner", sport="soccer",
+        )
+        session.add(market)
+    market.team = row["team"]
+    market.group_label = row["group_label"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"),
+                     **quote_fields(row, row.get("yes_price")))
+    return market
+
+
 def upsert_kalshi_mls_playoff_market(session: Session, row: dict) -> Market:
     """MLS Cup / Eastern / Western conference bracket futures. Same season-long,
     no-soccer_match_id shape as league_winner above; the only difference is that

@@ -579,3 +579,83 @@ def get_correct_score_markets() -> list[dict]:
                         "raw_ask": prices["best_ask"], "status": _market_status(m),
                 })
     return rows
+
+
+# --------------------------------------------------------------------------
+# LEAGUE-TITLE FUTURES (2026-08-12)
+#
+# Fetched BY EVENT SLUG, not by tag_slug like every match market above. That is
+# deliberate: these are season-winner events discovered by catalog_scan, and
+# their slugs are exact and known, so a per-slug fetch cannot silently return
+# the wrong league the way a guessed tag can. TAG_SLUGS' own comment records
+# how unguessable Polymarket tags are ("liga-portugal", "portugal",
+# "championship" and "efl" all return 0).
+#
+# ONLY LEAGUES THIS APP ALREADY RATES ARE LISTED. simulate_season is
+# league-agnostic -- it builds its own round-robin and takes its team list from
+# the ingested markets -- so a league prices the moment its rows appear AND its
+# Elo pool exists. Listing a league we cannot rate would just add permanently
+# unpriced rows.
+#
+# N1 IS HERE NOW AND THAT IS A REAL CHANGE: TAG_SLUGS above documents Eredivisie
+# as "Polymarket has never listed the league at all" (checked 2026-08-07, 0 open
+# AND 0 closed events) with an explicit "re-check if Polymarket adds Dutch
+# football". They have. It is also on Kalshi, so its rows must go through the
+# cross-platform duplicate cap or the same title gets staked twice.
+#
+# LIQUIDITY CAVEAT, measured 2026-08-12: every one of these events listed that
+# day and reported 0 volume with live two-sided quotes (18-30 legs carrying a
+# real bestBid). Zero volume here means "no trades yet", NOT a dead book -- but
+# has_real_trading will correctly gate them out of staking until a book forms.
+LEAGUE_WINNER_EVENT_SLUGS = {
+    "SWE1": "2026-soccer-allsvenskan-sweden-winner",
+    "ARG1": "2026-soccer-liga-profesional-argentina-winner",
+    "D2":   "2027-soccer-2-bundesliga-winner",
+    "DNK1": "2027-soccer-denmark-superliga-winner",
+    "JPN1": "2027-soccer-japan-j-league-winner",
+    "F2":   "2027-soccer-ligue-2-winner",
+    "SC0":  "2027-soccer-scottish-premiership-winner",
+    "T1":   "2027-soccer-sper-lig-winner",
+    "N1":   "2027-soccer-eredivisie-winner",
+}
+
+
+def get_league_winner_markets() -> list[dict]:
+    """One row per (league, team) leg of each season-title event.
+
+    Skips a leg with no usable Yes price rather than defaulting it -- an
+    outright with a guessed price is worse than an absent one.
+    """
+    from app.clients.polymarket_client import GAMMA as _GAMMA, get_json
+
+    rows = []
+    for division, slug in LEAGUE_WINNER_EVENT_SLUGS.items():
+        try:
+            event = get_json(f"{_GAMMA}/events/slug/{slug}")
+        except Exception:
+            continue  # one missing league must not cost the others
+        group_label = event.get("title") or slug
+        for m in event.get("markets", []):
+            team = (m.get("groupItemTitle") or "").strip()
+            if not team:
+                continue
+            prices = extract_market_prices(m)
+            outcomes, outcome_prices = prices["outcomes"], prices["outcome_prices"]
+            if "Yes" not in outcomes or not outcome_prices:
+                continue
+            yes_idx = outcomes.index("Yes")
+            if yes_idx >= len(outcome_prices):
+                continue
+            rows.append({
+                "event_slug": slug,
+                "division": division,
+                "group_label": group_label,
+                "team": team,
+                "yes_price": outcome_prices[yes_idx],
+                "condition_id": prices["condition_id"],
+                "volume": prices["volume"],
+                "raw_bid": prices["best_bid"],
+                "raw_ask": prices["best_ask"],
+                "status": _market_status(m),
+            })
+    return rows

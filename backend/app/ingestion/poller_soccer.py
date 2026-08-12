@@ -700,6 +700,33 @@ def settle_soccer_placed_bets():
             session.close()
 
 
+def refresh_polymarket_soccer_futures():
+    """Polymarket's side of league_winner (2026-08-12).
+
+    Fetched by exact EVENT SLUG rather than by tag, so it cannot silently pull
+    the wrong league -- see the client's LEAGUE_WINNER_EVENT_SLUGS note. Only
+    leagues this app already rates are listed, because simulate_season is
+    league-agnostic and prices a league the moment its rows and its Elo pool
+    both exist; a league we cannot rate would just add permanent blanks.
+
+    Kept as its OWN step rather than folded into refresh_kalshi_soccer_futures
+    so a Polymarket outage cannot take Kalshi's futures down with it, matching
+    the per-step isolation the step list below exists for.
+    """
+    rows = polymarket_soccer_client.get_league_winner_markets()
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for row in rows:
+                market_catalog_soccer.upsert_polymarket_soccer_league_winner_row(session, row)
+            session.commit()
+        finally:
+            session.close()
+    leagues = {r["division"] for r in rows}
+    log.info("polymarket soccer futures: %d league_winner rows across %d leagues",
+             len(rows), len(leagues))
+
+
 def refresh_mls_playoff_sim():
     """Re-runs the MLS Cup bracket Monte Carlo. Ordered AFTER
     refresh_soccer_ratings in the full refresh below on purpose: it reads the
@@ -733,6 +760,7 @@ def run_full_refresh_soccer():
         ("kalshi markets", refresh_kalshi_soccer_markets),
         ("polymarket markets", refresh_polymarket_soccer_markets),
         ("kalshi futures", refresh_kalshi_soccer_futures),
+        ("polymarket futures", refresh_polymarket_soccer_futures),
         # MLS playoff sim. It has its OWN 6-hourly scheduler job, and this does
         # not replace it -- this is a belt-and-braces warm so an empty cache
         # cannot silently unprice all 60 MLS futures rows.

@@ -160,6 +160,28 @@ def load_espn_mls_matches() -> list[dict]:
     return json.loads(ESPN_MLS_CACHE_PATH.read_text())
 
 
+# ESPN-sourced leagues football-data.co.uk does not carry (2026-08-12). One
+# cache file per league, written by scripts/build_espn_soccer_league_caches.py
+# -- see that script for why the leagues were chosen and, more importantly, why
+# each one's `season` label is DERIVED from its own match-month histogram rather
+# than assumed (SEASON_REGRESSION fires on every season-string change).
+#
+# Globbed rather than listed so adding a league is one entry in the script's
+# ESPN_ONLY_LEAGUES map plus a crawl -- nothing to keep in sync here. A missing
+# cache degrades to "that league has no ratings", never to a crash.
+ESPN_LEAGUE_CACHE_GLOB = "espn_soccer_*_matches_cache.json"
+
+
+def load_espn_league_matches() -> list[dict]:
+    out: list[dict] = []
+    for path in sorted(DATA_DIR.glob(ESPN_LEAGUE_CACHE_GLOB)):
+        try:
+            out.extend(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue  # a half-written cache must not take the whole stream down
+    return out
+
+
 def build_espn_mls_cache(start_year: int = 2018) -> list[dict]:
     import datetime as dt
 
@@ -197,7 +219,7 @@ def load_matches() -> list[dict]:
     # path work with no parallel service. Empty when the cache has not been
     # built, which degrades to "no INTL ratings" instead of breaking the rest.
     matches = (load_football_data_matches() + load_espn_mls_matches()
-               + international_data.load_matches())
+               + load_espn_league_matches() + international_data.load_matches())
     matches.sort(key=lambda m: (m["match_date"], m["league"], m["source_match_id"]))
     return matches
 
