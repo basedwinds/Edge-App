@@ -153,7 +153,10 @@ def run_snapshot_prune():
     the last 14 days + each market's latest; only logs, never raises."""
     session = SessionLocal()
     try:
-        prune_market_snapshots(session)
+        # Lock per BATCH, not for the whole run -- see snapshot_maintenance
+        # .DEFAULT_BATCH_SIZE for why a single giant DELETE never finished.
+        from app.ingestion.poller_lock import db_write_lock
+        prune_market_snapshots(session, lock=db_write_lock)
     except Exception:
         log.exception("snapshot prune failed")
     finally:
@@ -506,7 +509,7 @@ def start():
         replace_existing=True,
     )
     scheduler.add_job(
-        serialized(run_snapshot_prune),
+        run_snapshot_prune,   # takes the lock per batch itself, must NOT be serialized()
         "interval",
         hours=24,
         id="snapshot_prune",
