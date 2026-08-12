@@ -47,13 +47,34 @@ DEFAULT_WNBA_ALLOCATION_PCT = 0.06
 # not evidence -- revisit at the early-September re-decide alongside mma/cs2.
 CFB_ALLOCATION_PCT_KEY = "cfb_allocation_pct"
 DEFAULT_CFB_ALLOCATION_PCT = 0.06
-# 944 of CFB's 974 markets are season-long, so a futures sub-pool is not optional
-# here the way it is for a game-dominated sport. Set to the 0.15 the other
-# non-core sports use rather than the 0.3 NFL/NBA/MLB carry: CFB futures have no
-# forward CLV at all yet, and three of its futures types rest on a committee
-# proxy (badged approximate, though still staked so they can be measured).
+# CFB is futures-heavy, so it needs a sub-pool at all -- that part of the
+# original reasoning stands. The SIZE was 0.15, justified as "the 0.15 the other
+# non-core sports use"; every one of those sports has since moved to 0.22 and CFB
+# was left behind, so the comparison the number rested on is no longer true.
+#
+# Raised to 0.22 on 2026-08-12 rather than waiting for the early-September
+# re-decide the old comment scheduled, for two measured reasons:
+#
+#  1. THE "944 OF 974 ARE SEASON-LONG" FIGURE IS A PRE-SEASON ARTEFACT, not a
+#     property of CFB. 688 games are already loaded with the first on 2026-08-29,
+#     and the mix has already started moving (1,635 active markets, of which 255
+#     are game markets). Waiting means deciding once the ratio has inverted.
+#  2. The re-decide was meant to consult forward CLV on CFB futures. That
+#     evidence cannot arrive in time: the app has ONE settled futures bet in
+#     total, across every sport. Waiting for it is waiting for nothing.
+#
+# Right now the allocation is backwards for the moment CFB is actually in: its
+# futures pool ($18, ~4 positions) is the binding side while pre-season, and its
+# larger weekly pool ($102) is mostly idle because the first game is outside the
+# recommendation window.
+#
+# The committee-proxy concern that motivated the extra caution is REAL and is not
+# addressed by this number. A pool cut penalises every CFB futures type for three
+# of them resting on a proxy. If those three are the worry, gate those three --
+# they are already badged approximate. Sizing is the wrong instrument for a
+# model-quality problem.
 CFB_FUTURES_SUBPOOL_PCT_KEY = "cfb_futures_subpool_pct"
-DEFAULT_CFB_FUTURES_SUBPOOL_PCT = 0.15
+DEFAULT_CFB_FUTURES_SUBPOOL_PCT = 0.22
 # Racing (F1/NASCAR/IndyCar share one pool). Small + no futures split -- it's
 # now staked (paper) like the others, but its models are unbacktested so it
 # defaults lighter. 2026-07-24.
@@ -173,10 +194,31 @@ DEFAULT_LOL_FUTURES_SUBPOOL_PCT = 0.15
 COD_ALLOCATION_PCT_KEY = "cod_allocation_pct"
 DEFAULT_COD_ALLOCATION_PCT = 0.06
 COD_FUTURES_SUBPOOL_PCT_KEY = "cod_futures_subpool_pct"
-# Zero: Kalshi lists no CoD futures at all (checked live -- KXCODGAME is
-# match-winner only, and the two Esports World Cup series are empty stubs).
-# A futures sub-pool with nothing to buy is dead capital.
-DEFAULT_COD_FUTURES_SUBPOOL_PCT = 0.0
+# Was 0.0 on the reading that "Kalshi lists no CoD futures at all -- KXCODGAME is
+# match-winner only, and the two Esports World Cup series are empty stubs. A
+# futures sub-pool with nothing to buy is dead capital." That was true when
+# checked and is now contradicted by the catalog: COD Tournament Winner is
+# recorded LIVE with a real book (KXCOD-EWC26, 16 teams), and 25 CoD futures
+# markets sit in the DB -- 16 series_winner + 9 series_total, all closed because
+# the TOURNAMENT ended, not because the market type does not exist.
+#
+# 0.22, matching every other sport, because 0.0 is not a neutral default here --
+# it is a silent trap. A futures sub-pool of zero gives a ceiling of zero, and
+# `plan()` cuts every row whose stake exceeds the ceiling. So the next time an
+# Esports World Cup or CDL season lists, CoD futures would be ingested, priced,
+# and then dropped from the board with nothing anywhere saying why. That is the
+# same shape as the racing missing-split bug documented above: a missing split
+# does not error, it distorts.
+#
+# The cost of being wrong in this direction is nil -- with no CoD futures listed
+# the $26 simply goes unused. The cost of being wrong the other way is an entire
+# market type going quietly unbettable.
+#
+# NOTE: neither this nor racing_futures_subpool_pct is in SettingsIn or the PUT
+# handler, so both are code-only. Changing them from the Settings page is not
+# possible today; that is why this default matters rather than being a
+# placeholder a user would override.
+DEFAULT_COD_FUTURES_SUBPOOL_PCT = 0.22
 
 # Added 2026-07-16: these were hardcoded constants in staking.py -- moved to
 # user-editable settings so tuning them doesn't need a code round-trip.
