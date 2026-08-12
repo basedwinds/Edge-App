@@ -53,6 +53,7 @@ from app.db.models import Market, MarketSnapshot, SoccerMatch, SoccerNewsAdjustm
 from app.ingestion import soccer_data
 from app.ingestion.market_catalog_soccer import get_soccer_news_adjustment_cache, soccer_news_cache_to_pydantic
 from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_match
+from app.models.baseline.soccer_pool_resolver import resolve_to_pool
 from app.models.baseline import elo_service_soccer
 from app.models.cup_match import predict_cup_tie
 from app.models.uefa_match import predict_uefa_match
@@ -1056,6 +1057,10 @@ def list_soccer_futures(session: Session = Depends(get_session)):
     staking_mode, flat_marginal, flat_full = get_flat_params(session)
     clv_stats = bucket_clv_stats(session)
 
+    # market.id -> the pool spelling that owns that team's rating, filled in
+    # per league below. Falls back to the plain canonical key, so a league
+    # whose pool resolution finds nothing behaves exactly as it did before.
+    pool_key_by_market_id: dict[int, str] = {}
     by_league: dict[str, list[Market]] = {}
     for m in markets:
         division = _futures_division(m)
@@ -1071,7 +1076,46 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             continue
         second_tier_division = PROMOTION_SOURCE_DIVISION.get(division)
         second_tier_state = elo_service_soccer.get_rating_state(second_tier_division) if second_tier_division else None
-        canonical_teams = list({canonical_team_key(m.team) for m in league_markets if m.team})
+        # RESOLVE MARKET SPELLINGS ONTO THE POOL, per league.
+        #
+        # Polymarket writes full club names and football-data writes short ones
+        # ("1. FC Kaiserslautern" vs "kaiserslautern"), so before this only
+        # 82/162 league-title legs found their rating and the rest priced as
+        # nothing -- D2 matched 1 of 18. See soccer_pool_resolver for why this
+        # is derived rather than added to TEAM_ALIASES, and for the uniqueness
+        # rule that makes it safe.
+        #
+        # AN UNRESOLVED TEAM STILL ENTERS THE FIELD, under its own key. That is
+        # deliberate and is the field-completeness lesson from the esports
+        # tournament sim: dropping a team shrinks the field the sim normalises
+        # over, so the survivors' probabilities inflate to fill the gap. The sim
+        # already gives an unrated entrant a real placeholder rating (see
+        # simulate_season's unrated_teams handling), so passing it through keeps
+        # the league's size honest instead of manufacturing confidence.
+        # THE MAPPING MUST BE INJECTIVE. Two market teams resolving onto one
+        # pool spelling both read that team's probability, so the group stops
+        # summing to 1: Argentina came out at 1.059 and Eredivisie at 0.979
+        # before this guard. Worse than the arithmetic, it means we cannot tell
+        # the two clubs apart -- Argentina fields several "Gimnasia"s and
+        # "Estudiantes"s -- so the honest move is to refuse BOTH and let them
+        # enter the field under their own keys, exactly as resolve_to_pool
+        # already refuses an ambiguous single lookup.
+        _pool = set(state.attack_log)
+        _claims: dict[str, list[int]] = {}
+        for _m in league_markets:
+            if not _m.team:
+                continue
+            resolved = resolve_to_pool(_m.team, _pool)
+            if resolved:
+                _claims.setdefault(resolved, []).append(_m.id)
+            pool_key_by_market_id[_m.id] = resolved or canonical_team_key(_m.team)
+        for _resolved, _ids in _claims.items():
+            if len(_ids) > 1:
+                for _id in _ids:
+                    _market = next(x for x in league_markets if x.id == _id)
+                    pool_key_by_market_id[_id] = canonical_team_key(_market.team)
+        canonical_teams = list({pool_key_by_market_id[m.id]
+                                for m in league_markets if m.team})
         # SEED FROM THE REAL TABLE. Without this the sim runs a fresh season from
         # zero, which is only correct between seasons -- it silently discards
         # every point already banked. Harmless for the five European leagues
@@ -1120,6 +1164,12 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         if _m.market_type == _LIGAMX_MARKET_TYPE and _m.team:
             _ligamx_fields.setdefault(_m.group_label or "", []).append(canonical_team_key(_m.team))
 
+    def _pool_key(m: Market) -> str:
+        """The pool spelling for this row, or the plain canonical key when the
+        league had no rating state (pool_key_by_market_id is only filled for
+        leagues whose sim actually ran)."""
+        return pool_key_by_market_id.get(m.id) or canonical_team_key(m.team)
+
     out = []
     for m in markets:
         division = _futures_division(m)
@@ -1134,7 +1184,7 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             _field = _ligamx_fields.get(_lg) or []
             _res = playoff_sim_service_ligamx.get_result(_lg, _field) if _field else None
             if _res is not None and m.team:
-                raw = _res.champion_prob.get(canonical_team_key(m.team))
+                raw = _res.champion_prob.get(_pool_key(m))
                 # None rather than 0.0 for a team the sim does not carry: on an
                 # 18-team field 0.0 reads as a confident "cannot win", which is a
                 # fabricated price -- same reasoning as the MLS branch below.
@@ -1143,7 +1193,7 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             if mls_playoff is not None and m.team:
                 probs = (mls_playoff.cup_champion_prob if m.market_type == "mls_cup_winner"
                          else mls_playoff.conference_champion_prob)
-                raw = probs.get(canonical_team_key(m.team))
+                raw = probs.get(_pool_key(m))
                 # None (not 0.0) for a team the sim doesn't carry: on a 30-team
                 # bracket 0.0 reads as a confident "cannot win", which is a
                 # fabricated price, same reasoning as the team_points rungs.
@@ -1155,12 +1205,12 @@ def list_soccer_futures(session: Session = Depends(get_session)):
                 # the sim doesn't cover the team, rather than defaulting to 0.0
                 # the way the rank markets below do: on a points ladder 0.0 is a
                 # confident "will not reach", which is a fabricated price.
-                raw = prob_points_at_least(sim_result, canonical_team_key(m.team), m.line) if m.line is not None else None
+                raw = prob_points_at_least(sim_result, _pool_key(m), m.line) if m.line is not None else None
                 model_prob = round(raw, 4) if raw is not None else None
             else:
                 prob_field = _SIM_PROB_FIELD_BY_MARKET_TYPE.get(m.market_type, "champion_prob")
                 prob_dict = getattr(sim_result, prob_field)
-                model_prob = round(prob_dict.get(canonical_team_key(m.team), 0.0), 4)
+                model_prob = round(prob_dict.get(_pool_key(m), 0.0), 4)
         snap = snapshots_by_market.get(m.id)
         implied = _implied_prob(snap)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
