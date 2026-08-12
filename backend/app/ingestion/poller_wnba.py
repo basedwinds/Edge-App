@@ -172,6 +172,32 @@ def refresh_kalshi_wnba_halves():
             session.close()
 
 
+def refresh_kalshi_wnba_quarters():
+    """1Q-4Q winner, spread and total (twelve live Kalshi series). Priced by
+    game_lines_wnba's MEASURED quarter constants -- notably a home edge that is
+    65% a FIRST-quarter effect and neutral in the third, which the game model
+    cannot express and an even split would get badly wrong."""
+    game_index = _load_game_index_readonly()
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            matched = unmatched = 0
+            for quarter in (1, 2, 3, 4):
+                for kind, fetch in (("winner", kalshi_wnba_client.get_quarter_winner_markets),
+                                    ("spread", kalshi_wnba_client.get_quarter_spread_markets),
+                                    ("total", kalshi_wnba_client.get_quarter_total_markets)):
+                    for row in fetch(quarter):
+                        gid = match_kalshi_event_ticker(row["event_ticker"], game_index)
+                        matched += gid is not None
+                        unmatched += gid is None
+                        market_catalog_wnba.upsert_kalshi_wnba_quarter_market(
+                            session, row, gid, quarter, kind)
+            session.commit()
+            log.info("kalshi wnba quarters: %d matched, %d unmatched", matched, unmatched)
+        finally:
+            session.close()
+
+
 def refresh_wnba_season_sim():
     """Season win-total Monte Carlo, warmed off the request path -- it fetches
     the season-wide schedule (one ESPN call per day), far too slow for a
@@ -316,6 +342,7 @@ def run_full_refresh_wnba():
                  refresh_polymarket_wnba_moneyline,
                  refresh_kalshi_wnba_spread_total,
                  refresh_kalshi_wnba_halves,
+                 refresh_kalshi_wnba_quarters,
                  refresh_kalshi_wnba_win_totals,
                  refresh_kalshi_wnba_standings,
                  settle_placed_bets_wnba):

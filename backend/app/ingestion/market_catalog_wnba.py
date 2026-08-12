@@ -228,6 +228,42 @@ def upsert_kalshi_wnba_half_market(session: Session, row: dict, wnba_game_id: st
     return market
 
 
+def upsert_kalshi_wnba_quarter_market(session: Session, row: dict, wnba_game_id: str | None,
+                                      quarter: int, kind: str) -> Market:
+    """Quarter markets, namespaced by quarter for the same reason the halves are:
+    the CLV gate and the calibration report bucket by market_type, and a 3Q
+    spread is a different distribution from a game spread (quarter margin std
+    ~7.0-7.9 against the game's 14.21).
+
+    `kind` is "winner" | "spread" | "total"; only spread/total carry a line, and
+    only winner/spread carry a team.
+    """
+    market_type = f"q{quarter}_{kind}"
+    market = session.query(Market).filter_by(source="kalshi", source_ticker=row["ticker"]).one_or_none()
+    if market is None:
+        market = Market(
+            source="kalshi", source_ticker=row["ticker"], source_event_id=row["event_ticker"],
+            market_type=market_type, sport="wnba",
+        )
+        session.add(market)
+    market.wnba_game_id = wnba_game_id
+    if kind in ("winner", "spread"):
+        market.team = to_espn_abbr(row["team_abbr_kalshi"])
+    market.line = row.get("line")
+    if kind == "total":
+        market.side = "over"
+    market.status = row.get("status") or "active"
+    session.flush()
+    session.add(
+        MarketSnapshot(
+            market_id=market.id, ts=datetime.datetime.utcnow(),
+            yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
+            last_price=row.get("last_price"), volume=row.get("volume"),
+        )
+    )
+    return market
+
+
 def upsert_kalshi_wnba_win_total_market(session: Session, row: dict) -> Market:
     """Season win ladder -- season-long, so NO wnba_game_id (unlike every other
     WNBA market type, which is game-tied)."""

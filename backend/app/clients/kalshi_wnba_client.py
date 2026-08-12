@@ -54,6 +54,15 @@ HALF_WINNER_SERIES = {1: "KXWNBA1HWINNER", 2: "KXWNBA2HWINNER"}
 HALF_SPREAD_SERIES = {1: "KXWNBA1HSPREAD", 2: "KXWNBA2HSPREAD"}
 HALF_TOTAL_SERIES = {1: "KXWNBA1HTOTAL", 2: "KXWNBA2HTOTAL"}
 
+# QUARTER markets, added 2026-08-11. Twelve series, same three shapes as the
+# halves, all confirmed live: winner carries no floor_strike and DOES carry a
+# TIE outcome, spread is a per-team ladder, total is a game-level ladder.
+# Volume is concentrated in the third quarter (3Q total 62,144, 3Q winner
+# 31,744, 3Q spread 24,909) rather than spread evenly.
+QUARTER_WINNER_SERIES = {q: f"KXWNBA{q}QWINNER" for q in (1, 2, 3, 4)}
+QUARTER_SPREAD_SERIES = {q: f"KXWNBA{q}QSPREAD" for q in (1, 2, 3, 4)}
+QUARTER_TOTAL_SERIES = {q: f"KXWNBA{q}QTOTAL" for q in (1, 2, 3, 4)}
+
 # Spread market tickers glue the team code to a rung index with no separator
 # (confirmed live 2026-08-02: "KXWNBASPREAD-26AUG03PHXCHI-PHX7" = Phoenix, and
 # "...-CHI7" = Chicago, both on the same event). Splitting on the letter/digit
@@ -181,6 +190,24 @@ def get_half_spread_markets(half: int) -> list[dict]:
 def get_half_total_markets(half: int) -> list[dict]:
     """Game-level ladder: "Over X.5 points in the Nth half"."""
     return _ladder_rows(HALF_TOTAL_SERIES[half], with_team=False)
+
+
+def get_quarter_winner_markets(quarter: int) -> list[dict]:
+    """Per-TEAM: which team wins the Nth quarter. Same shape as the game
+    moneyline (and the half winner), so it reuses that fetch. The TIE leg comes
+    back as its own row and MUST be refused downstream -- a quarter ends level
+    far more often than a half does."""
+    return get_moneyline_markets(QUARTER_WINNER_SERIES[quarter])
+
+
+def get_quarter_spread_markets(quarter: int) -> list[dict]:
+    """Per-TEAM ladder: "<Team> wins the Nth quarter by over X.5 points?"."""
+    return _ladder_rows(QUARTER_SPREAD_SERIES[quarter], with_team=True)
+
+
+def get_quarter_total_markets(quarter: int) -> list[dict]:
+    """Game-level ladder: "Over X.5 points in the Nth quarter"."""
+    return _ladder_rows(QUARTER_TOTAL_SERIES[quarter], with_team=False)
 
 
 def get_win_total_markets() -> list[dict]:

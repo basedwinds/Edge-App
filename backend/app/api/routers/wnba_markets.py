@@ -13,6 +13,7 @@ injury_rules_wnba.py, calibrated on 602 real box scores); the rest/schedule-spot
 half was measured and rejected -- scripts/backtest_wnba_rest.py.
 """
 import datetime
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -45,6 +46,9 @@ GAME_MARKET_TYPES = {
     # so lumping them would average two things that measurably differ.
     "first_half_winner", "first_half_spread", "first_half_total",
     "second_half_winner", "second_half_spread", "second_half_total",
+    # Quarters, same namespacing reasoning as the halves: a 3Q spread is a
+    # different distribution from a game spread (margin std ~7.4 vs 14.21).
+    *(f"q{q}_{k}" for q in (1, 2, 3, 4) for k in ("winner", "spread", "total")),
 }
 # Season-long ladders (KXWNBAWINS). These have NO wnba_game_id, so they must
 # bypass the per-game final/started guards below -- running them through those
@@ -63,6 +67,9 @@ _HALF_OF = {"first": 1, "second": 2}
 # Kalshi outcome labels that are NOT a team. A half can end level, so the winner
 # markets carry a TIE leg -- see _half_model_prob for the bug this prevents.
 _NON_TEAM_OUTCOMES = {"TIE", "DRAW"}
+# "q3_spread" and friends. Anchored so it cannot match a future
+# market_type that merely starts with a q.
+_QUARTER_RE = re.compile(r"^q[1-4]_(winner|spread|total)$")
 # Totals became priceable once scoring_ratings_wnba supplied real per-team points
 # scored/allowed -- the old objection (a league-average model returns the same
 # number for every game) no longer applies. That module was validated
@@ -233,6 +240,49 @@ def _half_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
     return None
 
 
+def _quarter_model_prob(m: Market, game: WnbaGame, scoring: dict) -> float | None:
+    """1Q-4Q winner, spread and total, off game_lines_wnba's MEASURED quarter
+    constants.
+
+    The home edge is 65% a FIRST-quarter effect and neutral in the third, so
+    QUARTER_EDGE_SHARE is what keeps the full-game edge off the quarters that do
+    not exhibit it. An even split would understate Q1 by 2.6x.
+    """
+    quarter = int(m.market_type[1])          # "q3_spread" -> 3
+    kind = m.market_type.split("_", 1)[1]
+    if kind == "total":
+        if m.line is None:
+            return None
+        p = game_lines_wnba.prob_over_quarter(m.line, scoring.get(game.home_team),
+                                              scoring.get(game.away_team), quarter)
+        if (m.side or "over").lower() == "under":
+            p = 1.0 - p
+        return round(p, 4)
+    if m.team is None:
+        return None
+    # A QUARTER ENDS TIED FAR MORE OFTEN THAN A HALF DOES, and Kalshi lists TIE
+    # as its own outcome here too. This is the same money-losing bug the half
+    # winners already hit (TIE fell through to the AWAY side and manufactured a
+    # +16.5pp edge), and the shorter the period the bigger the tie mass -- so it
+    # matters more here, not less. The margin model is continuous with no point
+    # mass at zero, so it genuinely cannot price a tie: left unpriced.
+    if m.team.upper() in _NON_TEAM_OUTCOMES:
+        return None
+    p_home = elo_service_wnba.get_home_win_prob(game.home_team, game.away_team, game.location)
+    if p_home is None:
+        return None
+    p_home = calibration_temp.apply("wnba", p_home)
+    elo_diff = implied_elo_diff(p_home)
+    is_home = m.team == game.home_team
+    if not is_home and m.team != game.away_team:
+        return None
+    if kind == "winner":
+        return round(game_lines_wnba.prob_team_wins_quarter(is_home, elo_diff, quarter), 4)
+    if kind == "spread" and m.line is not None:
+        return round(game_lines_wnba.prob_team_covers_quarter(is_home, m.line, elo_diff, quarter), 4)
+    return None
+
+
 def _wnba_season_model_prob(m, win_dist, sim_trials):
     """Model probability for a season-long WNBA market. Shared by /markets and
     /futures so the two can never disagree about the same row."""
@@ -346,6 +396,8 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 model_prob = _team_total_model_prob(m, game, scoring)
             elif no_baseline_reason is None and "_half_" in m.market_type:
                 model_prob = _half_model_prob(m, game, scoring)
+            elif no_baseline_reason is None and _QUARTER_RE.match(m.market_type or ""):
+                model_prob = _quarter_model_prob(m, game, scoring)
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None)

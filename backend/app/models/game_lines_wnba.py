@@ -252,3 +252,75 @@ def prob_team_wins_half(team_is_home: bool, elo_diff: float, half: int) -> float
     """P(team outscores the opponent in `half`) -- the half-winner markets. Just
     the spread model at a line of 0."""
     return prob_team_covers_half(team_is_home, 0.0, elo_diff, half)
+
+
+# --- Quarters ----------------------------------------------------------------
+# Kalshi runs twelve WNBA quarter series (1Q-4Q winner, spread, total) and
+# several carry real volume -- 2Q total 53,749, 3Q total 24,241, 2Q spread
+# 22,563 (measured 2026-08-11).
+#
+# MEASURED, not split from the half constants, by
+# scripts/fit_wnba_quarter_constants.py over 252 completed 2026 games with four
+# quarters of ESPN linescores:
+#
+#     quarter  margin mean  margin std  total mean  total std   share
+#       Q1        +1.42        7.04       43.85       8.89     0.2522
+#       Q2        +0.46        7.86       42.54       7.90     0.2446
+#       Q3        -0.09        7.43       44.06       8.16     0.2533
+#       Q4        +0.38        7.02       43.46       8.61     0.2499
+#
+# THE HOME EDGE IS 65% A FIRST-QUARTER EFFECT, which is the whole reason these
+# are measured rather than assumed. Against a +2.17 full-game home margin: Q1
+# takes +65.3% of it, Q2 +21.4%, Q4 +17.4%, and Q3 is NEGATIVE at -4.0%.
+# Splitting the game edge evenly across four quarters -- the obvious shortcut --
+# would understate Q1 by 2.6x and get Q3's sign backwards. It is the same shape
+# the half block found (the edge lands before the break), one level finer.
+#
+# Q3's share is set to 0.0 rather than its measured -4.0%. A small negative is
+# indistinguishable from noise at n=252 and would mean "the AWAY side is favoured
+# in the third quarter", a claim this sample cannot support; 0.0 says the
+# quarter is neutral, which is what the measurement actually shows. Same posture
+# as HALF_EDGE_SHARE[2] = 0.0.
+QUARTER_MARGIN_STD = {1: 7.04, 2: 7.86, 3: 7.43, 4: 7.02}
+QUARTER_TOTAL_SHARE = {1: 0.2522, 2: 0.2446, 3: 0.2533, 4: 0.2499}
+QUARTER_TOTAL_STD = {1: 8.89, 2: 7.90, 3: 8.16, 4: 8.61}
+QUARTER_EDGE_SHARE = {1: 0.653, 2: 0.214, 3: 0.0, 4: 0.174}
+
+QUARTER_MARGIN_SLOPE = {
+    q: math.log(10) / 1600.0 * QUARTER_MARGIN_STD[q] * math.sqrt(2 * math.pi)
+    for q in (1, 2, 3, 4)
+}
+
+
+def prob_team_covers_quarter(team_is_home: bool, line: float, elo_diff: float, quarter: int) -> float:
+    """P(team wins `quarter` by more than `line`). `elo_diff` is home-minus-away
+    and already includes home-court, so QUARTER_EDGE_SHARE is what keeps the
+    full-game edge from being applied to a quarter that does not exhibit it."""
+    mu = QUARTER_MARGIN_SLOPE[quarter] * elo_diff * QUARTER_EDGE_SHARE[quarter]
+    if not team_is_home:
+        mu = -mu
+    return 1.0 - _norm_cdf(line, mu, QUARTER_MARGIN_STD[quarter])
+
+
+def prob_over_quarter(line: float, home_scoring: dict | None, away_scoring: dict | None,
+                      quarter: int) -> float:
+    """P(combined score in `quarter` exceeds `line`).
+
+    Scaled off the REGULATION total: the quarter shares were measured against
+    regulation, and overtime (0.63% of all points) belongs to no quarter, so
+    applying them to a full-game expectation that implicitly includes OT would
+    bias every quarter line high.
+    """
+    full_mu, _ = expected_total(home_scoring, away_scoring)
+    mu = full_mu * QUARTER_TOTAL_SHARE[quarter]
+    return 1.0 - _norm_cdf(line, mu, QUARTER_TOTAL_STD[quarter])
+
+
+def prob_team_wins_quarter(team_is_home: bool, elo_diff: float, quarter: int) -> float:
+    """P(team outscores the opponent in `quarter`) -- the quarter-winner markets.
+
+    NOTE these can end TIED far more often than a half or a game can, and a tie
+    is its own Kalshi outcome. This returns P(win), and the router must refuse a
+    TIE leg rather than let it fall through to a team's number -- the same
+    money-losing bug the half winner markets already hit."""
+    return prob_team_covers_quarter(team_is_home, 0.0, elo_diff, quarter)
