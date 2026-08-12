@@ -57,7 +57,43 @@ import unicodedata
 # dominance ratio deliberately refuses them. Neither org is in a live market, and
 # a spelling that has its own history still keeps its own rating either way --
 # only a zero-history market spelling landing on those keys would go unresolved.
-CORPORATE_SUFFIXES = ("esports club", "e sports", "esports", "gaming", "club", "team")
+CORPORATE_SUFFIXES = ("esports club", "e sports", "esports", "gaming", "club", "team", "clan")
+
+# ACRONYM EXPANSIONS -- the ONE transformation here that is not orthographic,
+# and therefore the one that must be justified by evidence rather than a rule.
+#
+# WHY IT IS NEEDED. The live feed and the historical crawl are different
+# sources and abbreviate differently. Every other disagreement between them is
+# reachable by folding case, punctuation or a corporate token, and the code
+# above already handles those. An acronym is not: "NIP" and "Ninjas in Pyjamas"
+# share no character sequence, so no mechanical rule can bridge them and the
+# team simply gets rated twice.
+#
+# Measured 2026-08-12 (scripts/find_esports_source_spelling_splits.py, which
+# pairs spellings that fill the SAME date+opponent slot from DIFFERENT sources
+# and have NEVER faced each other). Of 11 CS2 candidates the resolver already
+# merged 8; these were the survivors, and the cost was real:
+#
+#     NIP           5 series, 1561   vs  Ninjas in Pyjamas     172 series, 1589
+#     NAVI Junior   5 series, 1514   vs  Natus Vincere Junior   21 series, 1588
+#
+# ENTRIES REQUIRE FIXTURE EVIDENCE, not recognition. Both of these were
+# confirmed by two independent shared fixtures apiece (NIP/NiP: both beat M80 on
+# 2026-07-21 and both played paiN on 2026-07-26). Do not add an abbreviation
+# here because it looks obvious -- a wrong alias pays out the wrong side, the
+# same reason lol_team_aliases refuses sponsor renames.
+#
+# WHY EXPANDING IN THE KEY IS SAFE. This runs before the corporate-suffix strip,
+# so a SUB-ROSTER keeps its own identity for free: "NIP Impact" expands to
+# "ninjas in pyjamas impact", which is a different key from "ninjas in pyjamas"
+# and stays a separate team -- as it must, since NIP Impact (31 matches) and
+# Young Ninjas (4) are real distinct rosters. And because the merge still goes
+# through build_canonical_by_key, _DOMINANCE_RATIO remains the backstop: 172-vs-5
+# resolves, a 7-vs-7 coincidence would not.
+ACRONYM_EXPANSIONS = {
+    "nip": "ninjas in pyjamas",
+    "navi": "natus vincere",
+}
 
 
 def name_key(name: str) -> str:
@@ -91,6 +127,12 @@ def name_key(name: str) -> str:
     # disproof this module's docstring prescribes -- across all nine pairs,
     # neither spelling ever played the other, so none are distinct orgs.
     t = re.sub(r"^team\s+", "", t)
+    # Expand a LEADING acronym (see ACRONYM_EXPANSIONS). Leading-only, so a
+    # sub-roster ("NIP Impact") keeps the qualifier and stays its own key; and
+    # applied after the "team" strip so "Team NAVI" folds the same way.
+    head, _, rest = t.partition(" ")
+    if head in ACRONYM_EXPANSIONS:
+        t = (ACRONYM_EXPANSIONS[head] + " " + rest).strip()
     for suffix in sorted(CORPORATE_SUFFIXES, key=len, reverse=True):
         if t.endswith(" " + suffix):
             return t[: -len(suffix) - 1].strip()
