@@ -19,6 +19,7 @@ import {
   fetchValorantMarkets, buildValorantRecommendedBets,
   fetchCs2Markets, buildCs2RecommendedBets,
   fetchLolMarkets, buildLolRecommendedBets,
+  fetchCodMarkets, buildCodRecommendedBets,
   fetchRacingMarkets, buildRacingRecommendedBets,
   markBetPlaced,
   fetchFutures, fetchNbaFutures, fetchMlbFutures, fetchTennisFutures,
@@ -62,8 +63,31 @@ import type { FuturesMarketRow } from "../types/market";
 // stable, showing an empty one is neither.
 const lastGood = new Map<string, unknown>();
 
+/** Guarded fetches that fell back on THIS load -- a timeout or an error, not an
+ * empty board. Read by the page to say so out loud.
+ *
+ * WHY THIS EXISTS. guard() times out at 18s and silently substitutes [] (or the
+ * last good value). Several routes legitimately take far longer than that on a
+ * cold cache -- /soccer/markets and /cs2/markets were measured at 110s and 176s
+ * right after a backend restart -- so the sport contributed NOTHING and the page
+ * still said "across 6 sports" as if that were the whole board.
+ *
+ * Measured 2026-08-12: the futures shortlist should have been 29 rows across 8
+ * sports and rendered 13 across 6. The 16 missing rows were exactly CFB (8) and
+ * soccer (8) -- and CFB held the #2, #4, #5 and #6 largest edges on the board,
+ * including a +51.1pp win total. A user cannot tell "this sport has no bets"
+ * from "this sport did not load", and the second one silently hides the best
+ * bets available.
+ *
+ * Module-level and cleared at the start of each load, same pattern as lastGood
+ * directly above. */
+export const degradedKeys = new Set<string>();
+
 function guard<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise<T> {
-  const remembered = () => (lastGood.has(key) ? (lastGood.get(key) as T) : fallback);
+  const remembered = () => {
+    degradedKeys.add(key);
+    return lastGood.has(key) ? (lastGood.get(key) as T) : fallback;
+  };
   return Promise.race([
     p.then((v) => {
       lastGood.set(key, v);
@@ -115,6 +139,7 @@ const GLOBAL_CAP_PCT = { weekly: 0.30, futures: 0.10 } as const;
 type CombinedPlan = { plans: SportPlan[]; globalCeilings: Record<"weekly" | "futures", number> };
 
 async function loadCombined(): Promise<CombinedPlan> {
+  degradedKeys.clear();   // this load's fallbacks only -- see guard()
   const s = await fetchSettings();
   // Game/match markets only -- this is an "upcoming bets" view, and the
   // per-sport /futures endpoints are both the slowest (season-long models +
@@ -141,12 +166,14 @@ async function loadCombined(): Promise<CombinedPlan> {
 
   const [
     nflM, nbaM, wnbaM, cfbM, mlbM, mmaM, tenM, socM, valM, cs2M, lolM, racingM,
+    codM,
   ] = await Promise.all([
     guard("Markets", fetchMarkets(), []), guard("NbaMarkets", fetchNbaMarkets(), []),
     guard("WnbaMarkets", fetchWnbaMarkets(), []), guard("CfbMarkets", fetchCfbMarkets(), []),
     guard("MlbMarkets", fetchMlbMarkets(), []), guard("MmaMarkets", fetchMmaMarkets(), []),
     guard("TennisMarkets", fetchTennisMarkets(), []), guard("SoccerMarkets", fetchSoccerMarkets(), []), guard("ValorantMarkets", fetchValorantMarkets(), []),
     guard("Cs2Markets", fetchCs2Markets(), []), guard("LolMarkets", fetchLolMarkets(), []), guard("RacingMarkets", fetchRacingMarkets(), []),
+    guard("CodMarkets", fetchCodMarkets(), []),  // CoD was absent -- see plan("cod")
   ]);
   // Keys of everything already placed, so a bet you have ALREADY TAKEN cannot be
   // offered again.
@@ -204,6 +231,15 @@ async function loadCombined(): Promise<CombinedPlan> {
     plan("valorant", buildValorantRecommendedBets(valM, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars).ranked, s.valorant_weekly_pool_dollars, s.valorant_futures_pool_dollars),
     plan("cs2", buildCs2RecommendedBets(cs2M, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars).ranked, s.cs2_weekly_pool_dollars, s.cs2_futures_pool_dollars),
     plan("lol", buildLolRecommendedBets(lolM, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars).ranked, s.lol_weekly_pool_dollars, s.lol_futures_pool_dollars),
+    // CoD was never fetched here, so its bets could not appear on the
+    // cross-sport board no matter what edge they carried -- the same
+    // hand-maintained per-sport-list drift this file already fixed twice
+    // (WNBA/CFB futures, then racing/MMA futures). It has its own
+    // /cod/markets route, builder and Recommended page; only this list was
+    // missing it. Currently contributes nothing because its tournament has
+    // ended (all 25 rows closed/finalized), which is exactly why the gap
+    // went unnoticed -- it will matter the next time CoD has live matches.
+    plan("cod", buildCodRecommendedBets(codM, s.cod_weekly_pool_dollars, s.cod_futures_pool_dollars).ranked, s.cod_weekly_pool_dollars, s.cod_futures_pool_dollars),
     // Racing rows carry sport f1/nascar/irl but all three draw on ONE pool,
     // so the committed capital of all three has to net off together.
     plan("__racing", buildRacingRecommendedBets(racingM, s.racing_weekly_pool_dollars).ranked, s.racing_weekly_pool_dollars),
@@ -215,6 +251,7 @@ async function loadCombined(): Promise<CombinedPlan> {
 // tagged with sport, filtered to edge-qualified (>=3pp model-vs-market gap),
 // sorted by edge. WNBA/MMA have no futures, so they're omitted.
 async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
+  degradedKeys.clear();   // this load's fallbacks only -- see guard()
   // Every sport with a /futures route must be listed here. WNBA and CFB were
   // missing -- their backend routes existed and returned real edge-qualified
   // rows (CFB 139, the most of any sport; WNBA 12), but no fetcher ever called
@@ -590,6 +627,26 @@ export function Combined() {
     0,
     windowed.funded.filter((r) => !isRowNotReady(r, readinessQuery.data)).length - rows.length,
   );
+  // Which sports fell back on this load (see guard/degradedKeys). Derived from
+  // the guard KEY so it cannot drift from the fetch list: every key is
+  // "<Sport>Markets" or "<Sport>Futures", and the bare "Markets"/"Futures" pair
+  // is NFL. Recomputed whenever either query settles.
+  const degradedSports = useMemo(() => {
+    const pretty: Record<string, string> = {
+      "": "NFL", Nba: "NBA", Wnba: "WNBA", Cfb: "College Football", Mlb: "MLB",
+      Mma: "MMA", Tennis: "Tennis", Soccer: "Soccer", Valorant: "Valorant",
+      Cs2: "CS2", Lol: "LoL", Racing: "Racing",
+    };
+    const names = new Set<string>();
+    for (const key of degradedKeys) {
+      const stem = key.replace(/(Markets|Futures)$/, "");
+      if (stem === key) continue;            // e.g. OpenBetsForPool -- not a sport
+      const name = pretty[stem];
+      if (name) names.add(name);
+    }
+    return [...names].sort();
+  }, [query.data, futuresQuery.data]);
+
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
   const stats = useMemo(() => {
@@ -688,6 +745,16 @@ export function Combined() {
         </>
       ) : (
         <>
+          {degradedSports.length > 0 && (
+            <div className="mb-4 rounded-lg border border-[var(--color-warning)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-warning)]">
+              <span className="font-semibold">Incomplete board:</span>{" "}
+              {degradedSports.join(", ")} did not load in time, so {degradedSports.length === 1 ? "its" : "their"}{" "}
+              bets are missing from the counts below. This is a slow or restarting backend, not an
+              empty slate — hit Refresh in a moment. (Measured 2026-08-12: a cold
+              backend hid 16 rows, including the four largest edges on the board.)
+            </div>
+          )}
+
           <div className="flex flex-wrap border border-[var(--color-border)] rounded-lg bg-[var(--color-surface)] mb-6 divide-x divide-[var(--color-border)]">
             {isFutures ? (
               <>
