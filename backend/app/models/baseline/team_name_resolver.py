@@ -127,36 +127,53 @@ ACRONYM_EXPANSIONS = {
     "tec": "titan",
     "jdg": "jd",
     "xlg": "xi lai",
-    # "drx": "kiwoom drx" WAS HERE AND WAS REMOVED AFTER MEASURING IT.
-    #
-    # It is the only SPONSOR PREFIX ever tried in this map rather than a true
-    # acronym, and it broke a different title. LoL carries both "DRX
-    # Challengers" and "Kiwoom DRX Challengers"; expanding the leading "drx"
-    # collapsed them onto one key where neither spelling dominates the other, so
-    # build_canonical_by_key discarded the key and BOTH went unrated. LoL's
-    # unrated count went 59 -> 60 and "DRX Challengers" lost a rating it had.
-    #
-    # That is the failure this module's docstring calls strictly worse than the
-    # split it replaces, and it cost a real Valorant fix to avoid (Valorant's
-    # DRX is 3 series against KIWOOM DRX's 265). Kept out anyway: a dropped
-    # alias costs coverage, a wrong one pays out the wrong side.
-    #
-    # To recover it properly, ACRONYM_EXPANSIONS needs to be PER-TITLE -- thread
-    # an `expansions` argument through name_key/build_canonical_by_key/resolve
-    # and let each elo_service pass its own. Every entry above is an org-level
-    # truth that holds in all three titles, so the shared map is correct for
-    # them; "drx" is the first that is not.
+}
+
+# PER-TITLE OVERRIDES. Everything in ACRONYM_EXPANSIONS is an org-level truth
+# that holds in every title the org fields a roster in, so sharing it is right.
+# "drx" is the first entry that is NOT, and it is the reason this indirection
+# exists rather than a fourth entry above.
+#
+# Valorant needs "drx" -> "kiwoom drx": its live feed says DRX (3 series, 1464)
+# while the vlr crawl says KIWOOM DRX (265 series, 1555), so without it 265
+# series of history are ignored.
+#
+# LoL must NOT have it. LoL carries BOTH "DRX Challengers" and "Kiwoom DRX
+# Challengers"; expanding the leading "drx" collapses them onto one key where
+# neither dominates, so build_canonical_by_key discards the key and BOTH go
+# unrated. Measured: LoL unrated 59 -> 60, "DRX Challengers" losing a rating it
+# had -- the "strictly worse than the split it replaced" failure this module's
+# docstring warns about. LoL's own plain "DRX" already owns 320 series under
+# that exact spelling and needs no help.
+#
+# That asymmetry is real and permanent (it is about which spellings each FEED
+# uses, not about the org), so it belongs in data, not in a comment explaining
+# why a fix was skipped.
+EXPANSIONS_BY_TITLE = {
+    "valorant": {**ACRONYM_EXPANSIONS, "drx": "kiwoom drx"},
 }
 
 
-def name_key(name: str) -> str:
+def expansions_for(title: str | None) -> dict[str, str]:
+    """The expansion map for one title, defaulting to the shared org-level one."""
+    return EXPANSIONS_BY_TITLE.get(title or "", ACRONYM_EXPANSIONS)
+
+
+def name_key(name: str, expansions: dict[str, str] | None = None) -> str:
     """Orthographic key: accents folded, case dropped, punctuation collapsed, one
     trailing corporate token removed.
 
     Returns "" for a name with no ASCII content. Callers MUST treat an empty key
     as unusable -- every CJK/Thai name folds to it, and grouping on it would
     merge every one of them together.
+
+    `expansions` selects the acronym map (see EXPANSIONS_BY_TITLE); None means
+    the shared org-level one. It MUST be the same map used to build the
+    canonical index -- a key built under one map and queried under another
+    silently misses, which is a lookup returning None on a team we can price.
     """
+    if expansions is None:
+        expansions = ACRONYM_EXPANSIONS
     t = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
     t = re.sub(r"[^a-z0-9]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
@@ -184,8 +201,8 @@ def name_key(name: str) -> str:
     # sub-roster ("NIP Impact") keeps the qualifier and stays its own key; and
     # applied after the "team" strip so "Team NAVI" folds the same way.
     head, _, rest = t.partition(" ")
-    if head in ACRONYM_EXPANSIONS:
-        t = (ACRONYM_EXPANSIONS[head] + " " + rest).strip()
+    if head in expansions:
+        t = (expansions[head] + " " + rest).strip()
     for suffix in sorted(CORPORATE_SUFFIXES, key=len, reverse=True):
         if t.endswith(" " + suffix):
             return t[: -len(suffix) - 1].strip()
@@ -197,15 +214,18 @@ def name_key(name: str) -> str:
 _DOMINANCE_RATIO = 5
 
 
-def build_canonical_by_key(match_counts: dict[str, int], min_games: int) -> dict[str, str]:
+def build_canonical_by_key(match_counts: dict[str, int], min_games: int,
+                           expansions: dict[str, str] | None = None) -> dict[str, str]:
     """{orthographic key: the one spelling under it that owns the match history}.
 
     A key is usable only when EXACTLY ONE spelling clears `min_games`. Zero
     targets, or two plausible ones, resolve to nothing.
+
+    `expansions` must match what resolve() is later called with -- see name_key.
     """
     by_key: dict[str, list[str]] = {}
     for name in match_counts:
-        key = name_key(name)
+        key = name_key(name, expansions)
         if key:
             by_key.setdefault(key, []).append(name)
     out: dict[str, str] = {}
@@ -253,11 +273,14 @@ def build_canonical_by_key(match_counts: dict[str, int], min_games: int) -> dict
 
 
 def resolve(team: str, match_counts: dict[str, int], canonical_by_key: dict[str, str],
-            min_games: int) -> str:
-    """The spelling that owns this team's history, or the input unchanged."""
+            min_games: int, expansions: dict[str, str] | None = None) -> str:
+    """The spelling that owns this team's history, or the input unchanged.
+
+    `expansions` must match what built `canonical_by_key` -- see name_key.
+    """
     if not team:
         return team
-    key = name_key(team)
+    key = name_key(team, expansions)
     own = match_counts.get(team, 0)
     if own >= min_games:
         # Having its own history is normally reason enough never to redirect --

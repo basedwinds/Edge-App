@@ -206,7 +206,12 @@ def refresh_ratings():
     # makes the alias redirect safe (see _build_name_aliases).
     match_counts = _tnr.count_appearances(all_matches)
     _cache["match_counts"] = match_counts
-    _cache["canonical_by_key"] = _tnr.build_canonical_by_key(match_counts, MIN_GAMES)
+    # Valorant-specific acronym map (see team_name_resolver.EXPANSIONS_BY_TITLE).
+    # It adds "drx" -> "kiwoom drx", which this title needs and LoL must not
+    # have. The SAME map has to be passed to resolve() below, or a key built
+    # under one map is queried under another and silently misses.
+    _cache["canonical_by_key"] = _tnr.build_canonical_by_key(
+        match_counts, MIN_GAMES, _tnr.expansions_for("valorant"))
     _cache["state"] = state
     _cache["last_played_date"] = last_played_date
     log.info(
@@ -220,7 +225,8 @@ def resolve_team_name(team: str) -> str:
     Shared with cs2/lol -- see team_name_resolver for the guards and for the
     blanket-merge approach that was tried and rejected on the data."""
     return _tnr.resolve(team, _cache.get("match_counts") or {},
-                        _cache.get("canonical_by_key") or {}, MIN_GAMES)
+                        _cache.get("canonical_by_key") or {}, MIN_GAMES,
+                        _tnr.expansions_for("valorant"))
 
 
 def get_team_rating(team: str) -> float | None:
