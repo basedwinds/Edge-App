@@ -61,7 +61,69 @@ import type { FuturesMarketRow } from "../types/market";
 // but latency is not something this page can guarantee, so the failure mode is
 // fixed here too: showing the previous list for a few more seconds is honest and
 // stable, showing an empty one is neither.
-const lastGood = new Map<string, unknown>();
+// PERSISTED ACROSS PAGE LOADS, which is the half of this the in-memory Map
+// could never cover.
+//
+// The 2026-08-04 fix above stopped a timeout rendering as "no bets" -- but only
+// once the map had something in it, i.e. from the SECOND poll of a session
+// onwards. A Map is empty on every fresh load, so the very first render after
+// opening or refreshing the app still fell back to [] for any sport slower than
+// the 18s budget, and the sport vanished until the next poll warmed it. Measured
+// cold on 2026-08-12: /soccer/markets 110s, /cs2 176s, /tennis 178s, /markets
+// 90s -- so on a cold backend that is most of the board, every time.
+//
+// User-reported twice now, and the second report is what identified the gap:
+// "3 Leagues Cup matches for today just disappeared", "last night MLB games kept
+// showing up and disappearing". Same mechanism both times.
+//
+// sessionStorage, not localStorage: this is a within-session staleness cushion,
+// not a cache to resurrect a day-old board. Writes are size-capped and wrapped
+// -- NFL's /markets alone can be tens of thousands of rows, and a QuotaExceeded
+// on one feed must not take down the page or block the others.
+// ONLY STAKED ROWS ARE PERSISTED, and that is what makes this fit at all.
+//
+// First attempt stored whole payloads and was worse than useless: the store hit
+// 5.5MB (over the ~5MB sessionStorage quota, so writes silently failed) and the
+// 2MB-per-entry cap it used skipped exactly the biggest feeds -- SoccerMarkets,
+// 9,612 rows, was ABSENT. The sport that flickers most was the one not covered.
+//
+// Every builder on this page drops rows without a suggested stake as its first
+// act (`if (m.suggested_stake_dollars === null) continue`), and the futures
+// shortlist filters on the same field. So a row with no stake can never become
+// a recommendation, and keeping it in the cushion buys nothing. Soccer goes
+// 9,612 rows -> ~57.
+const LAST_GOOD_KEY = "combined:lastGood";
+
+function readPersistedLastGood(): Map<string, unknown> {
+  try {
+    const raw = sessionStorage.getItem(LAST_GOOD_KEY);
+    if (raw) return new Map(Object.entries(JSON.parse(raw) as Record<string, unknown>));
+  } catch {
+    /* unreadable or disabled storage just means no cushion, never a broken page */
+  }
+  return new Map<string, unknown>();
+}
+
+const lastGood = readPersistedLastGood();
+
+/** The cushion keeps only rows that could ever be recommended -- see the note on
+ * LAST_GOOD_KEY. Non-arrays (settings, open bets) pass through untouched. */
+function trimForPersist(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.filter(
+    (r) => r && typeof r === "object" && (r as { suggested_stake_dollars?: number | null }).suggested_stake_dollars != null,
+  );
+}
+
+function persistLastGood(): void {
+  try {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of lastGood) obj[k] = trimForPersist(v);
+    sessionStorage.setItem(LAST_GOOD_KEY, JSON.stringify(obj));
+  } catch {
+    /* over quota / disabled -- degrade to the old in-memory-only behaviour */
+  }
+}
 
 /** Guarded fetches that fell back on THIS load -- a timeout or an error, not an
  * empty board. Read by the page to say so out loud.
@@ -79,22 +141,35 @@ const lastGood = new Map<string, unknown>();
  * from "this sport did not load", and the second one silently hides the best
  * bets available.
  *
- * Module-level and cleared at the start of each load, same pattern as lastGood
- * directly above. */
-export const degradedKeys = new Set<string>();
+ * TWO SETS, ONE PER LOADER, and not one shared set cleared at the top of each.
+ * loadCombined and loadCombinedFutures are separate useQuery calls that run
+ * CONCURRENTLY, so a single module-level set cleared by both means whichever
+ * starts second wipes the other's record and the banner under-reports exactly
+ * when the board is worst. */
+export const degradedGameKeys = new Set<string>();
+export const degradedFuturesKeys = new Set<string>();
 
-function guard<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise<T> {
+function guard<T>(key: string, p: Promise<T>, fallback: T, ms = 18000,
+                  into: Set<string> = degradedGameKeys): Promise<T> {
   const remembered = () => {
-    degradedKeys.add(key);
+    into.add(key);
+    // A REMEMBERED VALUE IS STILL DEGRADED. It is stale by definition -- the
+    // point of saying so is that the counts below are not a live read.
     return lastGood.has(key) ? (lastGood.get(key) as T) : fallback;
   };
   return Promise.race([
     p.then((v) => {
       lastGood.set(key, v);
+      persistLastGood();   // survive a page refresh -- see LAST_GOOD_KEY
       return v;
     }).catch(remembered),
     new Promise<T>((res) => setTimeout(() => res(remembered()), ms)),
   ]);
+}
+
+/** guard() for the futures loader, so its fallbacks are recorded separately. */
+function guardF<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise<T> {
+  return guard(key, p, fallback, ms, degradedFuturesKeys);
 }
 
 /** One sport's ranked-but-uncapped shortlist plus the dollars it may use.
@@ -139,7 +214,7 @@ const GLOBAL_CAP_PCT = { weekly: 0.30, futures: 0.10 } as const;
 type CombinedPlan = { plans: SportPlan[]; globalCeilings: Record<"weekly" | "futures", number> };
 
 async function loadCombined(): Promise<CombinedPlan> {
-  degradedKeys.clear();   // this load's fallbacks only -- see guard()
+  degradedGameKeys.clear();   // this load's fallbacks only -- see guard()
   const s = await fetchSettings();
   // Game/match markets only -- this is an "upcoming bets" view, and the
   // per-sport /futures endpoints are both the slowest (season-long models +
@@ -251,22 +326,22 @@ async function loadCombined(): Promise<CombinedPlan> {
 // tagged with sport, filtered to edge-qualified (>=3pp model-vs-market gap),
 // sorted by edge. WNBA/MMA have no futures, so they're omitted.
 async function loadCombinedFutures(): Promise<CrossSportFuturesRow[]> {
-  degradedKeys.clear();   // this load's fallbacks only -- see guard()
+  degradedFuturesKeys.clear();   // this load's fallbacks only -- see guard()
   // Every sport with a /futures route must be listed here. WNBA and CFB were
   // missing -- their backend routes existed and returned real edge-qualified
   // rows (CFB 139, the most of any sport; WNBA 12), but no fetcher ever called
   // them, so neither could appear on this tab at all. That is not "crowded out
   // by a bigger sport", it is absent, and no per-sport cap can fix absence.
   const [nfl, nba, wnba, cfb, mlb, ten, soc, val, cs2, lol, racing, mma] = await Promise.all([
-    guard("Futures", fetchFutures(), []), guard("NbaFutures", fetchNbaFutures(), []),
-    guard("WnbaFutures", fetchWnbaFutures(), []), guard("CfbFutures", fetchCfbFutures(), []),
-    guard("MlbFutures", fetchMlbFutures(), []),
-    guard("TennisFutures", fetchTennisFutures(), []), guard("SoccerFutures", fetchSoccerFutures(), []), guard("ValorantFutures", fetchValorantFutures(), []),
-    guard("Cs2Futures", fetchCs2Futures(), []), guard("LolFutures", fetchLolFutures(), []),
+    guardF("Futures", fetchFutures(), []), guardF("NbaFutures", fetchNbaFutures(), []),
+    guardF("WnbaFutures", fetchWnbaFutures(), []), guardF("CfbFutures", fetchCfbFutures(), []),
+    guardF("MlbFutures", fetchMlbFutures(), []),
+    guardF("TennisFutures", fetchTennisFutures(), []), guardF("SoccerFutures", fetchSoccerFutures(), []), guardF("ValorantFutures", fetchValorantFutures(), []),
+    guardF("Cs2Futures", fetchCs2Futures(), []), guardF("LolFutures", fetchLolFutures(), []),
     // Racing and MMA were absent from this list, so their futures could never
     // appear here no matter what edge they carried -- the same hand-maintained
     // per-sport-list drift that hid whole sports from the catalog scanner.
-    guard("RacingFutures", fetchRacingFutures(), []), guard("MmaFutures", fetchMmaFutures(), []),
+    guardF("RacingFutures", fetchRacingFutures(), []), guardF("MmaFutures", fetchMmaFutures(), []),
   ]);
   const tag = (fr: FuturesMarketRow[], sport: CrossSportFuturesRow["sport"]) =>
     fr.map((r) => ({ ...r, sport }));
@@ -627,7 +702,8 @@ export function Combined() {
     0,
     windowed.funded.filter((r) => !isRowNotReady(r, readinessQuery.data)).length - rows.length,
   );
-  // Which sports fell back on this load (see guard/degradedKeys). Derived from
+  // Which sports fell back on this load (see guard / the two degraded*Keys sets).
+  // Derived from
   // the guard KEY so it cannot drift from the fetch list: every key is
   // "<Sport>Markets" or "<Sport>Futures", and the bare "Markets"/"Futures" pair
   // is NFL. Recomputed whenever either query settles.
@@ -638,7 +714,7 @@ export function Combined() {
       Cs2: "CS2", Lol: "LoL", Racing: "Racing",
     };
     const names = new Set<string>();
-    for (const key of degradedKeys) {
+    for (const key of [...degradedGameKeys, ...degradedFuturesKeys]) {
       const stem = key.replace(/(Markets|Futures)$/, "");
       if (stem === key) continue;            // e.g. OpenBetsForPool -- not a sport
       const name = pretty[stem];
