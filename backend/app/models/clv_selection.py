@@ -152,6 +152,61 @@ def _compute_bucket_clv_stats(session: Session, now: float) -> dict[tuple[str, s
     return value
 
 
+# OBSERVATIONAL AS OF 2026-08-12. The verdict below is still computed and
+# reported; it no longer removes anything from the board.
+#
+# WHY, measured. This gate only ever suppressed two buckets -- mlb/total and
+# mlb/team_total -- and conditioning on the edge threshold that actually governs
+# recommendations shows it was wrong to:
+#
+#     bucket           ALL edges      >= 10pp        95% CI at >= 10pp
+#     mlb/team_total     -2.0%   ->   +7.1% (728)    -2.1% .. +16.1%
+#     mlb/total         -10.6%   ->   -1.2% (454)   -12.4% ..  +9.9%
+#
+# The -10.6% was ENTIRELY sub-threshold bets. paper_logger deliberately logs
+# below the recommend gate to gather coverage (see PAPER_MIN_EDGE), so a bucket
+# statistic computed over all paper rows describes a population this app would
+# never bet -- and below-threshold performance does not describe above-threshold
+# bets. That is the defect, and it is in the MECHANISM, not in the choice of CLV
+# as the signal: an ROI-based bucket gate over the same population fails the same
+# way. Swapping the metric was considered and rejected for exactly this reason.
+#
+# The stronger finding: bootstrapped 95% CIs over all 21 buckets with n >= 40 at
+# >= 10pp edge, NOT ONE is confidently negative, and seven are confidently
+# positive. There is currently nothing a bucket gate could legitimately suppress.
+#
+# What selects instead is the EDGE THRESHOLD, which is monotone and large over
+# 15,982 settled bets: -4.3% / +2.2% / +9.7% / +18.1% / +42.2% across bands.
+#
+# To re-enable, a bucket must be confidently negative AT the threshold -- i.e.
+# the upper bound of its CI below zero on >= 10pp bets, not a point estimate on
+# everything. Watch-list today (negative point, CI spans zero, NOT grounds to
+# suppress): nascar/top_n -24.4% n=74, tennis/exact_score -13.4% n=49,
+# mlb/total -1.2% n=454.
+SUPPRESSION_ENABLED = False
+
+
+def would_suppress(
+    stats: dict[tuple[str, str], dict],
+    sport: str,
+    market_type: str,
+    min_sample: int = DEFAULT_MIN_SAMPLE,
+    min_clv_pp: float = DEFAULT_MIN_CLV_PP,
+) -> bool:
+    """The CLV verdict, unchanged -- now REPORTED rather than enforced.
+
+    Kept whole rather than deleted: CLV lands before outcomes do (a closing line
+    exists hours after the bet, a result can take a season), so it remains the
+    best early-warning signal this app has. It is just not a basis for removing
+    inventory on its own."""
+    b = stats.get((sport, market_type))
+    if b is None or b["n"] < min_sample:
+        return False  # not enough data to judge
+    # The MEDIAN (robust) rather than the mean, so a couple of residual in-play
+    # outliers can't swing the verdict either way.
+    return b.get("median_clv_pp", b["avg_clv_pp"]) < min_clv_pp
+
+
 def is_bucket_enabled(
     stats: dict[tuple[str, str], dict],
     sport: str,
@@ -159,22 +214,19 @@ def is_bucket_enabled(
     min_sample: int = DEFAULT_MIN_SAMPLE,
     min_clv_pp: float = DEFAULT_MIN_CLV_PP,
 ) -> bool:
-    """Whether to keep surfacing bets in (sport, market_type). Enabled by
-    default until a bucket has `min_sample` closed bets -- only a
-    well-sampled, negative-average-CLV bucket is suppressed."""
-    b = stats.get((sport, market_type))
-    if b is None or b["n"] < min_sample:
-        return True  # not enough data to judge -> don't suppress
-    # Gate on the MEDIAN (robust) rather than the mean, so a couple of residual
-    # in-play outliers can't keep a truly-negative bucket alive (or vice-versa).
-    return b.get("median_clv_pp", b["avg_clv_pp"]) >= min_clv_pp
+    """Whether to keep surfacing bets in (sport, market_type).
+
+    Always True while SUPPRESSION_ENABLED is False -- see the note above it."""
+    if not SUPPRESSION_ENABLED:
+        return True
+    return not would_suppress(stats, sport, market_type, min_sample, min_clv_pp)
 
 
 def gate_kelly(kelly, clv_stats: dict, sport: str, market_type: str):
     """Zero out a computed kelly fraction if its (sport, market_type) bucket is
     CLV-suppressed. One-liner used at each router's kelly call site so the gate
-    rolls out uniformly. No-op (returns kelly unchanged) until the bucket is
-    well-sampled, so it changes nothing today."""
+    rolls out uniformly. Currently a no-op for every bucket -- see
+    SUPPRESSION_ENABLED."""
     if kelly is not None and not is_bucket_enabled(clv_stats, sport, market_type):
         return None
     return kelly
@@ -193,7 +245,13 @@ def bucket_report(session: Session, min_sample: int = DEFAULT_MIN_SAMPLE, min_cl
             "avg_clv_pp": b["avg_clv_pp"],
             "n_contaminated": b.get("n_contaminated", 0),
             "enabled": is_bucket_enabled(stats, sport, mt, min_sample, min_clv_pp),
-            "status": ("suppressed (negative CLV)" if not is_bucket_enabled(stats, sport, mt, min_sample, min_clv_pp)
+            # Reported separately from `enabled` so the page shows what the CLV
+            # signal thinks WITHOUT implying the board acted on it. Conflating
+            # the two is what made "suppressed" unfalsifiable: the gate removed
+            # the bets, so no evidence could ever contradict it.
+            "would_suppress": would_suppress(stats, sport, mt, min_sample, min_clv_pp),
+            "status": ("flagged by CLV, NOT suppressed -- see SUPPRESSION_ENABLED"
+                       if would_suppress(stats, sport, mt, min_sample, min_clv_pp)
                        else "enabled (proven)" if b["n"] >= min_sample else "enabled (gathering data)"),
         }
         for (sport, mt), b in stats.items()
