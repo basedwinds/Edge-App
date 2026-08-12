@@ -39,7 +39,10 @@ from app.models.esports_tournament_pricing import (
 )
 from app.models.ladder_sanity import futures_group_decided, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import apply_duplicate_listing_cap, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+
+import logging
+log = logging.getLogger("lol_markets")
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
@@ -530,6 +533,12 @@ def list_lol_markets(session: Session = Depends(get_session)):
                 stake_pool="futures" if m.market_type == "tournament_winner" else ("weekly" if kelly is not None else None),
             )
         )
+    # Same cross-platform duplicate cap as cs2_markets -- see the note there.
+    # LoL was the WORST affected of the five unwired sports: 63 duplicated
+    # groups / 132 staked legs / $2,050 in the settled book.
+    duped = apply_duplicate_listing_cap(out, fixture_attr="fixture_key")
+    if duped:
+        log.info("lol: unstaked %d cross-platform duplicate listings", duped)
     out.sort(key=lambda m: (m.match_date or "9999", m.match_label or m.group_label or "", m.market_type))
     return out
 

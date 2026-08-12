@@ -34,7 +34,10 @@ from app.models.baseline.elo import implied_elo_diff
 from app.models import season_sim_wnba
 from app.models.baseline.elo_wnba import HOME_COURT_ADV
 from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import apply_duplicate_listing_cap, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, is_weekly_market_type, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+
+import logging
+log = logging.getLogger("wnba_markets")
 
 router = APIRouter(prefix="/wnba", tags=["wnba"])
 
@@ -442,6 +445,12 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 stake_pool=(("futures" if _is_futures else "weekly") if kelly is not None else None),
             )
         )
+    # Same cross-platform duplicate cap as cs2_markets -- see the note there.
+    # Smallest of the five (2 groups / 5 legs / $50) but the same defect, and
+    # WNBA has a live Polymarket pipeline so it will recur without this.
+    duped = apply_duplicate_listing_cap(out, fixture_attr="wnba_game_id")
+    if duped:
+        log.info("wnba: unstaked %d cross-platform duplicate listings", duped)
     out.sort(key=lambda m: (m.gameday or "9999", m.game_label or ""))
     return out
 

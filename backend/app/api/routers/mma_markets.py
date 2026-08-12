@@ -57,7 +57,10 @@ from app.models import distance_service_mma, method_service_mma, rounds_service_
 from app.models import mma_model_disagreement
 from app.models.baseline import elo_service_mma
 from app.models.ladder_sanity import find_resolved_entities
-from app.models.staking import has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+
+import logging
+log = logging.getLogger("mma_markets")
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
@@ -395,6 +398,13 @@ def list_mma_markets(session: Session = Depends(get_session)):
                 stake_pool="weekly" if kelly is not None else None,
             )
         )
+    # Same cross-platform duplicate cap as cs2_markets -- see the note there.
+    # 15 duplicated groups / 34 staked legs / $600 in the settled book. Scoped
+    # per FIGHT because a fighter appears in many fights over time, the same
+    # reason tennis scopes per match rather than per player.
+    duped = apply_duplicate_listing_cap(out, fixture_attr="mma_fight_id")
+    if duped:
+        log.info("mma: unstaked %d cross-platform duplicate listings", duped)
     out.sort(key=lambda m: (m.event_date or "9999", m.fight_label or "", m.market_type))
     return out
 

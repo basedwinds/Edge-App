@@ -38,7 +38,10 @@ from app.models.esports_tournament_pricing import (
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import futures_group_decided, CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import apply_duplicate_listing_cap, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+
+import logging
+log = logging.getLogger("cs2_markets")
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
@@ -525,6 +528,19 @@ def list_cs2_markets(session: Session = Depends(get_session)):
                 stake_pool="futures" if m.market_type == "tournament_winner" else ("weekly" if kelly is not None else None),
             )
         )
+    # CROSS-PLATFORM DUPLICATE CAP. Kalshi and Polymarket both list the same
+    # series, so the same proposition was being staked twice for 2x the intended
+    # exposure -- measured 2026-08-11 across the settled book: 15 CS2 groups /
+    # 34 staked legs, and 127 groups / 269 legs / $4,180 once lol, valorant,
+    # wnba and mma were counted too. The cap already existed (shipped for MLB,
+    # then tennis and racing) and simply was never wired here.
+    #
+    # Scoped on `fixture_key`, not cs2_match_id, because that is the canonical
+    # id that ALSO collapses duplicate fixture rows for the same real series --
+    # keying on the raw match id would leave a duplicated fixture uncapped.
+    duped = apply_duplicate_listing_cap(out, fixture_attr="fixture_key")
+    if duped:
+        log.info("cs2: unstaked %d cross-platform duplicate listings", duped)
     out.sort(key=lambda m: (m.match_date or "9999", m.match_label or m.group_label or "", m.market_type))
     return out
 
@@ -584,10 +600,18 @@ def get_cs2_market_reasoning(
             factors.append(ReasoningFactorOut(label="Best of", detail=str(match.best_of)))
         a_rating = elo_service_cs2.get_team_rating(match.team_a)
         b_rating = elo_service_cs2.get_team_rating(match.team_b)
+        # "series", not "maps". CS2 is the one title of the three that updates
+        # per SERIES -- per-map was tried here and REJECTED on real measurement
+        # (Brier 0.23748 vs 0.23368, see elo_cs2.py::update_ratings), while
+        # Valorant and LoL kept it. This drawer said "maps tracked" anyway, so a
+        # team with 3 settled series read as though it had 3 maps of history --
+        # understating, by roughly a factor of two to three, how thin the rating
+        # actually is. A user asked directly whether "3 maps" could be right;
+        # the count was right and the unit was wrong.
         if a_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f} ({elo_service_cs2.get_team_games(match.team_a)} maps tracked)"))
+            factors.append(ReasoningFactorOut(label=f"{match.team_a} Elo rating", detail=f"{a_rating:.0f} ({elo_service_cs2.get_team_games(match.team_a)} series tracked)"))
         if b_rating is not None:
-            factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f} ({elo_service_cs2.get_team_games(match.team_b)} maps tracked)"))
+            factors.append(ReasoningFactorOut(label=f"{match.team_b} Elo rating", detail=f"{b_rating:.0f} ({elo_service_cs2.get_team_games(match.team_b)} series tracked)"))
         insight = _game_insight_cs2(match, model_prob, market_prob)
 
     elif m.market_type == "tournament_winner":

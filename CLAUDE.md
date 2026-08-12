@@ -21,8 +21,8 @@ A multi-sport prediction-market **edge finder**: it prices Kalshi/Polymarket mar
 
 ## How to run it locally (Windows)
 From the repo root: `scripts/dev.ps1` launches backend + frontend in two windows. Then open `http://localhost:5173`.
-- Backend only: `scripts/run_backend.ps1` (uses `backend/.venv`, runs uvicorn with `--reload`).
-- **`--reload` gotcha**: every backend file save triggers a full cache-warm reboot that takes MINUTES on a large DB. To verify against a stable instance, kill it and run uvicorn WITHOUT `--reload`.
+- Backend only: `scripts/run_backend.ps1` (uses `backend/.venv`). **Defaults to STABLE — no `--reload`.** Pass `-Reload` to watch files while editing backend code.
+- **`--reload` gotcha**: every backend file save triggers a full cache-warm reboot, during which requests just queue. Measured 2026-08-12 mid-reload after a five-file edit: `/health` 45.9s, then 1.3s once settled; `/cfb/markets` 0.90s then 0.29s. This is what "the app loads extremely slowly sometimes" and "cfb takes a while to warm up" were — a reboot, not a hang and not a slow model. Hence the flipped default: the person USING the app gains nothing from `--reload` and is only stalled by it. **In stable mode a code change needs a manual backend restart to take effect.**
 - First-time setup on a new machine: create the venv (`cd backend && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt`), and `cd frontend && npm install`. (On macOS/Linux the `.ps1` scripts won't run — use the equivalent shell commands; ask the user which OS the laptop is.)
 - The SQLite DB lives at `%LOCALAPPDATA%\nfl-edge-app\app.db` (Windows) or `<cwd>/data/app.db` otherwise — NOT in the repo.
 
