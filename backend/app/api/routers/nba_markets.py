@@ -167,6 +167,21 @@ def _half_total_model_prob(m: Market, game: NbaGame, half: int) -> float | None:
     return round(game_lines_nba.prob_over_half(m.line, home_scoring, away_scoring, half), 4)
 
 
+SEASON_SIM_UNAVAILABLE_NOTE = (
+    "Not priced: the season simulation has no schedule to run on yet. NBA futures are priced by "
+    "simulating the remaining regular season, and season_sim_service_nba deliberately refuses "
+    "until the full schedule is loaded (30 teams, 70+ games each) rather than pricing off a "
+    "partial one -- a 13%-complete schedule previously produced confident numbers and real "
+    "stakes on outcomes that were already impossible. These fill in automatically once the "
+    "season's schedule publishes."
+)
+
+NO_TEAM_SIM_NOTE = (
+    "Not priced: this team is not in the season simulation's results. Left blank rather than "
+    "defaulted to 0.0, which on a futures market reads as a confident \"cannot happen\"."
+)
+
+
 def _futures_model_prob(m: Market, sim_results: dict) -> float | None:
     if m.team is None:
         return None
@@ -199,6 +214,13 @@ def list_nba_futures(session: Session = Depends(get_session)):
         snap = snapshots_by_market.get(m.id)
         implied = _implied_prob(snap)
         model_prob = _futures_model_prob(m, sim_results)
+        # EXPLAIN THE BLANK. Every NBA futures row was previously returned with
+        # model_prob=None and NO note, so an off-season board looked identical to
+        # a broken model. Same defect the esports futures had.
+        model_note = None
+        if model_prob is None:
+            model_note = (SEASON_SIM_UNAVAILABLE_NOTE if not sim_results
+                          else NO_TEAM_SIM_NOTE)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "nba", m.market_type)
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, sport="nba", team=m.team)  # every FUTURES_MARKET_TYPES entry is a futures-pool market
@@ -225,6 +247,7 @@ def list_nba_futures(session: Session = Depends(get_session)):
                 suggested_stake_units=round(stake_dollars / unit_dollars, 3) if (stake_dollars is not None and unit_dollars > 0) else None,
                 stake_pool="futures" if kelly is not None else None,
                 line_move_pp=None,
+                model_note=model_note,
             )
         )
     out.sort(key=lambda m: (m.market_type, -(m.implied_prob or 0)))

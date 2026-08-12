@@ -19,7 +19,10 @@ Explicitly NOT built (same "different kind of model" scoping as NFL's
 240-series Phase-4 audit): MVP/DPOY/ROY/6MOY/COY and every other player-level
 award/prop series -- this app's team-level Elo has no way to price those.
 """
+import re
+
 from app.clients.base import get_json, paginate, markets_for_event
+from app.clients.kalshi_client import get_open_markets_for_series
 from app.ingestion.market_matcher_nba import KALSHI_TEAM_ABBRS, parse_kalshi_event_ticker, split_teams_blob, to_espn_abbr
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -58,7 +61,9 @@ FUTURES_SERIES = {
 # one market_kind, true for everything else in this dict but not this one).
 RECORD_SERIES = "KXNBARECORD"
 
-WIN_TOTAL_SERIES_PREFIX = "KXNBAWINS-"
+# ONE series with 30 events (one per team), NOT 30 per-team series -- see
+# get_win_total_markets for the bug that mistake caused.
+WIN_TOTAL_SERIES = "KXNBAWINS"
 
 
 def get_open_events(series_ticker: str) -> list[dict]:
@@ -296,36 +301,46 @@ def get_record_markets() -> list[dict]:
 
 
 def get_win_total_markets() -> list[dict]:
-    """Per-team win-total ladder (KXNBAWINS-{team}), iterating all 30 teams'
-    own series -- same shape/reasoning as kalshi_client.py's NFL version."""
-    rows = []
-    for team in sorted({to_espn_abbr(k) for k in KALSHI_TEAM_ABBRS}):
-        from app.ingestion.market_matcher_nba import to_kalshi_abbr
+    """Season win-total ladder for all 30 teams.
 
-        series = f"{WIN_TOTAL_SERIES_PREFIX}{to_kalshi_abbr(team)}"
-        try:
-            events = get_open_events(series)
-        except Exception:
+    REAL BUG THIS FIXES (found 2026-08-11): the previous version treated
+    "KXNBAWINS-{TEAM}" as a SERIES ticker and asked for its open events. No such
+    series exists -- KXNBAWINS is ONE series whose 30 EVENTS are the teams
+    ("KXNBAWINS-27UTA"). Every one of the 30 lookups returned nothing, the bare
+    `except: continue` swallowed it, and this function returned 0 rows on every
+    cycle while the live book carried 312 markets and 371,495 in volume. NBA win
+    totals had therefore never been ingested at all, silently.
+
+    Confirmed live: get_open_events("KXNBAWINS") -> 30 events;
+    get_open_events("KXNBAWINS-UTA") -> 0.
+
+    The team now comes from the EVENT ticker suffix rather than from iterating
+    a team list, because the event is the authority on which team it belongs to.
+    The suffix carries the season ("27UTA"), so the leading digits are stripped
+    -- the same shape kalshi_wnba_client.get_win_total_markets documents.
+    """
+    rows = []
+    events = {ev["event_ticker"]: ev for ev in get_open_events(WIN_TOTAL_SERIES)}
+    for m in get_open_markets_for_series(WIN_TOTAL_SERIES):
+        ev_ticker = m.get("event_ticker")
+        if ev_ticker not in events or m.get("floor_strike") is None:
             continue
-        for ev in events:
-            try:
-                markets = get_markets_for_event(ev["event_ticker"])
-            except Exception:
-                continue
-            for m in markets:
-                if m.get("floor_strike") is None:
-                    continue
-                rows.append(
-                    {
-                        "event_ticker": ev["event_ticker"],
-                        "ticker": m["ticker"],
-                        "team": team,
-                        "line": float(m["floor_strike"]),
-                        "yes_bid": _to_float(m.get("yes_bid_dollars")),
-                        "yes_ask": _to_float(m.get("yes_ask_dollars")),
-                        "last_price": _to_float(m.get("last_price_dollars")),
-                        "volume": _to_float(m.get("volume_fp")),
-                        "status": m.get("status"),
-                    }
-                )
+        suffix = ev_ticker.rsplit("-", 1)[-1]
+        team_code = re.sub(r"^\d+", "", suffix)     # "27UTA" -> "UTA"
+        team = to_espn_abbr(team_code)
+        if not team:
+            continue                                 # unmapped code -> skip, never guess
+        rows.append(
+            {
+                "event_ticker": ev_ticker,
+                "ticker": m["ticker"],
+                "team": team,
+                "line": float(m["floor_strike"]),
+                "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                "last_price": _to_float(m.get("last_price_dollars")),
+                "volume": _to_float(m.get("volume_fp")),
+                "status": m.get("status"),
+            }
+        )
     return rows
