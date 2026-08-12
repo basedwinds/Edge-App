@@ -33,6 +33,7 @@ from pathlib import Path
 import pandas as pd
 
 from app.clients import tennisdata_client
+from app.ingestion.cache_memo import memoize_on_files
 
 
 def _safe_int(value) -> int | None:
@@ -312,9 +313,14 @@ def load_tennisexplorer_matches() -> list[dict]:
     return matches
 
 
+@memoize_on_files(lambda: [TENNISDATA_CACHE_PATH, TENNISEXPLORER_CACHE_PATH])
 def load_matches() -> list[dict]:
     """Full merged, chronologically-sorted stream -- what elo_service_tennis.py
-    trains the walk-forward Elo on. Retirement rows are KEPT (not dropped)
+    trains the walk-forward Elo on.
+
+    MEMOIZED, AND THE RESULT IS SHARED -- TREAT IT AS READ-ONLY, same contract
+    as soccer_data.load_matches (see cache_memo). Measured 2026-08-12: 9.6s and
+    502,211 matches off 280 MB of JSON, every single call. Retirement rows are KEPT (not dropped)
     since scoring code needs to see & explicitly skip them the same way
     ufc_data.py keeps no-contest rows -- silently dropping them here would
     make it impossible for a future consumer to distinguish "excluded from

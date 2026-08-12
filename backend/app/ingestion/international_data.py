@@ -122,6 +122,13 @@ def build_cache(start_year: int = 2021) -> list[dict]:
     return rows
 
 
+def cache_inputs() -> list:
+    """The files load_matches() reads. Exported so soccer_data's memo key can
+    include them -- rebuilding the INTL cache must invalidate the merged
+    stream, not just this module's slice of it."""
+    return [CACHE_PATH]
+
+
 def load_matches() -> list[dict]:
     """Cached competitive internationals. Returns [] when the cache has never
     been built, so a missing cache degrades to 'no INTL ratings' rather than

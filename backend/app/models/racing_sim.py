@@ -23,8 +23,27 @@ irreducible chaos that make NASCAR winner-hit ~18% even with a good model; the
 strength spread already reflects them empirically via the walk-forward fit.
 """
 import random
+import threading
 
 DEFAULT_TRIALS = 20000
+
+# MEMOIZED ON ITS INPUTS -- see `simulate`. Measured 2026-08-12: /racing/markets
+# and /racing/futures cost 36.3s and 36.6s, and they are the SAME 36 seconds --
+# list_racing_futures deliberately calls list_racing_markets so the two views can
+# never disagree (see its docstring), which re-runs every 20,000-trial Monte
+# Carlo. Together they were 73s of a 271s warm pass.
+#
+# Safe because `simulate` is already deterministic for a given field: when `seed`
+# is None it is derived from the field itself, precisely "so displayed prices
+# don't jitter between cache refreshes for an unchanged field". Identical inputs
+# therefore already produced an identical result, and the cache just stops paying
+# for it twice. When ratings or the grid move the field changes, the key changes,
+# and it recomputes -- there is no staleness window to reason about, unlike a TTL.
+_sim_cache: dict = {}
+_sim_lock = threading.Lock()
+# One entry is a few hundred floats; the bound only stops an unbounded field
+# space (h2h pairs, per-event grids) from growing the dict forever.
+_SIM_CACHE_MAX = 512
 
 
 def _weights(ratings: dict[str, float]) -> dict[str, float]:
@@ -34,6 +53,33 @@ def _weights(ratings: dict[str, float]) -> dict[str, float]:
 def simulate(ratings: dict[str, float], trials: int = DEFAULT_TRIALS,
              top_ns: tuple[int, ...] = (1, 3, 5, 10, 20), seed: int | None = None,
              attrition: float = 0.0) -> dict[str, dict]:
+    """Memoized wrapper -- see _sim_cache for why this is safe. The result is
+    SHARED, so callers must not mutate the returned dicts (none do today:
+    racing_markets only reads `sim[driver].get(...)`)."""
+    key = (tuple(sorted(ratings.items())), trials, top_ns, seed, attrition)
+    hit = _sim_cache.get(key)
+    if hit is not None:
+        return hit
+    # Computed INSIDE the lock, so concurrent callers asking for the same field
+    # wait for the first one instead of each running their own 20,000 trials --
+    # the thundering herd that had to be fixed for bucket_clv_stats. Holding one
+    # global lock across a different field's compute costs nothing real: this is
+    # pure-Python CPU work, so those two threads were already serialized by the
+    # GIL, and the lock only replaces a fight over it with an orderly queue.
+    with _sim_lock:
+        hit = _sim_cache.get(key)       # filled while we waited
+        if hit is not None:
+            return hit
+        value = _simulate_uncached(ratings, trials, top_ns, seed, attrition)
+        if len(_sim_cache) >= _SIM_CACHE_MAX:
+            _sim_cache.clear()   # crude but this only ever holds a race weekend's fields
+        _sim_cache[key] = value
+        return value
+
+
+def _simulate_uncached(ratings: dict[str, float], trials: int = DEFAULT_TRIALS,
+                       top_ns: tuple[int, ...] = (1, 3, 5, 10, 20), seed: int | None = None,
+                       attrition: float = 0.0) -> dict[str, dict]:
     """Returns {driver: {"win": p, "top3": p, "top5": p, "top10": p, "top20": p}}.
     Needs >=2 drivers with a rating; returns {} otherwise. Deterministic given
     `seed` (default: seeded from the field so displayed prices don't jitter

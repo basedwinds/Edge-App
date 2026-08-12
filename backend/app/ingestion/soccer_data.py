@@ -20,6 +20,7 @@ tracks live state, the JSON cache is the training set)."""
 from __future__ import annotations
 
 from app.ingestion import international_data
+from app.ingestion.cache_memo import memoize_on_files
 
 import json
 import re
@@ -206,12 +207,28 @@ def build_espn_mls_cache(start_year: int = 2018) -> list[dict]:
     return deduped
 
 
+def _match_cache_inputs():
+    """Every file load_matches() parses -- the memo key. Globbed, not listed,
+    so a league cache added by build_espn_soccer_league_caches.py invalidates
+    without a restart."""
+    return [FOOTBALL_DATA_CACHE_PATH, ESPN_MLS_CACHE_PATH,
+            *DATA_DIR.glob(ESPN_LEAGUE_CACHE_GLOB),
+            *international_data.cache_inputs()]
+
+
+@memoize_on_files(_match_cache_inputs)
 def load_matches() -> list[dict]:
     """Full merged, chronologically-sorted stream -- what elo_service_soccer.py
     trains the walk-forward attack/defense ratings on. Each league (E0/SP1/
     I1/D1/F1/MLS) gets its own rating pool at the service layer, but this
     function returns everything together since that's the natural
-    checkpoint-and-resume unit at the cache layer, same as tennis_data.py."""
+    checkpoint-and-resume unit at the cache layer, same as tennis_data.py.
+
+    MEMOIZED, AND THE RESULT IS SHARED -- TREAT IT AS READ-ONLY. This parses
+    122 MB of JSON (1.26s, 270k matches) and was being called once per division
+    inside list_soccer_futures' league loop: 30s of identical work per request,
+    all of it holding the GIL. See cache_memo for the measurement and for why
+    the key is file mtimes rather than a TTL."""
     # Competitive internationals join the stream tagged "INTL" (2026-08-09).
     # National teams only ever play each other, so the per-league pooling this
     # function feeds is exactly right for them rather than a compromise -- and

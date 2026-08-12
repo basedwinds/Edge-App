@@ -1069,6 +1069,19 @@ def list_soccer_futures(session: Session = Depends(get_session)):
 
     sim_by_league: dict[str, SeasonSimResult | None] = {}
     mid_season_divisions: set[str] = set()
+    # HOISTED OUT OF THE LOOP. This was called per division below, and it parses
+    # the whole 122 MB match cache (1.26s) -- 24 divisions meant 30 seconds of
+    # identical work per request, holding the GIL throughout and starving every
+    # other endpoint. load_matches is memoized now too, so this is belt and
+    # braces: the hoist makes the single-read intent explicit at the call site.
+    all_matches = soccer_data.load_matches()
+    # Bucket ONCE by league rather than letting current_season_table re-scan all
+    # 270,349 matches per division -- 24 divisions made that a 6.5M-iteration
+    # filter, and it was 6% of this endpoint's CPU. Exactly equivalent: the
+    # function's first act is to skip any match whose league doesn't match.
+    matches_by_league: dict[str, list[dict]] = {}
+    for _m in all_matches:
+        matches_by_league.setdefault(_m.get("league"), []).append(_m)
     for division, league_markets in by_league.items():
         state = elo_service_soccer.get_rating_state(division)
         if state is None:
@@ -1124,7 +1137,7 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         # wrong for a calendar-year league: Brazil was 20.5 of 38 rounds in when
         # this was added, with Palmeiras 8 points clear, and the old call
         # modelled that as level.
-        starting_table, played_pairs = current_season_table(division, soccer_data.load_matches())
+        starting_table, played_pairs = current_season_table(division, matches_by_league.get(division, []))
         if played_pairs:
             mid_season_divisions.add(division)
         sim_by_league[division] = simulate_season(

@@ -98,28 +98,65 @@ def run_cache_warm():
     combined /all page fires ~10 at once -- always hit a fresh cached copy
     instead of a 5-31s recompute that contends with the pollers. Self-HTTPs
     the running server with the refresh header so even a still-fresh entry gets
-    replaced (the cache never ages out under a user). Only logs; never raises."""
+    replaced (the cache never ages out under a user). Only logs; never raises.
+
+    LOGS ITS OWN PASS DURATION, and warns when the pass no longer fits inside
+    CACHE_TTL_SECONDS. This is the whole point: the sizing invariant
+    (response_cache.CACHE_TTL_SECONDS > one full pass) was set against a
+    MEASURED 61.7s pass, then quietly drifted to 548s as sports were added --
+    9x over -- and nothing anywhere said so. Three paths
+    (/markets/cross-platform-divergences, /soccer/futures, /tennis/futures) had
+    also grown past the old 90s client timeout, so they were abandoned mid-
+    compute and NEVER got a cached entry at all; every user request for them
+    computed live. A number nobody measures is a number that rots.
+
+    Note the effective refresh period is the PASS duration, not the job
+    interval: APScheduler runs one instance at a time, so while a pass is longer
+    than the interval, passes simply run back-to-back and each entry is
+    refreshed once per pass."""
+    import time
+
     import httpx
 
-    from app.api.response_cache import REFRESH_HEADER
+    from app.api.response_cache import CACHE_TTL_SECONDS, REFRESH_HEADER
     from app.shutdown import is_shutting_down
 
+    started = time.monotonic()
+    slowest: list[tuple[float, str]] = []
     try:
-        with httpx.Client(timeout=90.0) as client:
+        # Was 90s, which was SHORTER than three of the endpoints it warms. A
+        # timeout here doesn't just skip that path, it wastes the compute the
+        # server already did, so it must sit above the slowest endpoint rather
+        # than act as a throttle. The shutdown check below is what keeps a long
+        # timeout from holding the interpreter open.
+        with httpx.Client(timeout=240.0) as client:
             for path in _WARM_PATHS:
                 # Stop issuing self-requests the moment shutdown starts -- the
                 # server we are calling is the one going away, so every
-                # remaining path would block for the full 90s and hold the
+                # remaining path would block for the full timeout and hold the
                 # interpreter open. See app/shutdown.py for the full autopsy.
                 if is_shutting_down():
                     log.info("cache warm: stopping early, shutdown in progress")
                     return
+                t0 = time.monotonic()
                 try:
                     client.get(f"http://127.0.0.1:8756{path}", headers={REFRESH_HEADER: "1"})
                 except Exception:
-                    pass  # a slow/failing endpoint shouldn't stop warming the rest
+                    log.warning("cache warm: %s did not complete -- it will have no cached entry", path)
+                slowest.append((time.monotonic() - t0, path))
     except Exception:
         log.exception("cache warm failed")
+
+    elapsed = time.monotonic() - started
+    slowest.sort(reverse=True)
+    worst = ", ".join(f"{p} {s:.0f}s" for s, p in slowest[:5])
+    if elapsed > CACHE_TTL_SECONDS:
+        log.warning(
+            "cache warm pass took %.0fs, LONGER than the %ds cache TTL -- entries expire "
+            "before they are refreshed, so users compute live. Slowest: %s",
+            elapsed, CACHE_TTL_SECONDS, worst)
+    else:
+        log.info("cache warm pass %.0fs (TTL %ds). Slowest: %s", elapsed, CACHE_TTL_SECONDS, worst)
 
 
 def run_paper_log_job():
