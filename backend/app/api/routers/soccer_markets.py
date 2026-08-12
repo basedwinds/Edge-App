@@ -66,6 +66,7 @@ from app.models.ladder_sanity import (
     looks_already_live_by_trading,
 )
 from app.models.news_adjustment.schema import NewsAdjustment
+from app.models import playoff_sim_service_ligamx
 from app.models import playoff_sim_service_mls
 from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season, current_season_table
 from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
@@ -943,6 +944,10 @@ _MARKET_TYPE_LABEL_TO_DIVISION.update({
 # them look tidy would silently route them into the wrong model. They are priced
 # from playoff_sim_service_mls instead, below.
 _MLS_PLAYOFF_MARKET_TYPES = ("mls_cup_winner", "mls_conference_winner")
+# Liga MX torneo champion (KXLIGAMX). Priced by the LIGUILLA bracket, not by
+# season_sim_soccer: a torneo is won in the knockout, not on the table, which is
+# exactly why this league sat unpriced until playoff_sim_ligamx.py existed.
+_LIGAMX_MARKET_TYPE = "ligamx_champion"
 
 MID_SEASON_SIM_NOTE = (
     "Mid-season estimate: this league is already part-way through its season, so the "
@@ -984,7 +989,7 @@ _SOCCER_LEAGUE_NAME = {
 }
 
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",
-                         *_MLS_PLAYOFF_MARKET_TYPES]
+                         *_MLS_PLAYOFF_MARKET_TYPES, _LIGAMX_MARKET_TYPE]
 
 _SIM_PROB_FIELD_BY_MARKET_TYPE = {
     "relegation": "relegation_prob",
@@ -1076,13 +1081,34 @@ def list_soccer_futures(session: Session = Depends(get_session)):
     # its inputs costs ~10 live ESPN calls -- unlike the European sim above,
     # whose inputs are already in memory.
     mls_playoff = playoff_sim_service_mls.get_result()
+    # Liga MX entrants per torneo, read off the live market rows -- the market's
+    # field is the authority on who is actually entered, so a promoted or
+    # relegated club cannot be missed.
+    _ligamx_fields: dict[str, list[str]] = {}
+    for _m in markets:
+        if _m.market_type == _LIGAMX_MARKET_TYPE and _m.team:
+            _ligamx_fields.setdefault(_m.group_label or "", []).append(canonical_team_key(_m.team))
 
     out = []
     for m in markets:
         division = _futures_division(m)
         sim_result = sim_by_league.get(division) if division else None
         model_prob = None
-        if m.market_type in _MLS_PLAYOFF_MARKET_TYPES:
+        if m.market_type == _LIGAMX_MARKET_TYPE:
+            # One sim PER TORNEO: Kalshi lists Apertura and Clausura at the same
+            # time and they are separate championships, so group_label -- not the
+            # series -- selects the result. Merging them would build a 36-team
+            # field that never plays.
+            _lg = m.group_label or ""
+            _field = _ligamx_fields.get(_lg) or []
+            _res = playoff_sim_service_ligamx.get_result(_lg, _field) if _field else None
+            if _res is not None and m.team:
+                raw = _res.champion_prob.get(canonical_team_key(m.team))
+                # None rather than 0.0 for a team the sim does not carry: on an
+                # 18-team field 0.0 reads as a confident "cannot win", which is a
+                # fabricated price -- same reasoning as the MLS branch below.
+                model_prob = round(raw, 4) if raw is not None else None
+        elif m.market_type in _MLS_PLAYOFF_MARKET_TYPES:
             if mls_playoff is not None and m.team:
                 probs = (mls_playoff.cup_champion_prob if m.market_type == "mls_cup_winner"
                          else mls_playoff.conference_champion_prob)
@@ -1196,6 +1222,7 @@ _NESTED_POSITION_FAMILIES: dict[str, str] = {
     # same nested family despite being different market_type strings, which is
     # the same shape that let Manchester City reach 27% of the book.
     "mls_cup_winner": "mls_playoff",
+    "ligamx_champion": "ligamx_liguilla",
     "mls_conference_winner": "mls_playoff",
 }
 NESTED_POSITION_NOTE = (
@@ -1350,6 +1377,7 @@ def get_soccer_market_reasoning(market_id: int, session: Session = Depends(get_s
             "top_half": "Finishes in the top half",
             "team_points": f"Finishes the season on {m.line} or more points" if m.line is not None else "Season points total",
             "mls_cup_winner": "Wins the MLS Cup",
+            "ligamx_champion": "Wins the Liga MX torneo (via the Liguilla)",
             "mls_conference_winner": "Wins their conference's playoff bracket",
         }.get(m.market_type, m.market_type)
         factors.append(ReasoningFactorOut(label="Question", detail=question))

@@ -647,6 +647,7 @@ def refresh_kalshi_soccer_futures():
     top_n_rows = kalshi_soccer_client.get_top_n_markets()
     team_points_rows = kalshi_soccer_client.get_team_points_markets()
     mls_playoff_rows = kalshi_soccer_client.get_mls_playoff_markets()
+    ligamx_rows = kalshi_soccer_client.get_ligamx_markets()
 
     with db_write_lock():
         session = SessionLocal()
@@ -661,16 +662,22 @@ def refresh_kalshi_soccer_futures():
                 market_catalog_soccer.upsert_kalshi_soccer_team_points_market(session, row)
             for row in mls_playoff_rows:
                 market_catalog_soccer.upsert_kalshi_mls_playoff_market(session, row)
+            # Liga MX reuses the MLS-playoff upsert unchanged: identical row
+            # shape (market_type on the row, torneo in group_label, no
+            # soccer_match_id). A separate near-identical function would be two
+            # places to fix.
+            for row in ligamx_rows:
+                market_catalog_soccer.upsert_kalshi_mls_playoff_market(session, row)
             session.commit()
             log.info(
                 "kalshi soccer futures: %d league_winner rows across %d leagues, %d relegation rows across %d leagues, "
                 "%d top-N rows (top_half/top4/top2, EPL only), %d team-points rows across %d leagues, "
-                "%d MLS playoff rows",
+                "%d MLS playoff rows, %d Liga MX rows",
                 len(rows), len({r["division"] for r in rows}),
                 len(relegation_rows), len({r["division"] for r in relegation_rows}),
                 len(top_n_rows),
                 len(team_points_rows), len({r["division"] for r in team_points_rows}),
-                len(mls_playoff_rows),
+                len(mls_playoff_rows), len(ligamx_rows),
             )
         finally:
             session.close()

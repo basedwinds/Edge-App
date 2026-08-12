@@ -689,6 +689,60 @@ MLS_PLAYOFF_SERIES = {
 }
 
 
+# Liga MX, added 2026-08-11. Same one-market-per-team shape as the MLS series
+# above, but note it carries TWO open events at once -- KXLIGAMX-27APER and
+# KXLIGAMX-27CLA -- because Liga MX plays two full torneos a year and Kalshi
+# lists both. They are separate championships, so the event ticker (not just the
+# series) has to reach the group_label or the two would collapse into one
+# 36-team field that never plays.
+#
+# It sat out of LEAGUE_WINNER_SERIES on purpose until now: a torneo is won in
+# the LIGUILLA knockout, not on the table, so season_sim_soccer would have
+# answered a different question. playoff_sim_ligamx.py is the model that answers
+# the traded one.
+LIGAMX_SERIES = "KXLIGAMX"
+
+
+def _ligamx_group_label(event_ticker: str) -> str:
+    """"KXLIGAMX-27CLA" -> "Liga MX Clausura". The suffix is what separates the
+    two torneos, and getting it wrong merges two distinct championships."""
+    suffix = (event_ticker or "").rsplit("-", 1)[-1].upper()
+    if suffix.endswith("CLA"):
+        return "Liga MX Clausura"
+    if suffix.endswith("APER"):
+        return "Liga MX Apertura"
+    return f"Liga MX {suffix}"
+
+
+def get_ligamx_markets() -> list[dict]:
+    """One row per (torneo, team). yes_sub_title is the team name."""
+    rows = []
+    for ev in get_open_events(LIGAMX_SERIES):
+        try:
+            markets = get_markets_for_event(ev["event_ticker"])
+        except Exception:
+            continue
+        label = _ligamx_group_label(ev["event_ticker"])
+        for m in markets:
+            team = m.get("yes_sub_title", "")
+            if not team:
+                continue
+            rows.append({
+                "event_ticker": ev["event_ticker"],
+                "division": "MEX1",
+                "market_type": "ligamx_champion",
+                "group_label": label,
+                "ticker": m["ticker"],
+                "team": team,
+                "yes_bid": _to_float(m.get("yes_bid_dollars")),
+                "yes_ask": _to_float(m.get("yes_ask_dollars")),
+                "last_price": _to_float(m.get("last_price_dollars")),
+                "volume": _to_float(m.get("volume_fp")),
+                "status": m.get("status"),
+            })
+    return rows
+
+
 def get_mls_playoff_markets() -> list[dict]:
     """One row per (series, team). Same per-team shape as
     get_league_winner_markets -- yes_sub_title is the full team name."""
