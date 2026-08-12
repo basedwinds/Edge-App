@@ -721,7 +721,16 @@ export function Combined() {
       if (name) names.add(name);
     }
     return [...names].sort();
-  }, [query.data, futuresQuery.data]);
+    // KEYED ON dataUpdatedAt, NOT data. React Query structurally shares its
+    // result, so when a refetch returns a payload deep-equal to the last one
+    // `query.data` keeps its OLD reference and a memo keyed on it never re-runs.
+    // The degraded* sets are module-level and are cleared at the top of each
+    // loader, so the memo would then keep rendering the PREVIOUS load's list --
+    // the banner sticks after the board has recovered, which is exactly what the
+    // user reported (2026-08-12) once the routes got fast. dataUpdatedAt changes
+    // on every successful settle whether or not the payload did.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.dataUpdatedAt, futuresQuery.dataUpdatedAt]);
 
   const unitDollars = settingsQuery.data?.unit_dollars ?? 0;
 
