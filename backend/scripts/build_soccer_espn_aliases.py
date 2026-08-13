@@ -71,6 +71,15 @@ LEAGUES = {
     # and as the anchor the KALSHI alias builder joins against.
     "BRA1": "bra.1", "ARG1": "arg.1", "MEX1": "mex.1", "JPN1": "jpn.1",
     "SWE1": "swe.1", "NOR1": "nor.1", "DNK1": "den.1", "CHN1": "chn.1",
+    # Added 2026-08-13. These four are rated in the pool but were never in this
+    # map, so their clubs had no alias and stayed invisible to UEFA pricing even
+    # though the ratings existed -- Sturm Graz and RB Salzburg (AUT1), U Craiova
+    # (ROU1) and Bohemians (IRL1) all showed up as "unrated" in the UEFA
+    # attribution for exactly that reason. Same failure the B1/T1/G1 comment
+    # above describes: a newly-rated league is invisible until it is aliased.
+    # SUI1 is included because Switzerland is a regular UEFA participant and
+    # already carries a fitted strength offset.
+    "AUT1": "aut.1", "SUI1": "sui.1", "ROU1": "rou.1", "IRL1": "irl.1",
 }
 # Two full seasons -- more independent fixtures per club, and it covers clubs
 # that were promoted or relegated between them.

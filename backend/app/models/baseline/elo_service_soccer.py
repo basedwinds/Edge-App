@@ -211,6 +211,21 @@ def resolve_league(team: str, as_of: str | None = None,
                   "club will be refused")
         return None
     hits = [(date, league) for (league, t), date in played.items() if t == key and date]
+
+    if not hits:
+        # NAME TRANSLATION, the alias map's other job. A feed may simply spell a
+        # club differently from the training data -- ESPN's UEFA scoreboard says
+        # "Olympiacos" where its own domestic Greek feed (and football-data) say
+        # "Olympiakos". With no hits there is no collision to break, so the
+        # disambiguation below never runs and the club looks unrated. Retry once
+        # under the verified alias name before giving up.
+        entry = _load_aliases().get(team)
+        alias_team = (entry or {}).get("team")
+        if alias_team:
+            akey = canonical_team_key(alias_team)
+            if akey != key:
+                hits = [(date, league) for (league, t), date in played.items()
+                        if t == akey and date]
     if not hits:
         return None
 
