@@ -37,6 +37,47 @@ unpassable for any change to a joint distribution (see the rho fit). Required:
 HALVES ARE CHECKED EXPLICITLY. predict_half derates predict_match's expected
 goals, so this scale flows into the half markets automatically -- which is
 exactly how rho nearly shipped a silent half regression. Verified, not assumed.
+
+======================= VERDICT 2026-08-13: DO NOT SHIP ======================
+
+A global GOAL_SCALE is the wrong shape for this defect. Two runs:
+
+    bounds        fitted    train bias        held-out bias      ship test
+    0.90-1.05     0.90004   -0.0595 -> -0.0152   -0.0419 -> +0.0040   FAIL
+    0.70-1.05     0.86757   -0.0595 -> +0.0000   -0.0419 -> +0.0196   FAIL
+
+THE FIRST RUN WAS CLIPPED -- 0.90004 against a floor of 0.90 is a boundary hit,
+not an optimum, and could not be read however good it looked. Widening the
+bounds gave the honest interior value, 0.86757.
+
+**And the honest value is WORSE out of sample than the clipped one** (+0.0196 vs
++0.0040 held-out). That is not noise, it is a mis-targeted objective: the
+bisection drives TRAIN bias to zero, but train wants more deflation than the
+held-out seasons do, so the train-optimal scale overshoots on them. The cause is
+already in this docstring -- scoring is on "a gently rising trend", so the later
+held-out seasons carry more goals and need less correction. Fitting a constant
+to the older window and applying it to the newer one bakes in the drift.
+
+TWO OPPOSING BIASES ARE BEING CONFLATED. The running league average LAGS the
+rising trend (under-predicts); Jensen's inequality inflates E[exp(X)] above
+exp(E[X]) (over-predicts, +0.0885). One constant cannot separate them, and their
+sum is not stable over time -- which is exactly why the fit does not transfer.
+
+THE JENSEN TERM IS ANALYTIC, NOT A CONSTANT TO FIT. The inflation is exp(sigma^2/2)
+where sigma^2 is the variance of the summed log-ratings, so it depends on how
+spread the ratings are -- which differs by league and moves over time. The
+principled fix subtracts sigma^2/2 in log space per match rather than scaling
+every match by one number. That also predicts the failure above: a global
+constant is only right at the average spread.
+
+BOTH RUNS FAIL ON THE SAME TWO LEGS -- total_o0.5 and win_home -- and win_home
+already carries a lean from the rho ship, so a second regression stacks on the
+one leg that can least afford it. The gains are real (o3.5, o4.5, btts,
+total_o1.5 all improve, which is what this exists for), but not by a route worth
+taking.
+
+GOAL_SCALE stays 1.0. Next attempt should be the per-match Jensen correction,
+scored on the SAME held-out seasons and the same pre-registered ship test.
 """
 from __future__ import annotations
 
@@ -56,7 +97,14 @@ from app.models.baseline import elo_soccer as M  # noqa: E402
 MIN_MATCHES = 10
 TRAIN_FROM_YEAR = 2019
 HOLDOUT_SEASONS = 3
-BISECT_LO, BISECT_HI = 0.90, 1.05
+# WIDENED 2026-08-13. The first run converged to 0.90004 against a floor of
+# 0.90 -- a boundary hit, not an interior optimum, so the value could not be
+# trusted however good its ship test looked. The self-correction in the
+# docstring is why the root sits so far below 1: deflating expected goals makes
+# (actual - expected) more positive, which pushes ratings back up and partly
+# undoes the deflation, so a ~3.4% inflation needs a much larger nominal cut.
+# Always check a bisection result against its own bounds before reading it.
+BISECT_LO, BISECT_HI = 0.70, 1.05
 BISECT_ITERS = 11
 TOTAL_LINES = (0.5, 1.5, 2.5, 3.5, 4.5)
 
