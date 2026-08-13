@@ -306,6 +306,22 @@ def refresh_lol_results():
     # everything is graded this costs nothing.
     _refresh_lol_results_golgg()
 
+    # DEDUPE LAST, after every step that can create a fixture row -- see
+    # esports_fixture_dedupe for why these pairs form (the `winner IS NULL`
+    # candidate pool in _load_upcoming_matches hides a resolved fixture, so the
+    # next listing inserts a second row) and why the repair is a merge on an
+    # exact start-time match rather than a looser lookup. LoL was the worst
+    # affected: 118 pairs, 90 with one twin permanently unresolved, and the only
+    # title with THREE-row groups -- which is what exposed a bug in the merge
+    # itself (see the `taken` set's comment).
+    try:
+        from app.ingestion.esports_fixture_dedupe import merge_duplicate_fixtures
+
+        with SessionLocal() as session:
+            merge_duplicate_fixtures(session, "lol", dry_run=False)
+    except Exception:
+        log.exception("lol fixture dedupe failed; continuing")
+
 
 def _refresh_lol_results_golgg():
     """gol.gg fallback: top up the game cache, then join it onto ungraded rows."""

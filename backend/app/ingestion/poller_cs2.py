@@ -487,10 +487,10 @@ def run_full_refresh_cs2():
     # a duplicate. The merge only ever joins rows with an IDENTICAL
     # estimated_start_time, which a rematch cannot have.
     try:
-        from app.ingestion.cs2_fixture_dedupe import merge_duplicate_cs2_fixtures
+        from app.ingestion.esports_fixture_dedupe import merge_duplicate_fixtures
 
         with SessionLocal() as session:
-            merge_duplicate_cs2_fixtures(session, dry_run=False)
+            merge_duplicate_fixtures(session, "cs2", dry_run=False)
     except Exception:
         log.exception("cs2 fixture dedupe failed; continuing")
     # Roster-change scrape removed 2026-07-23: the informational "Wait" badge

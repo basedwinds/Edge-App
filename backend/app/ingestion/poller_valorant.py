@@ -377,5 +377,18 @@ def run_full_refresh_valorant():
             step()
         except Exception:
             log.exception("valorant refresh step %s failed; continuing", step.__name__)
+    # DEDUPE LAST, after every step that can create a fixture row -- see
+    # esports_fixture_dedupe for why these pairs form (the `winner IS NULL`
+    # candidate pool in _load_upcoming_matches hides a resolved fixture, so the
+    # next listing inserts a second row) and why the repair is a merge on an
+    # exact start-time match rather than a looser lookup. Valorant had 50 such
+    # pairs, 49 with one twin permanently unresolved.
+    try:
+        from app.ingestion.esports_fixture_dedupe import merge_duplicate_fixtures
+
+        with SessionLocal() as session:
+            merge_duplicate_fixtures(session, "valorant", dry_run=False)
+    except Exception:
+        log.exception("valorant fixture dedupe failed; continuing")
     # Roster-change scrape removed 2026-07-23 -- see poller_cs2.py's note (badge
     # retired for esports, no accuracy penalty, so no reason to scrape vlr.gg).
