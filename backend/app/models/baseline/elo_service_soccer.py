@@ -30,9 +30,13 @@ actual training data), for every MLS team whose platform-rendered name
 wasn't byte-identical to ESPN's. Canonicalizing on BOTH sides (train-time
 AND lookup-time) is what actually closes this, not just canonicalizing one
 side."""
+import json as _json
 import logging
+import re as _re
+from pathlib import Path as _Path
 
 from app.ingestion import soccer_data
+from app.ingestion.cache_memo import memoize_on_files as _memoize_on_files
 from app.ingestion.market_matcher_soccer import canonical_team_key
 from app.models.baseline.elo_soccer import (
     MatchGoalDistribution,
@@ -130,6 +134,38 @@ def last_played(league: str, team: str) -> str | None:
     return (_cache.get("last_played") or {}).get((league, canonical_team_key(team)))
 
 
+# parents[4] is the repo root: .../backend/app/models/baseline/ -> 4 up. Getting
+# this wrong makes _load_aliases() swallow the OSError and return {}, which is a
+# SILENT no-op -- the disambiguation below just never fires. Asserted at import
+# rather than trusted.
+_ALIAS_PATH = _Path(__file__).resolve().parents[4] / "data" / "soccer_espn_aliases.json"
+
+
+def _country_of(league: str) -> str:
+    """The country a league code belongs to, i.e. the code with its division
+    number stripped: E0/E1/E2/E3 -> E, SP1/SP2 -> SP, URU1 -> URU."""
+    return _re.sub(r"\d+$", "", league or "")
+
+
+@_memoize_on_files(lambda: [_ALIAS_PATH])
+def _load_aliases() -> dict:
+    """Verified ESPN->pool alias map (scripts/build_soccer_espn_aliases.py),
+    derived from date-aligned fixtures. Each entry carries BOTH a team name and
+    the league it was verified in; the league is what disambiguates a colliding
+    name. Read-only -- shared object."""
+    try:
+        return _json.loads(_ALIAS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        # LOUD, because the failure is not. An unreadable alias file makes the
+        # cross-country disambiguation below silently stop firing, and the only
+        # symptom is Liverpool quietly resolving to Uruguay again. A wrong
+        # parents[] index did exactly this on the first cut of this function.
+        log.error("soccer aliases unreadable at %s (%s) -- cross-country name "
+                  "collisions will resolve by recency and can pick the wrong "
+                  "country", _ALIAS_PATH, exc)
+        return {}
+
+
 def resolve_league(team: str, as_of: str | None = None,
                    max_staleness_days: int = MAX_RATING_STALENESS_DAYS) -> str | None:
     """Which division a club should currently be rated in -- the one it played
@@ -138,6 +174,26 @@ def resolve_league(team: str, as_of: str | None = None,
 
     This lives in the service, not in each caller, because the callers are
     exactly where it was already got wrong once.
+
+    CROSS-COUNTRY COLLISIONS ARE BROKEN BY THE ALIAS MAP, NOT BY RECENCY.
+    canonical_team_key is not unique across leagues: "liverpool" is both
+    Liverpool FC and Liverpool Montevideo, "nacional" is both Nacional Madeira
+    and Nacional de Montevideo. Recency is the RIGHT tie-break inside one
+    country -- that is how a promoted club moves E1 -> E0 -- but across
+    countries it just picks whoever played last, and a year-round Uruguayan
+    season beats an off-season Premier League club. Measured 2026-08-13: of 282
+    colliding club keys, 272 collide only across divisions of one country (the
+    intended case) and 10 collide across countries (the bug).
+
+    So the alias map's verified league is consulted ONLY when the hits actually
+    span more than one country, which leaves the 272 same-country cases byte
+    identical. The alias league is used to pick the COUNTRY, not the division,
+    because the alias records where a club was when it was verified and it may
+    since have been promoted or relegated.
+
+    Found via the UEFA strength re-fit, which ranked Uruguay above England
+    because Liverpool's Champions League results were being credited to
+    Liverpool Montevideo.
     """
     import datetime
 
@@ -157,6 +213,17 @@ def resolve_league(team: str, as_of: str | None = None,
     hits = [(date, league) for (league, t), date in played.items() if t == key and date]
     if not hits:
         return None
+
+    # Only intervene when the name genuinely spans countries; same-country
+    # collisions are promotion/relegation and recency already handles them.
+    if len({_country_of(lg) for _, lg in hits}) > 1:
+        entry = _load_aliases().get(team) or _load_aliases().get(canonical_team_key(team))
+        alias_league = (entry or {}).get("league")
+        if alias_league:
+            same_country = [h for h in hits if _country_of(h[1]) == _country_of(alias_league)]
+            if same_country:
+                hits = same_country
+
     date, league = max(hits)
     try:
         seen = datetime.date.fromisoformat(date)
