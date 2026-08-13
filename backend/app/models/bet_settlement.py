@@ -1018,6 +1018,81 @@ def _settlement_note(bet: PlacedBet, game) -> str:
     return f"auto-settled: final score {game.away_team} {game.away_score} @ {game.home_team} {game.home_score}"
 
 
+# A market that went `inactive` and stayed that way this long after its own
+# start time is cancelled, not merely between polls. 6h is chosen against the
+# shortest event type this can fire on: a CS2 series runs 1-3 hours, so at +6h
+# the match is certainly over AND the market did not come back. Raising this is
+# free (bets simply stay pending); lowering it risks voiding a market that was
+# briefly deactivated mid-event.
+_DELISTED_VOID_GRACE_HOURS = 6
+
+
+def void_delisted_markets(session: Session) -> int:
+    """Void pending bets whose market was DELISTED without ever producing a
+    result -- walkovers, cancellations, withdrawn listings.
+
+    THE GAP THIS FILLS, stated precisely. A walkover produces no played match,
+    so no result scraper will ever return a winner and every grader here is
+    stuck; #84's void path keys on the FIXTURE being cancelled or replaced, not
+    on the market being pulled.
+
+    It is NOT true that nothing handled this. Watched live on 2026-08-12: a real
+    $10 CS2 bet on a Grêmio walkover self-resolved via
+    _settle_stragglers_from_platform -> settle_pending_from_kalshi, which asked
+    Kalshi and got `result=void`, ~4h after start. That path is correct and this
+    function must never pre-empt it -- hence being called LAST.
+
+    What that path deliberately does NOT cover is PAPER bets: it filters
+    `paper == False` and caps at _MAX_PLATFORM_LOOKUPS, because ~1,600 stuck
+    paper bets turned it into thousands of API calls and a 600s+ stall. So a
+    paper bet on a delisted market has nothing to clear it, ever. Two were
+    sitting 158h and 108h past their start when this was written. That is the
+    real hole: not the real-money case, the paper one -- which matters because
+    paper bets are the entire measurement substrate.
+
+    `inactive` is Kalshi's own status, stored verbatim by the ingester -- no
+    code in this app writes it -- and it is distinct from `closed`, which means
+    trading stopped and a result is still coming. Voiding `closed` would be
+    wrong and would hit 133 pending bets; this deliberately touches only
+    `inactive`.
+
+    Conservative by construction: the start time must be KNOWN and at least
+    _DELISTED_VOID_GRACE_HOURS past, so a market that is temporarily inactive
+    before its event can never be voided. A bet with no resolvable kickoff is
+    left alone rather than guessed at."""
+    import datetime
+
+    from app.models.clv import _game_kickoff_dt, _get_game
+
+    now = datetime.datetime.utcnow()
+    rows = (
+        session.query(PlacedBet)
+        .join(Market, PlacedBet.market_id == Market.id)
+        .filter(PlacedBet.status == "pending", Market.status == "inactive")
+        .all()
+    )
+    voided = 0
+    for bet in rows:
+        game = _get_game(session, bet)
+        kickoff = _game_kickoff_dt(game) if game is not None else None
+        if kickoff is None:
+            continue  # cannot establish that the event is over -> leave it pending
+        hours = (now - kickoff).total_seconds() / 3600.0
+        if hours < _DELISTED_VOID_GRACE_HOURS:
+            continue
+        bet.status = "void"
+        bet.settled_at = now
+        bet.settlement_note = (
+            f"voided: market delisted by {bet.source or 'the platform'} with no result, "
+            f"{hours:.0f}h after start (walkover/cancellation)"
+        )
+        voided += 1
+    if voided:
+        session.commit()
+        log.info("voided %d placed bets on delisted markets", voided)
+    return voided
+
+
 def settle_finished_games(session: Session) -> int:
     """Grades every pending, auto-gradeable placed bet whose game now has a
     final score. Returns the number settled."""
@@ -1058,6 +1133,10 @@ def settle_finished_games(session: Session) -> int:
     # start, so this is a few single-market lookups, not a crawl. See
     # kalshi_settlement.py for why it is deliberately narrow.
     settled += _settle_stragglers_from_platform(session)
+    # LAST, deliberately: only bets that no result path could grade should ever
+    # reach the void rule. Running it earlier would void a market that the
+    # platform lookup was about to settle properly.
+    settled += void_delisted_markets(session)
     return settled
 
 
