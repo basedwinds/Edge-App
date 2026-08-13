@@ -119,6 +119,24 @@ REFERENCE_LEAGUE = "E0"
 STEP = 0.02
 ITERS = 4000
 
+# MINIMUM CROSS-COUNTRY MATCHES BEFORE A LEAGUE GETS A PUBLISHED OFFSET.
+#
+# WHY THIS EXISTS (added 2026-08-13). This script never hard-coded a league
+# list -- it fits whatever appears in the data -- so when the rating pool grew
+# (wave 2 added 15 ESPN-backed leagues), re-running it silently starts fitting
+# offsets for leagues with a handful of matches. An offset fitted on 3 matches
+# is noise, and publishing it is WORSE than publishing nothing: uefa_match.py
+# currently returns None for an unknown league, which is an honest refusal,
+# whereas a junk offset produces a confident wrong price on a market this app
+# would then stake. Same reasoning as MIN_GAMES in the esports Elo.
+#
+# The gate is applied by PRUNING, not by fitting-then-hiding: leagues below the
+# threshold are dropped along with their matches and the fit is re-run, because
+# a wildly-fitted thin league also distorts the offsets of the opponents it
+# played. Pruning iterates, since dropping a league lowers its opponents'
+# counts too.
+MIN_LEAGUE_MATCHES = 25
+
 
 def month_chunks(a, b):
     d = a
@@ -233,7 +251,32 @@ def main() -> None:
 
     all_rows = [r for rows in by_season.values() for r in rows]
     leagues = sorted({r[2] for r in all_rows} | {r[5] for r in all_rows})
-    print(f"\n{len(all_rows)} matches total, {len(leagues)} leagues: {leagues}")
+    print(f"\n{len(all_rows)} matches total, {len(leagues)} leagues BEFORE the gate: {leagues}")
+    raw_counts = collections.Counter([r[2] for r in all_rows] + [r[5] for r in all_rows])
+    print(f"{'league':8s} {'n':>5s}   (gate = {MIN_LEAGUE_MATCHES})")
+    for L, n in raw_counts.most_common():
+        print(f"{L:8s} {n:5d} {'' if n >= MIN_LEAGUE_MATCHES else '  <-- below gate, will be pruned'}")
+
+    # Prune to convergence: dropping a thin league also drops its matches,
+    # which lowers its opponents' counts, so this has to iterate.
+    dropped: list[str] = []
+    while True:
+        counts = collections.Counter([r[2] for r in all_rows] + [r[5] for r in all_rows])
+        thin = {L for L, n in counts.items() if n < MIN_LEAGUE_MATCHES}
+        if not thin:
+            break
+        dropped.extend(sorted(thin))
+        all_rows = [r for r in all_rows if r[2] not in thin and r[5] not in thin]
+        for label in by_season:
+            by_season[label] = [r for r in by_season[label]
+                                if r[2] not in thin and r[5] not in thin]
+    leagues = sorted({r[2] for r in all_rows} | {r[5] for r in all_rows})
+    print(f"\npruned {len(dropped)} leagues below the gate: {dropped}")
+    print(f"{len(all_rows)} matches remain, {len(leagues)} leagues publish an offset: {leagues}")
+
+    if REFERENCE_LEAGUE not in leagues:
+        print(f"REFERENCE {REFERENCE_LEAGUE} was pruned -- offsets would be unanchored. Not fitting.")
+        return
     if len(all_rows) < 60:
         print("TOO FEW MATCHES -- not fitting"); return
 
@@ -258,6 +301,11 @@ def main() -> None:
         fitted = score(test, m2, s2)
         print(f"{label:>16} {len(test):>5} {flat:>11.4f} {fitted:>9.4f} {flat - fitted:>+9.4f}")
     print("\n(positive gain = offsets genuinely transfer to an unseen season)")
+
+    if "--write" not in sys.argv:
+        print(f"\nDRY RUN -- {OUT.name} untouched. Re-run with --write to publish.")
+        print("  (read the held-out gains above first: if they do not transfer, do not write)")
+        return
 
     OUT.write_text(json.dumps({"mu": math.exp(mu_log), "reference": REFERENCE_LEAGUE,
                                "offsets": s, "n_matches": len(all_rows)},
