@@ -366,6 +366,51 @@ def _cup_prediction(match: SoccerMatch | None):
 UEFA_LEAGUES = {"UCL", "UEL", "UECL", "UEFA_SUPER_CUP"}
 UEFA_MARKET_TYPES = {"uefa_moneyline_3way", "uefa_total"}
 
+# HOW WRONG A STORED KICKOFF MAY BE, by fixture source (2026-08-13).
+#
+# THE OBSERVED FAILURE. Hearts v Benfica (UEL qualifying) was recommended live:
+# stored kickoff 2026-08-13T21:45Z, real kickoff 18:45Z, and ESPN had it at
+# "First Half, 42'" while this app still thought it was two hours away. Exactly
+# +3h, which is the known Kalshi soccer signature -- occurrence_datetime is the
+# market EXPIRATION, not the start (see the soccer occurrence memo).
+#
+# WHY THE EXISTING PRECEDENCE LADDER DID NOT SAVE IT. That ladder prefers an
+# ESPN kickoff over the platform's, but UEFA QUALIFYING has no ESPN row on the
+# main uefa.champions / uefa.europa / uefa.europa.conf scoreboards -- all three
+# return ZERO events in August. The fixture is therefore created from the Kalshi
+# listing alone (source="live"), so there is nothing better to prefer and the
+# +3h value is used verbatim.
+#
+# THIS IS A STOPGAP, NOT THE FIX. It widens the already-started test by the
+# known error so a UEFA tie stops being recommended at its REAL kickoff rather
+# than three hours later. It costs three hours of pre-match recommending on
+# these ties, which is the right side to err on.
+#
+# THE REAL FIX is to feed the qualifying scoreboards, which DO carry the true
+# kickoff and live status: uefa.europa_qual (11 events today, including this
+# match) and uefa.europa.conf_qual (25). Then the ladder has a real ESPN time to
+# prefer and this constant can go back to zero.
+#
+# SCOPED TO UEFA, AND THE FIRST ATTEMPT WAS SCOPED WRONG. Keying this on
+# SoccerMatch.source ("was it built from a platform listing only?") reads as the
+# principled test, and is useless: ALL 583 soccer fixtures carry source="live",
+# so it is a constant. That version would have applied the 3h cut to every
+# soccer match in the app and silently stopped recommending the entire sport
+# three hours before kickoff -- a far bigger change than the bug it fixes.
+#
+# UEFA is used instead because it is what was actually verified: the main UEFA
+# scoreboards return zero events in August, so these are the fixtures with no
+# ESPN kickoff to prefer. Domestic leagues do have ESPN rows and are corrected
+# by the existing ladder, which is why they are excluded here.
+_UEFA_START_UNCERTAINTY = datetime.timedelta(hours=3)
+
+
+def _start_time_uncertainty(match: SoccerMatch) -> datetime.timedelta:
+    """How much EARLIER than the stored value this kickoff might really be."""
+    if (match.league or "") in UEFA_LEAGUES:
+        return _UEFA_START_UNCERTAINTY
+    return datetime.timedelta(0)
+
 
 def _uefa_prediction(match: SoccerMatch | None):
     if match is None or match.league not in UEFA_LEAGUES:
@@ -744,7 +789,7 @@ def list_soccer_markets(session: Session = Depends(get_session)):
             start = datetime.datetime.fromisoformat(match.estimated_start_time.replace("Z", "+00:00"))
         except ValueError:
             return False
-        return start < now_utc
+        return start - _start_time_uncertainty(match) < now_utc
 
     # Deliberately NOT using Market.updated_at as a staleness signal -- same
     # real reasoning as tennis_markets.py (onupdate only fires on an actual
