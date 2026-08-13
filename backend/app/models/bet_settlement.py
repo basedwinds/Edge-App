@@ -1093,6 +1093,121 @@ def void_delisted_markets(session: Session) -> int:
     return voided
 
 
+# One Kalshi lookup per fixture, so this is bounded like _MAX_PLATFORM_LOOKUPS.
+_MAX_RESULT_BACKFILL_LOOKUPS = 40
+
+
+def backfill_tennis_results_from_platform(session: Session, dry_run: bool = True) -> dict:
+    """Record a tennis match's winner on the FIXTURE when a platform has already
+    resolved that match's moneyline, and our results scraper has not caught up.
+
+    THE GAP (user-reported 2026-08-13, Arcon vs Imai). This app is cross-platform
+    but settlement is per-platform, so one venue resolving does nothing for a bet
+    on the other. Measured on that match, 18h after it finished:
+
+        Kalshi   KXITFMATCH-26AUG11ARCIMA-ARC  finalized, result=yes  -> Arcon won
+        Polymarket 0x6830982a...a715           STILL ACTIVE, trading 0.71
+        TennisMatch 4635.winner_key            None
+
+    The Kalshi side settled its bet correctly. The Polymarket bet on the SAME
+    match sat pending, and the fixture -- the one place both platforms agree to
+    look -- never learned the result, so the ordinary grader could not help
+    either. Writing the winner once unblocks every market on that match, on any
+    platform and of any market type.
+
+    SAFE FOR TENNIS SPECIFICALLY, and this is why it is not generalised further
+    yet: elo_service_tennis trains from tennis_data.load_matches() -- the JSON
+    caches -- NOT from these DB rows, so a fixture write cannot reach the model.
+    It feeds settlement, the already-decided gates and display only. Any sport
+    whose ratings DO train off its fixture table needs a stronger provenance
+    argument before being added here.
+
+    Guards, because recording the wrong winner is worse than recording none:
+      * moneyline markets only. A resolved set-winner or total says nothing
+        about who won the match.
+      * Kalshi only. It reports an explicit yes/no per outcome; deriving a match
+        winner from Polymarket's outcome names is a second name-matching problem
+        and is deliberately not attempted here.
+      * the market's team must resolve to EXACTLY ONE of the two players. No
+        match, or an ambiguous one, is skipped rather than guessed.
+      * never overwrites an existing winner_key.
+    """
+    import datetime
+
+    from app.ingestion.tennis_data import normalize_player_key
+    from app.models.kalshi_settlement import _market_result
+
+    out = {"checked": 0, "written": 0, "skipped_ambiguous": 0, "examples": []}
+    # Fixtures with an open moneyline bet, no result, and a start well past.
+    now = datetime.datetime.utcnow()
+    pending = (
+        session.query(PlacedBet)
+        .join(Market, PlacedBet.market_id == Market.id)
+        .filter(PlacedBet.status == "pending", PlacedBet.sport == "tennis",
+                PlacedBet.tennis_match_id.isnot(None))
+        .all()
+    )
+    # FILTER FIRST, THEN CAP. Capping the raw candidate list spends the budget on
+    # fixtures that need no lookup at all -- measured right after the first run:
+    # 79 candidates, 40 examined, but only 1 actually needed work because the
+    # rest already had a winner. The cap has to bound HTTP calls, not iterations.
+    cutoff = (now - datetime.timedelta(hours=3)).isoformat()[:19]
+    todo = []
+    for fid in sorted({b.tennis_match_id for b in pending}):
+        match = session.get(TennisMatch, fid)
+        if match is None or match.winner_key is not None:
+            continue
+        start = getattr(match, "estimated_start_time", None)
+        if not start or str(start)[:19] > cutoff:
+            continue  # too soon to expect a result
+        todo.append((fid, match))
+    if len(todo) > _MAX_RESULT_BACKFILL_LOOKUPS:
+        # Same discipline as _MAX_PLATFORM_LOOKUPS: one HTTP call per fixture, so
+        # a bad day must not turn this into an unbounded crawl. Oldest first, so
+        # the longest-stuck fixtures are always the ones served.
+        log.info("tennis result backfill: %d fixtures need a lookup, capping at %d",
+                 len(todo), _MAX_RESULT_BACKFILL_LOOKUPS)
+        todo = todo[:_MAX_RESULT_BACKFILL_LOOKUPS]
+    for fid, match in todo:
+        out["checked"] += 1
+        for mk in (session.query(Market)
+                   .filter(Market.tennis_match_id == fid, Market.market_type == "moneyline",
+                           Market.source == "kalshi").all()):
+            if not mk.source_ticker or not mk.team:
+                continue
+            # MATCH ON THE NAMES, WRITE THE KEY. player_a_key/player_b_key are in
+            # tennis's "Surname I." form ('arcon a.'), while a market's team is
+            # the full name ('Adrian Arcon') -- normalize_player_key does not
+            # convert between the two, so comparing a normalized team against
+            # the KEYS silently matched nothing (24 skipped, 0 written on the
+            # first run). Normalizing both NAMES is the comparison that holds.
+            team = normalize_player_key(mk.team)
+            by_name = {
+                normalize_player_key(match.player_a_name): match.player_a_key,
+                normalize_player_key(match.player_b_name): match.player_b_key,
+            }
+            if team not in by_name or len(by_name) != 2:
+                out["skipped_ambiguous"] += 1
+                continue
+            status, result, _ = _market_result(mk.source_ticker)
+            if status not in ("settled", "finalized", "determined") or result not in ("yes", "no"):
+                continue
+            this_side = by_name[team]
+            winner = this_side if result == "yes" else next(
+                k for k in by_name.values() if k != this_side)
+            if not dry_run:
+                match.winner_key = winner
+            out["written"] += 1
+            out["examples"].append(
+                f"match {fid} {match.player_a_name} vs {match.player_b_name} -> winner_key={winner!r} "
+                f"(from {mk.source_ticker} result={result})")
+            break
+    if not dry_run and out["written"]:
+        session.commit()
+        log.info("backfilled winner_key on %d tennis fixtures from platform results", out["written"])
+    return out
+
+
 def settle_finished_games(session: Session) -> int:
     """Grades every pending, auto-gradeable placed bet whose game now has a
     final score. Returns the number settled."""
@@ -1108,6 +1223,13 @@ def settle_finished_games(session: Session) -> int:
     )
     settled = 0
     import datetime
+
+    # BEFORE grading, not after: a fixture that learns its winner here is graded
+    # by the ordinary loop below in the SAME pass, instead of waiting a cycle.
+    try:
+        backfill_tennis_results_from_platform(session, dry_run=False)
+    except Exception:
+        log.exception("tennis result backfill failed; continuing to grade")
 
     for bet in pending:
         game = _get_game(session, bet)
