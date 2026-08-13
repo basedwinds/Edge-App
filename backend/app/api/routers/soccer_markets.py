@@ -70,7 +70,7 @@ from app.models.news_adjustment.schema import NewsAdjustment
 from app.models import playoff_sim_service_ligamx
 from app.models import playoff_sim_service_mls
 from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season, current_season_table
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/soccer", tags=["soccer"])
@@ -1285,7 +1285,7 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         implied = _implied_prob(snap)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "soccer", m.market_type)
-        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, sport="soccer", team=m.team)
+        stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None, sport="soccer", team=m.team)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         out.append(
             FuturesMarketOut(

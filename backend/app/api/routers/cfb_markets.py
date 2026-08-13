@@ -34,7 +34,7 @@ from app.models import calibration_temp
 from app.models import game_lines_cfb, playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
 from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
-from app.models.staking import FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_nested_futures_cap, has_real_trading, kelly_fraction, size_stake_dollars
+from app.models.staking import FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_nested_futures_cap, has_real_trading, kelly_fraction, size_stake_dollars
 
 router = APIRouter(prefix="/cfb", tags=["cfb"])
 
@@ -499,7 +499,7 @@ def list_cfb_futures(session: Session = Depends(get_session)):
         )
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full,
-                                           unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, sport="cfb", team=m.team)
+                                           unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None, sport="cfb", team=m.team)
         # A team whose rating was built almost entirely outside the FBS pool is
         # priced on a scale the rest of this market is not on. Shown with its
         # model number so it can be tracked, never staked -- same posture as the

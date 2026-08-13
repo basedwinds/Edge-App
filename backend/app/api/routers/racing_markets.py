@@ -28,7 +28,7 @@ from app.db.models import Market, RaceEvent
 from app.models import racing_sim
 from app.models.baseline import racing_ratings, racing_championship
 from app.models.staking import (
-    FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading,
+    FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading,
     kelly_fraction, size_stake_dollars,
 )
 
@@ -451,6 +451,10 @@ def list_racing_markets(session: Session = Depends(get_session)):
                 unit_dollars, flat_marginal, flat_full,
                 unit_scale=FUTURES_UNIT_SCALE if _is_champ else 1.0,
                 min_market_price=FUTURES_MIN_MARKET_PRICE if _is_champ else 0.0,
+                # Championship rows only, same as the price floor above -- a
+                # race-weekend market is not a futures book.
+                max_spread=FUTURES_MAX_SPREAD if _is_champ else None,
+                yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None,
                 sport=series if _is_champ else None,
                 # The "team" for racing is the DRIVER (or constructor on a
                 # constructors' title), which is what row.driver holds.

@@ -406,6 +406,34 @@ FUTURES_UNIT_SCALE = 0.25
 # validation, and the biggest sub-10c sample in them is positive.
 FUTURES_MIN_MARKET_PRICE = 0.10
 
+# WIDEST BID/ASK A FUTURES BET MAY BE STAKED INTO (2026-08-13).
+#
+# THE FAILURE THIS CATCHES. A futures rung with no real book still reports a
+# "price" -- a stale midpoint or last trade -- and the model's edge is measured
+# against it, so an untraded market reads as a huge edge. Found live: an NFL
+# wins_any leg staked at bid 0.02 / ask 0.46, model 0.815 vs a quoted 0.24, edge
+# +0.587. There is no market there to beat.
+#
+# WHY 0.30 AND NOT A ROUND NUMBER. It is tied to the app's own recommend
+# threshold rather than picked. A spread of S puts +/- S/2 of uncertainty on the
+# midpoint the edge is measured from, so at S = 0.30 that uncertainty is 0.15 --
+# larger than the 10pp edge the bet is being recommended on. Past that point the
+# claimed edge is smaller than the error bar on its own reference price.
+#
+# MEASURED IMPACT, stated honestly: futures books are thin everywhere (p50
+# spread 0.120, p75 0.310 across 2,435 quoted legs), but the STAKED set is
+# already much tighter, because has_real_trading and the price floor filter most
+# of the junk first. This blocks ONE currently-staked leg -- the wins_any one
+# above. It is cheap insurance for the futures test tranche, not a large repair.
+#
+# A MISSING BOOK IS NOT A WIDE BOOK. Kalshi stores bid/ask on every futures row
+# (2,435/2,435); several Polymarket ingesters store none (177/177 missing),
+# because bestBid/bestAsk are per-outcome-index on a 2-outcome Gamma object and
+# were deliberately not threaded through (see has_real_trading). Blocking on
+# absence would silently kill those sports' futures entirely, so absence falls
+# through to the volume gate instead.
+FUTURES_MAX_SPREAD = 0.30
+
 
 def flat_stake_units(model_prob: float | None, market_price: float | None,
                      marginal_edge: float = FLAT_MARGINAL_UNIT_EDGE,
@@ -434,6 +462,9 @@ def size_stake_dollars(
     flat_full_edge: float = FLAT_FULL_UNIT_EDGE,
     unit_scale: float = 1.0,
     min_market_price: float = 0.0,
+    max_spread: float | None = None,
+    yes_bid: float | None = None,
+    yes_ask: float | None = None,
     remaining_capacity: float | None = None,
     sport: str | None = None,
     team: str | None = None,
@@ -451,6 +482,15 @@ def size_stake_dollars(
     putting the rule in the one function every gate already feeds into means the
     view cannot drift out of step with it, and the per-sport Futures pages still
     show the row (unsized) for calibration tracking.
+
+    `max_spread` with `yes_bid`/`yes_ask` -- refuse to size a bet whose book is
+    wider than the edge being claimed against its midpoint. Futures pass
+    FUTURES_MAX_SPREAD; see its comment. Enforced here for the same reason
+    `min_market_price` is: the cross-sport list filters on
+    `suggested_stake_dollars != null`, so the one function every gate feeds into
+    is the only place the view cannot drift out of step with. Both quotes must
+    be present -- a missing book falls through to the volume gate rather than
+    being treated as a wide one.
 
     `remaining_capacity` -- dollars still available on this bet's SIDE (game or
     futures) under the bankroll exposure caps, from models/exposure.py. None
@@ -474,6 +514,12 @@ def size_stake_dollars(
     if kelly_frac is None:
         return None
     if min_market_price > 0.0 and (market_price is None or market_price < min_market_price):
+        return None
+    # Refuse a book too wide for its own quoted price to mean anything. Only
+    # when BOTH sides are quoted: a missing book is not a wide one (see
+    # FUTURES_MAX_SPREAD) and is left to the volume gate.
+    if (max_spread is not None and yes_bid is not None and yes_ask is not None
+            and (yes_ask - yes_bid) > max_spread):
         return None
     if remaining_capacity is None:
         # Not passed -> read the snapshot the settings choke point refreshed.
