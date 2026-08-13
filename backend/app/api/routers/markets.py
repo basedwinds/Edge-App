@@ -219,6 +219,27 @@ SEASON_STAT_RB_CATEGORIES = {"rush_yds", "rush_tds"}
 # tournament sim. Flip back on only if a real edge vs closing prices is ever
 # demonstrated.
 PLAYER_STAT_TRACKING_ONLY = LEADER_FUTURES_TYPES | SEASON_STAT_FUTURES_TYPES
+
+# HIDDEN FROM THE FUTURES BOARD ENTIRELY, 2026-08-13 (user decision).
+#
+# These were already never staked, for the reasons above. What changed is the
+# judgement that TRACKING them is not worth the space either: they are 1,271 of
+# the 2,612 futures rows, so roughly half the board was unstakeable by design,
+# and the only thing tracking buys is repeatedly re-proving that a naive
+# last-season-rate projection loses to the sharpest market class in sports.
+#
+# The pricing code is deliberately left intact and this is a single flag, so the
+# decision is reversible without rebuilding anything -- flip to True and every
+# row returns. Nothing else depends on them: measured at the time of the change,
+# there are ZERO placed bets (paper or real, pending or settled) across all 15
+# of these market types, so hiding them cannot strand a position or break a
+# grader.
+#
+# If a real player-projection model is ever built (season volume/usage: snap
+# share, target share, depth chart, age curve -- a different capability from the
+# entity-vs-entity ratings this app is built on), turn this back on FIRST and
+# let it accumulate tracking evidence before it is ever staked.
+SHOW_PLAYER_STAT_FUTURES = False
 PLAYER_STAT_TRACKING_NOTE = (
     "Player stat projection shown for tracking only, not staked: the input is a "
     "naive last-season-rate projection against a very sharp market, and it has "
@@ -912,10 +933,18 @@ def list_futures(session: Session = Depends(get_session)):
         | {WEEK1_QB_FUTURES_TYPE, "stage_of_elimination", "playoff_seed", "playoff_host"}
         | AWARD_FUTURES_TYPES
         | DIVISION_EXTRA_TYPES
-        | LEADER_FUTURES_TYPES
         | TEAM_POINTS_FUTURES_TYPES
-        | SEASON_STAT_FUTURES_TYPES
     )
+    # Player season-stat + league-leader ladders, priced but never staked and as
+    # of 2026-08-13 not shown either -- see SHOW_PLAYER_STAT_FUTURES. Added back
+    # here rather than deleted from the set so the flag is the only switch.
+    #
+    # NOTE the asymmetry with list_markets above, which subtracts the same types
+    # from an `excluded` set: there they are removed BECAUSE they are futures and
+    # do not belong on the game-markets page. Editing both together by pattern
+    # would UNHIDE them there, which is the opposite of this change.
+    if SHOW_PLAYER_STAT_FUTURES:
+        included = included | PLAYER_STAT_TRACKING_ONLY
     # sport=="nfl" required for the same reason as list_markets above -- this
     # futures endpoint was returning every sport's futures (2,779 rows, ~18s).
     markets = session.query(Market).filter(Market.sport == "nfl", Market.market_type.in_(included), Market.status == "active").all()
