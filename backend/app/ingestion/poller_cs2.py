@@ -471,6 +471,28 @@ def run_full_refresh_cs2():
             step()
         except Exception:
             log.exception("cs2 refresh step %s failed; continuing", step.__name__)
+    # DEDUPE LAST, after every step that can create a fixture row.
+    #
+    # find_or_create_upcoming_match cannot see a fixture that already has a
+    # winner (_load_upcoming_matches filters `winner IS NULL`), so once the
+    # result lands, the next Kalshi listing of the same match fails to find it
+    # and inserts a SECOND row under its own team ordering. Both rows carry
+    # source="live" -- this is one path racing itself, not two feeds disagreeing.
+    # 168 such pairs had accumulated, 165 with one twin permanently winner=None.
+    #
+    # Repairing here rather than loosening that filter is deliberate: letting the
+    # lookup match a PLAYED fixture would let a new match bind to an old one
+    # inside the +/-2 day rematch window and settle bets off the wrong result --
+    # the bug market_catalog_lol.py's comment describes, and strictly worse than
+    # a duplicate. The merge only ever joins rows with an IDENTICAL
+    # estimated_start_time, which a rematch cannot have.
+    try:
+        from app.ingestion.cs2_fixture_dedupe import merge_duplicate_cs2_fixtures
+
+        with SessionLocal() as session:
+            merge_duplicate_cs2_fixtures(session, dry_run=False)
+    except Exception:
+        log.exception("cs2 fixture dedupe failed; continuing")
     # Roster-change scrape removed 2026-07-23: the informational "Wait" badge
     # it fed was retired for esports (no post-roster-change accuracy penalty
     # found -- see scripts/calibrate_cs2_roster_window.py), so there's nothing
