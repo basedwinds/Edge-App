@@ -132,6 +132,46 @@ LEAGUE_CODES = {
     "UECL": "uefa.europa.conf",
 }
 
+# ADDITIONAL scoreboards for a league code that ESPN splits across more than one
+# competition. Fetched alongside the primary slug above and merged, deduped by
+# event id.
+#
+# THE BUG THIS FIXES (2026-08-13), caught live by the user. Hearts v Benfica was
+# in the cross-sport recommendations while it was being played: stored kickoff
+# 21:45Z, real kickoff 18:45Z, ESPN showing "First Half, 42'". The +3h is the
+# known Kalshi soccer signature (occurrence_datetime is the market EXPIRATION,
+# not the start), and the precedence ladder that normally overrides it with a
+# real ESPN kickoff had nothing to use -- because in August the UEFA competitions
+# are in QUALIFYING, and uefa.champions / uefa.europa / uefa.europa.conf all
+# return ZERO events. The qualifying rounds live on their own slugs.
+#
+# THE SETTLEMENT HALF IS THE BIGGER ONE. This dict's primary is also what
+# refresh_soccer_results iterates, so a UEFA qualifying match could not be graded
+# either -- exactly the failure the P1/Maritimo comment above describes, where 20
+# bets sat pending because results were never requested for that competition.
+# Being in LEAGUE_CODES was not enough; the SLUG has to be one that actually
+# lists the match.
+#
+# Verified live before wiring, not guessed: uefa.europa_qual returned 11 events
+# for 2026-08-13 including this exact match with its true 18:45Z kickoff and a
+# live status, and uefa.europa.conf_qual returned 25. uefa.champions_qual
+# returned 0 for that date and is kept anyway -- CL qualifying runs on different
+# dates and an empty response is harmless. "uefa.europa.conf_q" and
+# "uefa.champions.qual" both 400, so the naming is _qual on the full slug.
+EXTRA_LEAGUE_CODES = {
+    "UCL": ("uefa.champions_qual",),
+    "UEL": ("uefa.europa_qual",),
+    "UECL": ("uefa.europa.conf_qual",),
+}
+
+
+def _slugs_for(league: str) -> tuple[str, ...]:
+    """Every ESPN competition slug that may carry this league's fixtures."""
+    primary = LEAGUE_CODES.get(league)
+    if primary is None:
+        return ()
+    return (primary,) + tuple(EXTRA_LEAGUE_CODES.get(league, ()))
+
 
 # ESPN's scoreboard returns AT MOST 100 events per call and silently truncates
 # from the START of the requested range -- there is no page cursor and no
@@ -156,32 +196,36 @@ def fetch_scoreboard(league: str, start: dt.date, end: dt.date) -> list[dict]:
     Note the endpoint needs a RANGE: `dates=YYYYMMDD-YYYYMMDD` with start ==
     end returns 0 events even on a day that definitely had fixtures, so a
     single-day query is not a valid way to probe this API."""
-    code = LEAGUE_CODES.get(league)
-    if code is None or start > end:
+    slugs = _slugs_for(league)
+    if not slugs or start > end:
         return []
     out: list[dict] = []
     seen: set[str] = set()
-    chunk_start = start
-    while chunk_start <= end:
-        chunk_end = min(chunk_start + dt.timedelta(days=_CHUNK_DAYS - 1), end)
-        params = {"dates": f"{chunk_start.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"}
-        try:
-            resp = httpx.get(
-                f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard",
-                params=params, timeout=30.0,
-            )
-            resp.raise_for_status()
-            events = resp.json().get("events", [])
-        except Exception:
-            events = []
-        for e in events:
-            eid = str(e.get("id") or "")
-            if eid and eid in seen:
-                continue
-            if eid:
-                seen.add(eid)
-            out.append(e)
-        chunk_start = chunk_end + dt.timedelta(days=1)
+    # Several competitions are split across more than one ESPN slug (UEFA
+    # qualifying vs league phase) -- see EXTRA_LEAGUE_CODES. The existing
+    # event-id dedupe already covers the overlap, so merging is safe.
+    for code in slugs:
+        chunk_start = start
+        while chunk_start <= end:
+            chunk_end = min(chunk_start + dt.timedelta(days=_CHUNK_DAYS - 1), end)
+            params = {"dates": f"{chunk_start.strftime('%Y%m%d')}-{chunk_end.strftime('%Y%m%d')}"}
+            try:
+                resp = httpx.get(
+                    f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard",
+                    params=params, timeout=30.0,
+                )
+                resp.raise_for_status()
+                events = resp.json().get("events", [])
+            except Exception:
+                events = []
+            for e in events:
+                eid = str(e.get("id") or "")
+                if eid and eid in seen:
+                    continue
+                if eid:
+                    seen.add(eid)
+                out.append(e)
+            chunk_start = chunk_end + dt.timedelta(days=1)
     return out
 
 
