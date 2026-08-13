@@ -71,6 +71,33 @@ _TITLE_REJECT = ("Conference to Win", "Conference of ", "Class of ")
 # group item title; every other market type's group item title is just the team.
 _WIN_TOTAL = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\+$")
 
+# SECOND WIN-TOTAL SHAPE, seen live 2026-08-12. Polymarket now also lists win
+# totals as ONE EVENT PER TEAM -- "NCAA Football: Arkansas 2026 Win Total" --
+# where the team is in the EVENT title and the group item title carries only the
+# line ("1.5+ Wins"). That is the mirror image of the original shape, where one
+# "Team Win Totals" event held every team and the group item title carried both
+# ("Alabama 8.5+").
+#
+# 75 of these were sitting untriaged in New Markets, filed as sport=other,
+# purely because _market_type_for matched on a fragment the new titles do not
+# contain. The model already prices this exact market type on Kalshi and is
+# aggregate-calibrated against it, so nothing needed building -- only matching.
+#
+# Some titles carry a disambiguator the team resolver must not see, e.g.
+# "NCAA Football: Cincinnati (CFB) 2026 Win Total".
+_PER_TEAM_WIN_TOTAL = re.compile(
+    r"^NCAA Football:\s*(.+?)\s+\d{4}\s+Win Total\s*$", re.IGNORECASE)
+_TEAM_QUALIFIER = re.compile(r"\s*\((?:CFB|NCAAF|College)\)\s*$", re.IGNORECASE)
+_RUNG_ONLY = re.compile(r"^(\d+(?:\.\d+)?)\+\s*Wins?$", re.IGNORECASE)
+
+
+def _per_team_win_total(title: str) -> str | None:
+    """Team name if this event is a single-team win-total ladder, else None."""
+    m = _PER_TEAM_WIN_TOTAL.match(title.strip())
+    if not m:
+        return None
+    return _TEAM_QUALIFIER.sub("", m.group(1)).strip() or None
+
 # Unfilled slots. Covers both "Team A".."Team CM" and the bare single letters
 # ("A", "B", "C", "A conference") other events use for the same purpose.
 _PLACEHOLDER = re.compile(r"^(Team\s+)?[A-Z]{1,3}(\s+conference)?$", re.IGNORECASE)
@@ -112,7 +139,10 @@ def get_cfb_futures_markets() -> list[dict]:
     rows: list[dict] = []
     for ev in get_open_events():
         title = ev.get("title") or ""
-        market_type = _market_type_for(title)
+        # Per-team ladders are checked first: their titles contain no fragment
+        # _market_type_for knows, so it would reject them outright.
+        event_team = _per_team_win_total(title)
+        market_type = "win_total" if event_team else _market_type_for(title)
         if market_type is None:
             continue
         for m in ev.get("markets") or []:
@@ -120,13 +150,24 @@ def get_cfb_futures_markets() -> list[dict]:
             if not label:
                 continue
             name, line = label, None
-            wt = _WIN_TOTAL.match(label)
-            if wt:
-                name = wt.group(1).strip()
+            if event_team:
+                # Team comes from the event; the label is only the rung.
+                rung = _RUNG_ONLY.match(label)
+                if not rung:
+                    continue
+                name = event_team
                 try:
-                    line = float(wt.group(2))
+                    line = float(rung.group(1))
                 except ValueError:
                     continue
+            else:
+                wt = _WIN_TOTAL.match(label)
+                if wt:
+                    name = wt.group(1).strip()
+                    try:
+                        line = float(wt.group(2))
+                    except ValueError:
+                        continue
             if _PLACEHOLDER.match(name) or name.lower() in _NOT_A_TEAM:
                 continue
             if market_type == "win_total" and line is None:
