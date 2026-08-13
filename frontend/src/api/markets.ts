@@ -2571,6 +2571,12 @@ export interface PortfolioSportPayload {
   net_profit_dollars: number;
   roi: number | null;
   net_units: number;
+  /** net_units restated at TODAY's unit size. Equals net_profit_dollars only
+   *  when the whole history was bet at one unit size -- see spans_unit_change. */
+  net_units_at_current_unit: number;
+  /** True when this row's settled bets span more than one $/unit value, i.e.
+   *  net_profit_dollars and net_units can legitimately disagree in sign. */
+  spans_unit_change: boolean;
   wins: number;
   losses: number;
   pushes: number;
@@ -2587,6 +2593,12 @@ export interface PortfolioSourcePayload {
   net_profit_dollars: number;
   roi: number | null;
   net_units: number;
+  /** net_units restated at TODAY's unit size. Equals net_profit_dollars only
+   *  when the whole history was bet at one unit size -- see spans_unit_change. */
+  net_units_at_current_unit: number;
+  /** True when this row's settled bets span more than one $/unit value, i.e.
+   *  net_profit_dollars and net_units can legitimately disagree in sign. */
+  spans_unit_change: boolean;
   wins: number;
   losses: number;
   pushes: number;
@@ -2608,6 +2620,12 @@ export interface FuturesSummaryPayload {
   net_profit_dollars: number;
   roi: number | null;
   net_units: number;
+  /** net_units restated at TODAY's unit size. Equals net_profit_dollars only
+   *  when the whole history was bet at one unit size -- see spans_unit_change. */
+  net_units_at_current_unit: number;
+  /** True when this row's settled bets span more than one $/unit value, i.e.
+   *  net_profit_dollars and net_units can legitimately disagree in sign. */
+  spans_unit_change: boolean;
   wins: number;
   losses: number;
   pushes: number;
@@ -2622,6 +2640,12 @@ export interface PortfolioPayload {
   net_profit_dollars: number;
   roi: number | null;
   net_units: number;
+  /** net_units restated at TODAY's unit size. Equals net_profit_dollars only
+   *  when the whole history was bet at one unit size -- see spans_unit_change. */
+  net_units_at_current_unit: number;
+  /** True when this row's settled bets span more than one $/unit value, i.e.
+   *  net_profit_dollars and net_units can legitimately disagree in sign. */
+  spans_unit_change: boolean;
   wins: number;
   losses: number;
   pushes: number;

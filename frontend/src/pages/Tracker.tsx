@@ -704,6 +704,26 @@ export function Tracker() {
   const decided = (data?.wins ?? 0) + (data?.losses ?? 0);
   const winRate = decided > 0 ? (data!.wins / decided) * 100 : null;
   const unitsLabel = data && unitDollars > 0 ? ` (${units(data.net_units)})` : "";
+  /** A sport whose settled bets span more than one unit size can show a dollar
+   *  P/L and a unit count pointing OPPOSITE ways -- valorant read -$19.96 and
+   *  +1.02u, which looks broken and is not: flat betting held, but a unit was
+   *  $20 until 2026-08-03 and $10 from 2026-08-05, so losses taken at the larger
+   *  size outweigh wins taken at the smaller one in dollars while counting
+   *  equally in units. Only annotate when the SIGNS actually differ -- otherwise
+   *  it is noise on a row nobody would question. */
+  const sameUnitNote = (s: { net_profit_dollars: number; net_units: number; spans_unit_change: boolean }) => {
+    if (!s.spans_unit_change || unitDollars <= 0) return null;
+    const restated = s.net_units * unitDollars;
+    if (s.net_profit_dollars * restated >= 0) return null;
+    return (
+      <span
+        className="ml-1 text-[var(--color-text-dim)]"
+        title={`Stake size changed over this history (a unit was $20, now $${unitDollars.toFixed(0)}). At today's unit these same picks are ${money(restated)}.`}
+      >
+        ({money(restated)} at today&apos;s unit)
+      </span>
+    );
+  };
   // Split game vs futures so each lands only in its own section (a futures bet
   // has no kickoff, so it shouldn't sit in the game "Open positions" watchlist
   // or "Completed bets" list -- it gets its own compact list under Futures).
@@ -786,7 +806,13 @@ export function Tracker() {
             <StatTile
               label="Net P/L"
               value={`${money(data.net_profit_dollars)}${unitsLabel}`}
-              sublabel="game bets, realized at placement price (futures below)"
+              sublabel={
+                data.spans_unit_change
+                  // NOT money() for the unit size -- it prefixes a sign, giving
+                  // "today's +$10.00 unit". A stake size has no direction.
+                  ? `game bets · ${money(data.net_units_at_current_unit)} at today's $${unitDollars.toFixed(0)} unit`
+                  : "game bets, realized at placement price (futures below)"
+              }
             />
             <StatTile
               label="ROI"
@@ -921,7 +947,7 @@ export function Tracker() {
                     {data.by_source.map((s) => (
                       <tr key={s.source} className="hover:bg-[var(--color-surface)]">
                         <td className="px-3 py-2 font-medium">{SOURCE_LABEL[s.source] ?? s.source}</td>
-                        <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}<span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span></td>
+                        <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}<span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span>{sameUnitNote(s)}</td>
                         <td className={`px-3 py-2 text-right font-mono tabular-nums ${s.roi !== null ? pnlClass(s.roi) : "text-[var(--color-text-dim)]"}`}>
                           {s.roi !== null ? `${(s.roi * 100).toFixed(1)}%` : "—"}
                         </td>
@@ -984,7 +1010,7 @@ export function Tracker() {
                       {data.futures.by_sport.map((s) => (
                         <tr key={s.sport} className="hover:bg-[var(--color-surface)]">
                           <td className="px-3 py-2 font-medium">{SPORT_LABEL[s.sport] ?? s.sport}</td>
-                          <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}<span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span></td>
+                          <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>{money(s.net_profit_dollars)}<span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span>{sameUnitNote(s)}</td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">{s.wins}–{s.losses}</td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">${s.staked_dollars.toLocaleString()}</td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">{s.pending > 0 ? `${s.pending} · $${s.at_risk_dollars.toLocaleString()}` : "—"}</td>
@@ -1030,6 +1056,7 @@ export function Tracker() {
                     <td className={`px-3 py-2 text-right font-mono tabular-nums ${pnlClass(s.net_profit_dollars)}`}>
                       {money(s.net_profit_dollars)}
                       <span className="ml-1 text-[var(--color-text-muted)]">({units(s.net_units)})</span>
+                      {sameUnitNote(s)}
                     </td>
                     <td className={`px-3 py-2 text-right font-mono tabular-nums ${s.roi !== null ? pnlClass(s.roi) : "text-[var(--color-text-dim)]"}`}>
                       {s.roi !== null ? `${(s.roi * 100).toFixed(1)}%` : "—"}

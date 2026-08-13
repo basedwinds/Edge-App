@@ -252,6 +252,28 @@ class PortfolioSportOut(BaseModel):
     net_profit_dollars: float
     roi: float | None           # net_profit / staked, None if nothing settled
     net_units: float
+    # SAME NET, RESTATED AT TODAY'S UNIT SIZE (net_units * current unit_dollars).
+    #
+    # WHY BOTH EXIST (user-reported 2026-08-13: "valorant has a negative net P/L
+    # but a positive unit count -- that doesn't make sense, we've done all flat
+    # bets"). Flat betting held: every bet is a whole number of units, and per
+    # bet stake_dollars is ALWAYS units x the unit size in force that day, with
+    # zero exceptions across 4,262 rows. What changed is the unit size itself --
+    # $20/unit through 2026-08-03, $10/unit from 2026-08-05, with 2026-08-04 the
+    # only day containing both. So net_dollars and net_units can point OPPOSITE
+    # ways when a sport's wins and losses sit in different eras: valorant lost 6
+    # of 9 at $20 and won 10 of 21 at $10, giving -$19.96 but +1.02u.
+    #
+    # net_profit_dollars answers "what happened to the money" and stays the
+    # authority. This answers "what would these same picks be worth at today's
+    # sizing", which is the like-for-like number and cannot disagree in sign with
+    # net_units. Restating history in current dollars is NOT the money you made,
+    # so it is a separate field rather than a correction of the first.
+    net_units_at_current_unit: float = 0.0
+    # True when this row's settled bets span more than one unit size, i.e. the
+    # two figures above CAN diverge. Lets the UI explain the gap instead of
+    # rendering two contradictory numbers with nothing to reconcile them.
+    spans_unit_change: bool = False
     wins: int
     losses: int
     pushes: int
@@ -272,6 +294,8 @@ class PortfolioSourceOut(BaseModel):
     net_profit_dollars: float
     roi: float | None
     net_units: float
+    net_units_at_current_unit: float = 0.0
+    spans_unit_change: bool = False
     wins: int
     losses: int
     pushes: int
@@ -301,6 +325,8 @@ class FuturesSummaryOut(BaseModel):
     net_profit_dollars: float
     roi: float | None
     net_units: float
+    net_units_at_current_unit: float = 0.0
+    spans_unit_change: bool = False
     wins: int
     losses: int
     pushes: int
@@ -321,6 +347,8 @@ class PortfolioOut(BaseModel):
     net_profit_dollars: float
     roi: float | None
     net_units: float
+    net_units_at_current_unit: float = 0.0
+    spans_unit_change: bool = False
     wins: int
     losses: int
     pushes: int
@@ -652,7 +680,12 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
     def _blank() -> dict:
         return {"staked": 0.0, "net": 0.0, "net_units": 0.0, "wins": 0, "losses": 0,
                 "pushes": 0, "voids": 0, "pending": 0, "at_risk": 0.0, "clv": [],
-                "tracked": 0}
+                "tracked": 0,
+                # Distinct $/unit values across this bucket's SETTLED bets. More
+                # than one means net_profit_dollars and net_units were earned at
+                # different stake sizes and can legitimately disagree in sign --
+                # see net_units_at_current_unit on the output models.
+                "unit_sizes": set()}
 
     def _is_tracked_only(r) -> bool:
         """A logged OBSERVATION rather than a bet: no stake was ever sized.
@@ -680,6 +713,11 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
         reason they are logged.
         """
         return not (r.stake_dollars or 0.0) > 0.0
+
+    # Read ONCE, not per bet: this is what the restated figure is denominated in.
+    from app.api.routers.settings import get_unit_dollars
+
+    _unit_dollars = get_unit_dollars(session) or 0.0
 
     overall = _blank()
     per_sport: dict[str, dict] = {}
@@ -735,6 +773,10 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
                 if not is_futures:  # only game bets feed the daily equity curve
                     day = (r.settled_at or r.placed_at).date().isoformat()
                     daily[day] = daily.get(day, 0.0) + prof
+            if r.stake_dollars and r.stake_units:
+                size = round(r.stake_dollars / r.stake_units, 2)
+                for agg in buckets:
+                    agg["unit_sizes"].add(size)
             if prof_u is not None:
                 for agg in buckets:
                     agg["net_units"] += prof_u
@@ -761,6 +803,8 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
             net_profit_dollars=round(agg["net"], 2),
             roi=_roi(agg),
             net_units=round(agg["net_units"], 2),
+            net_units_at_current_unit=round(agg["net_units"] * _unit_dollars, 2),
+            spans_unit_change=len(agg["unit_sizes"]) > 1,
             wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"], tracked=agg["tracked"],
             pending=agg["pending"], at_risk_dollars=round(agg["at_risk"], 2),
             avg_clv_pp=_avg_clv(agg), clv_sample=len(agg["clv"]),
@@ -775,6 +819,8 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
             net_profit_dollars=round(agg["net"], 2),
             roi=_roi(agg),
             net_units=round(agg["net_units"], 2),
+            net_units_at_current_unit=round(agg["net_units"] * _unit_dollars, 2),
+            spans_unit_change=len(agg["unit_sizes"]) > 1,
             wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"], tracked=agg["tracked"],
             pending=agg["pending"], at_risk_dollars=round(agg["at_risk"], 2),
             avg_clv_pp=_avg_clv(agg), clv_sample=len(agg["clv"]),
@@ -797,6 +843,8 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
             net_profit_dollars=round(agg["net"], 2),
             roi=_roi(agg),
             net_units=round(agg["net_units"], 2),
+            net_units_at_current_unit=round(agg["net_units"] * _unit_dollars, 2),
+            spans_unit_change=len(agg["unit_sizes"]) > 1,
             wins=agg["wins"], losses=agg["losses"], pushes=agg["pushes"], voids=agg["voids"], tracked=agg["tracked"],
             pending=agg["pending"], at_risk_dollars=round(agg["at_risk"], 2),
             avg_clv_pp=None, clv_sample=0,   # futures have no meaningful CLV
@@ -808,6 +856,8 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
         net_profit_dollars=round(fut_overall["net"], 2),
         roi=_roi(fut_overall),
         net_units=round(fut_overall["net_units"], 2),
+        net_units_at_current_unit=round(fut_overall["net_units"] * _unit_dollars, 2),
+        spans_unit_change=len(fut_overall["unit_sizes"]) > 1,
         wins=fut_overall["wins"], losses=fut_overall["losses"], tracked=fut_overall["tracked"],
         pushes=fut_overall["pushes"], voids=fut_overall["voids"],
         pending=fut_overall["pending"], at_risk_dollars=round(fut_overall["at_risk"], 2),
@@ -819,6 +869,8 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
         net_profit_dollars=round(overall["net"], 2),
         roi=_roi(overall),
         net_units=round(overall["net_units"], 2),
+        net_units_at_current_unit=round(overall["net_units"] * _unit_dollars, 2),
+        spans_unit_change=len(overall["unit_sizes"]) > 1,
         wins=overall["wins"], losses=overall["losses"], pushes=overall["pushes"], voids=overall["voids"], tracked=overall["tracked"],
         pending=overall["pending"], at_risk_dollars=round(overall["at_risk"], 2),
         avg_clv_pp=_avg_clv(overall), clv_sample=len(overall["clv"]),
