@@ -34,6 +34,17 @@ to unpredictable from team-behavior signals at the precision needed to beat
 a flat league-average baseline, unlike NFL's modest improvement or NBA's
 large one.
 
+SCOPE OF THE PITCHER REJECTION, tightened 2026-08-14. Candidate 2 tested
+combined current-season ERA and nothing else. ERA charges a pitcher for balls
+in play his defence handled, and it is measurably the weakest of the three
+common descriptors here: on the same 15,352-game walk-forward set,
+correlation with the game WINNER is era 0.089, FIP 0.105, K-BB% 0.110, and
+out-of-sample K-BB% beats an Elo-only baseline in 8 of 9 held-out seasons
+against ERA's 6 of 9 (see check_mlb_pitcher_metric.py). So "starting-pitcher
+quality does not inform the TOTAL" has only ever been measured through the
+noisiest available proxy. The better metrics have not been tested against
+totals at all -- do not read candidate 2 as closing that question.
+
 F5 (first-5-innings, 3-way incl. TIE): margin regression mirrors the
 full-game one exactly (same walk-forward elo_diff, fit through the origin),
 using real per-inning linescores for 2021-2025 + partial 2026 (13,591 games,
@@ -68,9 +79,9 @@ correlates r=0.038 and is logistic-regression sign-consistent across a
 first-half/second-half split of the data (coef 0.089 vs 0.063, n=8,292,
 61% of games -- the other 39% lack a qualifying current-season ERA for one
 or both starters, same MIN_IP gate as the moneyline pitcher blend). This is
-a REAL but genuinely WEAK signal -- an order of magnitude weaker than the
-moneyline pitcher signal (r=0.305) or the accepted park-factor total signal,
-more in the "barely clears noise" territory this app's rejected signals
+a REAL but genuinely WEAK signal -- weaker than the moneyline pitcher signal or
+the accepted park-factor total signal, more in the "barely clears noise" territory
+this app's rejected signals
 (bullpen fatigue, MLB team-scoring totals) also lived in, except this one
 DOES clear it on both the correlation-vs-noise-floor math (n=8,292, SE~0.011,
 r=0.038 is ~3.5 SE from zero) and the sign-consistency check. Shipped as a
