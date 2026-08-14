@@ -336,8 +336,38 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             kelly = None
         pool = futures_pool if m.market_type in FUTURES_MARKET_TYPES else weekly_pool
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
+        # THE SAME SPREAD GUARD THE FUTURES BLOCK USES, for the same reason and
+        # with the same constant. A spread of S puts +/-S/2 of uncertainty on the
+        # MIDPOINT the edge is measured from, so at S=0.30 that uncertainty is
+        # 0.15 -- larger than the 10pp edge the bet is recommended on. Past that
+        # the claimed edge is smaller than the error bar on its own reference
+        # price, whether the market is a future or a game.
+        #
+        # It was futures-only, and the omission concentrated exactly where this
+        # app actually bets. Ranking the whole board by EDGE (not by count):
+        # of 82 staked CFB bets, 68 sit on books under 0.15 and are fine, but
+        # the 14 wide ones took the TOP SIX places by edge --
+        #     TCU  spread    10.5  +57.3pp  spread 0.22
+        #     UVA  win_total  5.5  +54.1pp  spread 0.58
+        #     TCU  spread     7.5  +52.4pp  spread 0.39
+        #     MINN win_total  4.5  +51.7pp  spread 0.61
+        # A 0.61-wide book makes the quoted "implied 0.325" the midpoint of
+        # something like 0.02/0.63. That is not a price, and the edge measured
+        # against it is manufactured.
+        #
+        # THE MODEL IS NOT THE PROBLEM HERE, which is worth recording so nobody
+        # goes looking: season_sim_cfb's TEAM_STRENGTH_SIGMA=225 was backtested
+        # on 2022-2025 projecting each season from prior-years-only ratings with
+        # zero games played -- exactly what these markets price -- and pulled the
+        # mean calibration gap from 10.82pp to 1.19pp across four
+        # leave-one-season-out folds. A calibrated model cannot genuinely differ
+        # from a real market by 54pp; the reference price was the broken half.
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied,
-                                           unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, sport="cfb", team=m.team)
+                                           unit_dollars, flat_marginal, flat_full, unit_scale=_uscale,
+                                           max_spread=FUTURES_MAX_SPREAD,
+                                           yes_bid=snap.yes_bid if snap else None,
+                                           yes_ask=snap.yes_ask if snap else None,
+                                           sport="cfb", team=m.team)
         # SAME GATE THE FUTURES BLOCK ALREADY APPLIES, and it belonged here just
         # as much. A team whose rating was built almost entirely outside the FBS
         # pool is measured on a different scale from the opponent it is priced
