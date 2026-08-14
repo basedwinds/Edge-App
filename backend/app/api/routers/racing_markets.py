@@ -246,7 +246,8 @@ def _resolve_rating_series(series: str, markets: list[Market],
 
 def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, float | None],
                  race_start_by_event: dict | None = None,
-                 grid_by_event: dict | None = None) -> list[RacingMarketOut]:
+                 grid_by_event: dict | None = None,
+                 pack_by_event: dict | None = None) -> list[RacingMarketOut]:
     rating_series, race_field, entrants, coverage = _resolve_rating_series(series, markets, grid_by_event)
     st = racing_ratings._series_state(rating_series)
     cc = st.get("current_constructor", {})
@@ -290,6 +291,15 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
         # grid weight and an attrition rate -- see racing_ratings.TOPN_PARAMS for
         # the fitted values and why the two questions cannot share parameters.
         # race_winner/pole/h2h keep reading `sim` above, which is unchanged.
+        # SUPERSEDED PARAMETERS FOR PACK RACING (Daytona/Talladega/Atlanta).
+        # Grid predicts finish at 0.156 there against 0.453 elsewhere, and the
+        # normal weights overstated confident outcomes by up to 17pp -- hidden
+        # behind a mean gap of +-0.000. See racing_ratings.PACK_TOPN_PARAMS.
+        # False for anything the feed cannot identify, so unknown races price
+        # exactly as before.
+        ev_id = next((m.race_event_id for m in markets if m.race_event_id), None)
+        is_pack = bool((pack_by_event or {}).get(ev_id))
+
         topn_field = {}
         for mk in markets:
             if mk.market_type not in ("race_winner", "top_n"):
@@ -297,12 +307,14 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
             dd = racing_ratings.resolve_driver_id(rating_series, mk.team or "")
             if dd and dd not in topn_field:
                 g = (grid_by_event or {}).get(mk.race_event_id) or {}
-                s = racing_ratings.topn_strength(rating_series, dd, cc.get(dd), g.get(dd))
+                s = racing_ratings.topn_strength(rating_series, dd, cc.get(dd), g.get(dd),
+                                                 pack=is_pack)
                 if s is not None:
                     topn_field[dd] = s
+        _att = (racing_ratings.PACK_TOPN_PARAMS["attrition"] if is_pack
+                else racing_ratings.TOPN_PARAMS.get(rating_series, {}).get("attrition", 0.0))
         topn_sim = (racing_sim.simulate(
-            topn_field, trials=20000,
-            attrition=racing_ratings.TOPN_PARAMS.get(rating_series, {}).get("attrition", 0.0),
+            topn_field, trials=20000, attrition=_att,
         ) if len(topn_field) >= 2 else {})
 
     # Pole probabilities over the FULL current grid (series-wide, from ratings),
@@ -417,14 +429,27 @@ def list_racing_markets(session: Session = Depends(get_session)):
     # _price_event) so racing bets show a DATE instead of reading "Season-long".
     grid_by_event = _load_grid_cache()
     event_ids = {m.race_event_id for m in markets if m.race_event_id is not None}
-    race_start_by_event = {
-        e.id: e.start_time
-        for e in session.query(RaceEvent).filter(RaceEvent.id.in_(event_ids)).all()
-    } if event_ids else {}
+    race_events = (session.query(RaceEvent).filter(RaceEvent.id.in_(event_ids)).all()
+                   if event_ids else [])
+    race_start_by_event = {e.id: e.start_time for e in race_events}
+
+    # PACK-RACING FLAG PER EVENT. Resolved here and passed down, exactly like
+    # grid_by_event, because _price_event holds no session and must stay free of
+    # network/DB work. nascar_feed.is_pack_racing caches and fails to False.
+    pack_by_event: dict[int, bool] = {}
+    try:
+        from app.clients import nascar_feed
+        for e in race_events:
+            if e.series == "nascar" and e.name:
+                pack_by_event[e.id] = nascar_feed.is_pack_racing(e.name, near=e.start_time)
+    except Exception:
+        log.exception("racing: pack-racing lookup failed -- pricing every race as normal")
+        pack_by_event = {}
 
     out: list[RacingMarketOut] = []
     for (series, _event), evmarkets in by_event.items():
-        for row in _price_event(series, evmarkets, implied_by_id, race_start_by_event, grid_by_event):
+        for row in _price_event(series, evmarkets, implied_by_id, race_start_by_event,
+                                grid_by_event, pack_by_event):
             row.volume = vol_by_id.get(row.id)
             snap = snaps.get(row.id)
             has_traded = has_real_trading(src_by_id.get(row.id), snap.volume if snap else None, snap.last_price if snap else None)

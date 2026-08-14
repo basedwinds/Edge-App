@@ -168,35 +168,62 @@ TOPN_PARAMS = {
 # Both moves are physically motivated rather than curve-fitted: LOWER grid weight
 # because grid does not predict, HIGHER attrition because pack racing wrecks
 # cars. 45 races is thin, so this is per-BINARY only; do not subdivide further.
-# NOT WIRED -- the SELECTOR is wrong, not the fit.
+# PACK-RACING (SUPERSPEEDWAY) FINISHING-ORDER PARAMETERS.
 #
-# `restrictor_plate` in NASCAR's feed marks the RESTRICTED ENGINE PACKAGE, not
-# superspeedway pack racing. For Cup the two coincide exactly (16/81 flagged:
-# Daytona 8, Atlanta 4, Talladega 4). For TRUCK it also covers RICHMOND, a
-# 0.75-mile short track that runs a tapered-spacer package (8/50 flagged:
-# Daytona 2, Atlanta 2, Talladega 2, Richmond 2).
+# Daytona / Talladega / Atlanta are a different sport and TOPN_PARAMS priced them
+# as if they were not. Grid barely predicts finish there -- corr(grid, finish)
+# 0.156 against 0.453 everywhere else, pooled across cup/xfinity/truck 2022-26.
 #
-# Caught by a live sanity check -- the Richmond Truck race returned plate=True,
-# and wiring this would have re-priced a short track with pack-racing
-# parameters. The SECOND field in one session that did not mean its own name;
-# has_qualifying was the first.
+# THE AGGREGATE HID IT COMPLETELY. Scored by group, the shipped parameters showed
+# a mean gap of +-0.000 on BOTH, while pack races carried ~10x the decile
+# calibration error -- over- and under-prediction cancelling exactly (claimed
+# 0.056 delivered 0.140 at the bottom, claimed 0.544 delivered 0.376 at the top).
+# Never read a mean gap as evidence of calibration; bucket it.
 #
-# The measured effect is not invalidated: if Richmond behaves like a short track
-# it DILUTED the plate bucket, so the real separation is at least as large as
-# measured. What is invalid is the selector and the mechanism story.
+# THE SELECTOR IS NOT NASCAR'S FLAG ALONE, and that distinction is the whole
+# reason a first version of this was fitted and thrown away. `restrictor_plate`
+# marks the RESTRICTED ENGINE PACKAGE, not pack racing. For Cup the two coincide
+# (Daytona/Atlanta/Talladega). For TRUCK it also covers RICHMOND, a 0.75-mile
+# short track on a tapered spacer -- and wiring that version would have priced a
+# short track with pack-racing parameters. Caught by a live sanity check on a real
+# event, not by the fit, which looked excellent throughout.
 #
-# TO WIRE THIS: re-scope the definition to actual superspeedway pack racing
-# (Daytona/Talladega, probably Atlanta post-2022 repave) by track length or an
-# explicit track list, re-run check_racing_track_type.py and the hold-out, and
-# confirm no short track lands in the bucket. See task #191.
-PLATE_TOPN_PARAMS = {"grid_pts": 5.0, "attrition": 0.40}
+# So the selector requires the flag AND a track of at least a mile (NASCAR's own
+# short-track boundary). Measured bucket membership, which is asserted in
+# scripts/check_racing_pack_racing.py rather than assumed:
+#
+#     IN   Daytona 30, Talladega 24, Atlanta 18       OUT  Richmond 5
+#
+# Removing Richmond SHARPENED the separation (0.172 -> 0.156) and moved attrition
+# 0.40 -> 0.30, confirming it had been distorting the earlier fit.
+#
+# FITTED, then validated as a SINGLE FIXED constant on seasons it never saw --
+# not per-fold optima, which flatter the result -- against each series' OWN
+# shipped parameters:
+#
+#     season   shipped   pack(5.0,0.30)
+#     2022      0.1006          0.0363   better
+#     2023      0.1105          0.0459   better
+#     2024      0.1343          0.0430   better
+#     2025      0.0842          0.0419   better
+#     2026      0.1413          0.0431   better
+#
+# 5 of 5 held-out seasons improve; pooled calibration error 0.1057 -> 0.0162. The
+# defect itself is repaired, not just the aggregate: the worst decile miss falls
+# from 17pp to ~2pp and the over-confident deciles disappear, which is the point
+# -- the model no longer claims 54% where grid cannot support it.
+#
+# Both moves are physically motivated rather than curve-fitted: LOWER grid weight
+# because grid does not predict, HIGHER attrition because pack racing wrecks cars.
+# 43 races is thin, so this stays a BINARY; do not subdivide further.
+PACK_TOPN_PARAMS = {"grid_pts": 5.0, "attrition": 0.30}
 
 
 def topn_strength(series: str, driver_id: str, constructor: str | None, grid: int | None,
-                  plate: bool = False):
+                  pack: bool = False):
     """strength() but with the FINISHING-ORDER grid weight. con_w is shared --
     only the grid term and attrition were refit."""
-    p = PLATE_TOPN_PARAMS if plate else TOPN_PARAMS.get(series)
+    p = PACK_TOPN_PARAMS if pack else TOPN_PARAMS.get(series)
     if p is None:
         return strength(series, driver_id, constructor, grid)
     base = strength(series, driver_id, constructor, None)

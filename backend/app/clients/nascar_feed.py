@@ -201,23 +201,33 @@ def match_race(event_name: str, near: "datetime.datetime | None" = None, season:
     return by_id.get(sid), rid, rname, start
 
 
-_plate_cache: "dict[str, bool]" = {}
+_pack_cache: "dict[str, bool]" = {}
+
+# NASCAR's own boundary: a short track is under a mile. Used to keep RICHMOND out
+# of the pack-racing bucket -- see is_pack_racing.
+_MIN_PACK_TRACK_MILES = 1.0
 
 
-def is_restrictor_plate(event_name: str, near=None, season: int = 2026) -> bool:
-    """Is this a plate race? Daytona / Talladega / Atlanta.
+def is_pack_racing(event_name: str, near=None, season: int = 2026) -> bool:
+    """Is this superspeedway pack racing? Daytona / Talladega / Atlanta.
 
-    Plate races need their own finishing-order parameters -- grid predicts finish
-    at 0.172 there against ~0.45 everywhere else, so the shipped weights
-    overstate confident outcomes by up to 17pp. See
-    racing_ratings.PLATE_TOPN_PARAMS for the fit and its hold-out.
+    NOT simply NASCAR's `restrictor_plate` flag. That flag marks the RESTRICTED
+    ENGINE PACKAGE, which for Cup coincides with pack racing but for TRUCK also
+    covers RICHMOND -- a 0.75-mile short track running a tapered spacer. Trusting
+    the flag alone would price a short track with pack-racing parameters, and a
+    first version of this did exactly that before a live check caught it.
 
-    Fails to FALSE on any doubt (unmatched name, unreadable calendar,
-    cross-series tie), so an unrecognised race keeps the existing behaviour
-    rather than silently switching parameter sets.
+    So: the flag AND a track of at least a mile. Measured membership 2022-26 --
+    IN Daytona 30 / Talladega 24 / Atlanta 18, OUT Richmond 5. Excluding Richmond
+    SHARPENED the grid-finish separation (0.172 -> 0.156) and moved the fitted
+    attrition, so it was actively distorting the earlier fit.
+
+    Fails to FALSE on any doubt (unmatched name, unreadable calendar, missing
+    distance/laps, cross-series tie), so an unrecognised race keeps the normal
+    parameters rather than silently switching sets.
     """
     key = f"{event_name}|{near}"
-    hit = _plate_cache.get(key)
+    hit = _pack_cache.get(key)
     if hit is not None:
         return hit
     val = False
@@ -230,13 +240,17 @@ def is_restrictor_plate(event_name: str, near=None, season: int = 2026) -> bool:
                 d = _get(f"{_BASE}/{season}/{sid}/race_list_basic.json")
                 rows = d if isinstance(d, list) else d.get(f"series_{sid}") or []
                 for r in rows:
-                    if r.get("race_id") == race_id:
-                        val = bool(r.get("restrictor_plate"))
-                        break
+                    if r.get("race_id") != race_id:
+                        continue
+                    laps = r.get("scheduled_laps") or 0
+                    dist = r.get("scheduled_distance") or 0
+                    length = (dist / laps) if laps else None
+                    val = bool(r.get("restrictor_plate")) and length is not None                         and length >= _MIN_PACK_TRACK_MILES
+                    break
     except Exception:
-        log.warning("nascar feed: plate lookup failed for %r", event_name)
+        log.warning("nascar feed: pack-racing lookup failed for %r", event_name)
         val = False
-    _plate_cache[key] = val
+    _pack_cache[key] = val
     return val
 
 
