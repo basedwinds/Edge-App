@@ -61,7 +61,32 @@ _LIMIT = 100
 # 2026-09-21, i.e. 50 days out, while a 45-day window only reached Sept 13. 90
 # gives real headroom over that observed horizon; the fetch is a handful of
 # range calls, so a wide window is cheap.
-FORWARD_DAYS = 90
+#
+# RAISED 90 -> 125 on 2026-08-14. The 90 was sized for GAME markets -- it only
+# ever had to outrun Kalshi's listing horizon. The SEASON-LONG markets silently
+# inherited it, and they need something completely different: the whole season,
+# because a win-total ladder resolves on all 12 regular-season games.
+#
+# What that cost, measured on the live board: the schedule ran 2026-08-29 to
+# 2026-11-13, and today+90 is 2026-11-12 -- it stopped exactly at the window
+# edge. EVERY one of 227 FBS-connected teams had an incomplete schedule, median
+# 9 games, and all 16 teams carrying a staked win-total bet had exactly 9. The
+# season sim was therefore simulating a 9-game season and pricing markets that
+# settle over 12, which makes every win_total, conference and playoff
+# probability wrong -- CONN alone had five rungs on the board, all skewed the
+# same way, which is the signature of a per-team schedule error rather than
+# noise.
+#
+# 125 days reaches early December from mid-August, which covers conference
+# championship weekend (2026-12-05). Verified live: a range query confirmed real
+# ESPN events out to 2026-12-06.
+#
+# COST is ~30 extra per-day calls per refresh (Sun/Mon are skipped). That is
+# real but bounded, and it is why this stays a per-day fetch: a single date-RANGE
+# call is capped by _LIMIT and cannot page, so it returns FEWER events, not more
+# (measured Sep 1-14 with groups=80&limit=100: per-day 173, range 100). The
+# range query looks tempting and is a trap.
+FORWARD_DAYS = 125
 # Sunday(6) and Monday(0): FBS plays Tue-Sat.
 _SKIP_WEEKDAYS = {6, 0}
 
