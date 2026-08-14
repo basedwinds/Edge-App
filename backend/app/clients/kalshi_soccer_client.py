@@ -95,10 +95,22 @@ MONEYLINE_SERIES = {
     # same time as this entry, since without it the bets could never settle.
     # KXSAUDIPLGAME 33 open, all two-sided, median spread 0.030.
     "KSA1": "KXSAUDIPLGAME",
+    # Serie B. Added on a REVERSED judgement, recorded because the reasoning
+    # matters more than the entry: it was rejected hours earlier for a 0.110
+    # median spread, ranking series by spread width. That screen was wrong for
+    # this decision. Edge is measured against the MIDPOINT and entry is a limit
+    # order whose quote you verify, so a wide book is not a cost you
+    # automatically pay -- and a 5.5pp half-spread is not what decides anything
+    # against a 10pp recommend threshold. Inventory that cannot clear that
+    # threshold is inert: it prices or it does not, and it can never stake.
+    # Spread is a JUNK FILTER for degenerate books (bid 0.02 / ask 0.97, no
+    # volume, edge reading +1.000), not a quality ranking.
+    # Live at this check: 3 open, all 3 two-sided, one listed match.
+    "I2": "KXSERIEBGAME",
     # STILL ABSENT, re-checked the same day and deliberately not guessed at:
-    # I2 (KXSERIEBGAME 3 open, median spread 0.110 -- listed but far too wide),
-    # E3 (KXEFLL2GAME 0 open), G1 (no series found under KXGREEKSL/KXGREECESL/
-    # KXSUPERLEAGUE). All three stay rated-but-unwired.
+    # E3 (KXEFLL2GAME 0 open) and G1 (no series found under KXGREEKSL/
+    # KXGREECESL/KXSUPERLEAGUE). Both stay rated-but-unwired -- that is zero
+    # inventory, not a wide book, which is the one thing spread never told us.
 }
 
 SPREAD_SERIES = {
