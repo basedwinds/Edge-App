@@ -201,6 +201,45 @@ def match_race(event_name: str, near: "datetime.datetime | None" = None, season:
     return by_id.get(sid), rid, rname, start
 
 
+_plate_cache: "dict[str, bool]" = {}
+
+
+def is_restrictor_plate(event_name: str, near=None, season: int = 2026) -> bool:
+    """Is this a plate race? Daytona / Talladega / Atlanta.
+
+    Plate races need their own finishing-order parameters -- grid predicts finish
+    at 0.172 there against ~0.45 everywhere else, so the shipped weights
+    overstate confident outcomes by up to 17pp. See
+    racing_ratings.PLATE_TOPN_PARAMS for the fit and its hold-out.
+
+    Fails to FALSE on any doubt (unmatched name, unreadable calendar,
+    cross-series tie), so an unrecognised race keeps the existing behaviour
+    rather than silently switching parameter sets.
+    """
+    key = f"{event_name}|{near}"
+    hit = _plate_cache.get(key)
+    if hit is not None:
+        return hit
+    val = False
+    try:
+        m = match_race(event_name, near=near, season=season)
+        if m:
+            series_key, race_id, _n, _s = m
+            sid = SERIES_IDS.get(series_key)
+            if sid:
+                d = _get(f"{_BASE}/{season}/{sid}/race_list_basic.json")
+                rows = d if isinstance(d, list) else d.get(f"series_{sid}") or []
+                for r in rows:
+                    if r.get("race_id") == race_id:
+                        val = bool(r.get("restrictor_plate"))
+                        break
+    except Exception:
+        log.warning("nascar feed: plate lookup failed for %r", event_name)
+        val = False
+    _plate_cache[key] = val
+    return val
+
+
 def fetch_grid(series_key: str, race_id, season: int = 2026) -> "dict[str, int] | None":
     """{driver_name: starting position} from qualifying, or None if not yet run.
 

@@ -125,10 +125,78 @@ TOPN_PARAMS = {
 }
 
 
-def topn_strength(series: str, driver_id: str, constructor: str | None, grid: int | None):
+# RESTRICTOR-PLATE RACES ARE A DIFFERENT SPORT and TOPN_PARAMS prices them as if
+# they were not. Daytona / Talladega / Atlanta.
+#
+# GRID BARELY PREDICTS FINISH THERE. Correlation of start position with finish,
+# pooled across cup/xfinity/truck 2022-26:
+#
+#   plate 0.172 | short 0.464 | intermediate 0.455 | superspeedway 0.414 | road 0.453
+#
+# The other four are indistinguishable from each other, so this is ONE BINARY,
+# not five track classes. That is exactly why the earlier per-track fit was
+# rejected on hold-out: the signal was real but spent at ~3.7 races per track. As
+# a binary it is 45 races / 1,703 driver-races.
+#
+# THE AGGREGATE HID IT COMPLETELY -- shipped params scored by track group:
+#
+#                   n   claimed   actual      gap   calib err
+#   non-plate    9552     0.269    0.269   +0.000      0.0098
+#   plate        1703     0.264    0.264   -0.000      0.1019
+#
+# Both look perfect on the mean. Plate carried 10x the error because over- and
+# under-prediction cancelled: claimed 0.056 delivered 0.140 at the bottom, and
+# claimed 0.544 delivered 0.376 at the top. Classic overconfidence -- the model
+# spread the field on grid, a signal largely absent at plate tracks. NEVER read a
+# mean gap as evidence of calibration.
+#
+# FITTED, then validated as a SINGLE FIXED CONSTANT on seasons it never saw --
+# not per-fold optima, which flatter the result:
+#
+#   season   shipped(10,0.20)   plate(5,0.40)
+#   2022               0.0543          0.0500   better
+#   2023               0.1022          0.0276   better
+#   2024               0.0818          0.0210   better
+#   2025               0.0465          0.0554   worse
+#   2026               0.0780          0.0497   better
+#
+# 4 of 5 held-out seasons improve; pooled calibration error 0.0681 -> 0.0196. The
+# defect itself is repaired, not just the aggregate: the worst decile miss falls
+# from 17pp to ~2pp, and the confident deciles disappear entirely, which is the
+# point -- the model no longer claims 54% when grid cannot support it.
+#
+# Both moves are physically motivated rather than curve-fitted: LOWER grid weight
+# because grid does not predict, HIGHER attrition because pack racing wrecks
+# cars. 45 races is thin, so this is per-BINARY only; do not subdivide further.
+# NOT WIRED -- the SELECTOR is wrong, not the fit.
+#
+# `restrictor_plate` in NASCAR's feed marks the RESTRICTED ENGINE PACKAGE, not
+# superspeedway pack racing. For Cup the two coincide exactly (16/81 flagged:
+# Daytona 8, Atlanta 4, Talladega 4). For TRUCK it also covers RICHMOND, a
+# 0.75-mile short track that runs a tapered-spacer package (8/50 flagged:
+# Daytona 2, Atlanta 2, Talladega 2, Richmond 2).
+#
+# Caught by a live sanity check -- the Richmond Truck race returned plate=True,
+# and wiring this would have re-priced a short track with pack-racing
+# parameters. The SECOND field in one session that did not mean its own name;
+# has_qualifying was the first.
+#
+# The measured effect is not invalidated: if Richmond behaves like a short track
+# it DILUTED the plate bucket, so the real separation is at least as large as
+# measured. What is invalid is the selector and the mechanism story.
+#
+# TO WIRE THIS: re-scope the definition to actual superspeedway pack racing
+# (Daytona/Talladega, probably Atlanta post-2022 repave) by track length or an
+# explicit track list, re-run check_racing_track_type.py and the hold-out, and
+# confirm no short track lands in the bucket. See task #191.
+PLATE_TOPN_PARAMS = {"grid_pts": 5.0, "attrition": 0.40}
+
+
+def topn_strength(series: str, driver_id: str, constructor: str | None, grid: int | None,
+                  plate: bool = False):
     """strength() but with the FINISHING-ORDER grid weight. con_w is shared --
     only the grid term and attrition were refit."""
-    p = TOPN_PARAMS.get(series)
+    p = PLATE_TOPN_PARAMS if plate else TOPN_PARAMS.get(series)
     if p is None:
         return strength(series, driver_id, constructor, grid)
     base = strength(series, driver_id, constructor, None)
