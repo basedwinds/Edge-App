@@ -100,7 +100,15 @@ def _per_team_win_total(title: str) -> str | None:
 
 # Unfilled slots. Covers both "Team A".."Team CM" and the bare single letters
 # ("A", "B", "C", "A conference") other events use for the same purpose.
-_PLACEHOLDER = re.compile(r"^(Team\s+)?[A-Z]{1,3}(\s+conference)?$", re.IGNORECASE)
+#
+# THE "Team " PREFIX IS REQUIRED FOR THE MULTI-LETTER FORM. It used to be
+# optional, which silently ate six REAL schools whose names are bare 2-3 letter
+# acronyms -- BYU, LSU, SMU, TCU, UCF, USC -- so 70 of 76 CFB win-total ladders
+# ingested and nobody noticed the six that did not. Verified against the live
+# feed before narrowing: every genuine placeholder carries the prefix or is a
+# bare SINGLE letter; no bare 2-3 letter placeholder exists anywhere in it.
+_PLACEHOLDER = re.compile(
+    r"^(?:Team\s+[A-Z]{1,3}|[A-Z])(?:\s+conference)?$", re.IGNORECASE)
 
 # Not a team: the explicit remainder bucket.
 _NOT_A_TEAM = {"other"}
@@ -115,19 +123,38 @@ def _market_type_for(title: str) -> str | None:
     return None
 
 
+# Gamma caps a page at 100 REGARDLESS of what `limit` asks for -- requesting 500
+# still returns 100 -- so a single call silently truncates any tag that has more.
+# Measured 2026-08-14: `cfb` holds 102 open events, and the unpaged fetch dropped
+# the last 2 without an error or a log line. Page with `offset` instead.
+_PAGE = 100
+_MAX_PAGES = 20  # 2,000 events; a stop so a broken cursor cannot loop forever.
+
+
 def get_open_events() -> list[dict]:
     """Deduped union of the four CFB tags, keyed by event slug."""
     seen: dict[str, dict] = {}
     for tag in TAG_SLUGS:
-        try:
-            events = get_json(f"{GAMMA}/events?tag_slug={tag}&closed=false&limit=100")
-        except Exception:
-            log.exception("polymarket cfb fetch failed for tag %s", tag)
-            continue
-        for ev in events or []:
-            slug = ev.get("slug")
-            if slug:
-                seen.setdefault(slug, ev)
+        for page in range(_MAX_PAGES):
+            offset = page * _PAGE
+            try:
+                events = get_json(
+                    f"{GAMMA}/events?tag_slug={tag}&closed=false"
+                    f"&limit={_PAGE}&offset={offset}")
+            except Exception:
+                log.exception("polymarket cfb fetch failed for tag %s offset %d",
+                              tag, offset)
+                break
+            events = events or []
+            for ev in events:
+                slug = ev.get("slug")
+                if slug:
+                    seen.setdefault(slug, ev)
+            if len(events) < _PAGE:
+                break
+        else:
+            log.warning("polymarket cfb tag %s hit the %d-page cap -- events may "
+                        "still be truncated", tag, _MAX_PAGES)
     return list(seen.values())
 
 
