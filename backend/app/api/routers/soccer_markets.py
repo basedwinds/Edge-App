@@ -883,12 +883,25 @@ def list_soccer_markets(session: Session = Depends(get_session)):
     def _match_looks_live_by_trading(m: Market) -> bool:
         return m.soccer_match_id in matches_live_by_trading
 
+    # A HALT ON ONE PLATFORM IS INFORMATION THE OTHER HAS NOT PRICED YET.
+    # See cs2_markets.py for the case that produced this: a walkover where
+    # Kalshi halted both sides while Polymarket kept quoting a phantom
+    # 0.495/0.505, manufacturing a +19.1pp edge on a match nobody would play.
+    # The per-market `status == "active"` test below cannot catch it, because
+    # the halted rows are not the rows being recommended -- the halt has to be
+    # read at the FIXTURE level, across platforms.
+    _halted_fixture_ids = {
+        _m.soccer_match_id for _m in markets
+        if _m.soccer_match_id and (_m.status or "") == "inactive"
+    }
+
     markets = [
         m for m in markets
         if not _match_already_decided(m)
         and not _match_already_started(m)
         and not _match_ladder_resolved(m)
         and not _match_looks_live_by_trading(m)
+        and not (m.soccer_match_id and m.soccer_match_id in _halted_fixture_ids)
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]

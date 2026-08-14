@@ -451,11 +451,24 @@ def list_lol_markets(session: Session = Depends(get_session)):
     _borrowed = borrowed_start_times(session.query(LolMatch).all())
     _fixture_keys = canonical_fixture_ids(session, LolMatch)
 
+    # A HALT ON ONE PLATFORM IS INFORMATION THE OTHER HAS NOT PRICED YET.
+    # See cs2_markets.py for the case that produced this: a walkover where
+    # Kalshi halted both sides while Polymarket kept quoting a phantom
+    # 0.495/0.505, manufacturing a +19.1pp edge on a match nobody would play.
+    # The per-market `status == "active"` test below cannot catch it, because
+    # the halted rows are not the rows being recommended -- the halt has to be
+    # read at the FIXTURE level, across platforms.
+    _halted_fixture_ids = {
+        _m.lol_match_id for _m in markets
+        if _m.lol_match_id and (_m.status or "") == "inactive"
+    }
+
     markets = [
         m for m in markets
         if not _match_live_on_flashscore(m)
         if not _match_already_decided(m)
         and not _match_already_started(m)
+        and not (m.lol_match_id and m.lol_match_id in _halted_fixture_ids)
         and (m.status or "active") == "active"
         and not _market_stale(m)
         and not _match_looks_live_by_trading(m)

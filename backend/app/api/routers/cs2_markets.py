@@ -294,6 +294,41 @@ def list_cs2_markets(session: Session = Depends(get_session)):
         match = matches_by_id.get(m.cs2_match_id) if m.cs2_match_id else None
         return match is not None and match.winner is not None
 
+    # ONE PLATFORM HALTING IS INFORMATION THE OTHER HAS NOT PRICED YET.
+    #
+    # WBT vs Arch, 2026-08-14, was ruled a walkover. Kalshi halted both sides
+    # (status "inactive", no result declared). Polymarket kept quoting an
+    # untouched 0.495/0.505 -- the phantom-coinflip shape -- and the model's
+    # 0.686 against that phantom produced a +19.1pp edge and a $10 recommended
+    # bet on a match that was not going to be played. The per-market
+    # `status == "active"` filter below could not catch it: the Kalshi rows it
+    # would have dropped were not the rows being recommended.
+    #
+    # So the halt has to be read at the FIXTURE level, across platforms. This
+    # is the cross-platform disagreement the divergence scanner was built to
+    # notice, used as a safety signal instead of an edge one.
+    #
+    # DELIBERATELY SUPPRESSES BOTH CASES IT CATCHES, because both are things we
+    # do not want on the board:
+    #   - cancelled / walkover: no match will be played,
+    #   - a series already UNDERWAY, where map-1 markets go inactive as they
+    #     settle while later maps still quote. Live esports betting is a known
+    #     open gap (the live guard cannot see esports), so hiding these is the
+    #     conservative side of that gap rather than a new judgement.
+    #
+    # "inactive" is a rare, deliberate platform state -- 2,664 of ~148k market
+    # rows -- and only 10 fixtures app-wide currently pair one with a live
+    # market, so this is a narrow filter and not a broad mute. Counted before
+    # shipping precisely because "never block genuine matches" is a standing
+    # constraint here.
+    halted_fixture_ids = {
+        m.cs2_match_id for m in markets
+        if m.cs2_match_id and (m.status or "") == "inactive"
+    }
+
+    def _fixture_halted(m: Market) -> bool:
+        return bool(m.cs2_match_id) and m.cs2_match_id in halted_fixture_ids
+
     now_utc = datetime.datetime.now(datetime.timezone.utc)
 
     def _match_already_started(m: Market) -> bool:
@@ -446,6 +481,7 @@ def list_cs2_markets(session: Session = Depends(get_session)):
         if not _match_live_on_flashscore(m)
         if not _match_already_decided(m)
         and not _match_already_started(m)
+        and not _fixture_halted(m)
         and (m.status or "active") == "active"
         and not _market_stale(m)
         and not _match_looks_live_by_trading(m)
