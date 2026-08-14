@@ -176,6 +176,41 @@ def kelly_fraction(
     Recommended Bets list once caught (all 12 MLB weekly picks were untraded
     rows at the time this was found). Caller passes False when a source's
     snapshot has volume AND last_price both exactly 0."""
+    # A MODEL PROBABILITY OF EXACTLY 0 OR 1 IS NOT A PROBABILITY (2026-08-14).
+    #
+    # The season sims are Monte Carlo. When an outcome comes up in none of N
+    # runs the sim reports 0.0000 -- which means "below the resolution of this
+    # simulation", NOT "impossible". Nothing downstream knew the difference, so
+    # a sim that simply never rolled a given outcome produced a certainty the
+    # model cannot actually justify, and the edge computed off it is the market
+    # price itself.
+    #
+    # Found by artifact-scanning the top of the board 2026-08-14: 277 priced
+    # rows carried model_prob of exactly 0 or 1 --
+    #
+    #     cfb     141   conference_champion 28, quarterfinal 26, finalist 25
+    #     racing  122   drivers_champion 104, constructors_champion 18
+    #     lol      10   series_total          wnba 4  win_total
+    #
+    # The CFB rows settle it: this was scanned in mid-AUGUST, before a snap had
+    # been played, so no team's conference-title probability is genuinely zero.
+    #
+    # PREVENTIVE, NOT A LIVE BLEED: 0 of the 277 were staked when this was
+    # written, because a 0.0 model against any positive market price gives a
+    # NEGATIVE edge and kelly already refuses those. The trap is unsprung, not
+    # absent -- it springs the moment either (a) the 5 rows at model_prob 1.0
+    # meet a cheap enough market, or (b) the NO side is ever surfaced, where
+    # these rank at the TOP of the board by construction (8 of the top 25).
+    # Laying 97c to win 3c on a probability the sim cannot resolve is the worst
+    # risk/reward on the board, and it would look like its best edge.
+    #
+    # DELIBERATELY ONLY THE EXACT 0/1 CASE. A merely small probability (374 rows
+    # under 1%) can be perfectly real, and a blanket longshot floor was already
+    # measured and REJECTED once; FUTURES_MIN_MARKET_PRICE covers the price side.
+    # This refuses the values that are not probabilities at all, nothing more.
+    if model_prob is not None and (model_prob <= 0.0 or model_prob >= 1.0):
+        return None
+
     # IMPLAUSIBLE-EDGE GUARD (2026-08-03, after a real loss).
     #
     # A bet was recommended on Toby Martin at a market price of 0.05 while the
