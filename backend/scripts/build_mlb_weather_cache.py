@@ -34,7 +34,25 @@ from zoneinfo import ZoneInfo  # noqa: E402
 from app.clients.base import get_json  # noqa: E402
 from app.data.mlb_ballparks import BALLPARKS  # noqa: E402
 
-CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "mlb_weather_cache.json"
+# 2026-08-14: extended to carry HUMIDITY and SURFACE PRESSURE alongside
+# temperature and wind, so air density can be tested as a totals signal. Ball
+# carry depends on the density of the air it moves through, and density is a
+# function of all three -- temperature alone captures only part of it, and
+# humid air is LESS dense than dry air (water vapour is lighter than the
+# nitrogen/oxygen it displaces), which is the opposite of most people's
+# intuition and is exactly why it deserves a measurement rather than a guess.
+#
+# Both fields come back from the SAME free Open-Meteo archive call already
+# being made -- verified live before changing anything -- so this costs no new
+# data source and no extra requests beyond the 30 per-park fetches.
+#
+# WRITES TO A NEW PATH ON PURPOSE. mlb_weather_cache.json is what TEMP_SLOPE
+# and OUT_WIND_SLOPE were fitted against; regenerating it in place would rebase
+# the evidence for two live constants. It also could not work even if it were
+# safe: the resume check below skips any team whose games are all cached, so an
+# in-place run would skip all 30 and never add the new fields.
+CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "mlb_weather_density_cache.json"
+LEGACY_CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "mlb_weather_cache.json"
 SCHEDULE_CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "mlb_schedule_cache.json"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 START_DATE = "2021-01-01"
@@ -47,6 +65,7 @@ def _fetch_team_hourly(team: str) -> dict:
         f"{ARCHIVE_URL}?latitude={bp['lat']}&longitude={bp['lon']}"
         f"&start_date={START_DATE}&end_date={END_DATE}"
         "&hourly=temperature_2m,wind_speed_10m,wind_direction_10m"
+        ",relative_humidity_2m,surface_pressure"
         f"&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone={bp['tz'].replace('/', '%2F')}"
     )
     return get_json(url)
@@ -115,6 +134,8 @@ def main():
                 "temp_f": hourly["temperature_2m"][idx],
                 "wind_mph": hourly["wind_speed_10m"][idx],
                 "wind_dir": hourly["wind_direction_10m"][idx],
+                "rh_pct": hourly["relative_humidity_2m"][idx],
+                "pressure_hpa": hourly["surface_pressure"][idx],
             }
         CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         CACHE_PATH.write_text(json.dumps(cache, indent=None))
