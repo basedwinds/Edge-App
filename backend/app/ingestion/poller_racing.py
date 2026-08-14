@@ -76,6 +76,9 @@ def refresh_racing_markets():
             session.commit()
             log.info("racing poll: %d markets across %d events", len(rows), len(event_ids))
             reconcile_canonical_race_dates(session)
+            # AFTER the canonical pass, because this is the authoritative source
+            # and should have the last word on a NASCAR date.
+            reconcile_nascar_dates_from_feed(session)
         except Exception:
             log.exception("racing market persist failed -- skipping this cycle")
         finally:
@@ -213,6 +216,149 @@ def _match_espn_event_with_delta(scoreboard: list, edate: str) -> "tuple[str | N
 RACING_GRID_CACHE = "racing_grid_cache.json"
 
 
+def reconcile_nascar_dates_from_feed(session) -> int:
+    """Correct NASCAR start_times against NASCAR's own calendar.
+
+    THE BUG. espn_racing_schedule.resolve_race_date accepts a match on ONE shared
+    token and searches only the CUP calendar (every NASCAR RaceEvent stores
+    series="nascar"). ESPN names races by VENUE, Kalshi by SPONSOR, so a lower
+    series race sharing a venue with a Cup race that weekend inherits the CUP
+    race's date. Measured 2026-08-14 over all 34 stored NASCAR events, 10 were
+    wrong and every one was a Truck or Xfinity race wearing a Cup date:
+
+        Truck   Black's Tire 250   stored 08-15 23:00 -> real 08-14 23:30  (x4)
+        Truck   TSport 200         stored 08-08 06:00 -> real 07-25 00:00  (x3)
+        Xfinity Pennzoil 250       stored 08-09 02:00 -> real 07-25 20:00  (x3)
+
+    That is not cosmetic. The grid lookup picks the nearest ESPN event ACROSS
+    calendars, so a Cup date makes the Cup race an exact-day hit and the Truck
+    race a day away -- it would fetch and cache the CUP grid against a TRUCK
+    event. And refresh_racing_results matches by date within a slop window, so
+    TSport and Pennzoil sat 15 days outside it and could never settle.
+
+    WHY NASCAR'S CALENDAR AND NOT ESPN'S: it names races by SPONSOR, exactly as
+    the market feeds do, so the names line up directly instead of through a
+    venue-token guess. Cross-series ties and moves beyond _MAX_TIEBREAK_DAYS are
+    REFUSED, not guessed -- see nascar_feed.match_race.
+
+    Verified before wiring: 31 of 34 events matched uniquely, 0 ambiguous, and
+    all 7 Cup events held their correct 08-15 date rather than drifting to the
+    identically-named March race at Martinsville. The 3 non-matches are two
+    season-championship futures and one race whose feed name carries a sponsor
+    the market title omits; all three keep their existing date.
+
+    Idempotent -- events already agreeing are skipped.
+    """
+    from app.clients import nascar_feed
+    from app.db.models import RaceEvent
+    fixed = 0
+    try:
+        evs = session.query(RaceEvent).filter(
+            RaceEvent.series == "nascar", RaceEvent.result_json.is_(None)).all()
+    except Exception:
+        log.exception("nascar dates: query failed")
+        return 0
+    for e in evs:
+        if not e.name or not e.start_time:
+            continue
+        try:
+            m = nascar_feed.match_race(e.name, near=e.start_time)
+        except Exception:
+            log.exception("nascar dates: match failed for event %s", e.id)
+            continue
+        if not m:
+            continue
+        _series_key, _rid, rname, start = m
+        if start and e.start_time != start:
+            log.info("nascar dates: #%s %s -> %s (%s)", e.id, e.start_time, start, rname)
+            e.start_time = start
+            fixed += 1
+    if fixed:
+        session.commit()
+        log.info("nascar dates: corrected %d start times from the NASCAR calendar", fixed)
+    return fixed
+
+
+def _entrants_for_event(session, race_event_id) -> set[str]:
+    """The driver ids this event's markets are actually about."""
+    from app.db.models import Market
+    from app.models.baseline import racing_ratings
+    out = set()
+    for (team,) in session.query(Market.team).filter(
+            Market.race_event_id == race_event_id,
+            Market.market_type.in_(("race_winner", "top_n"))).distinct().all():
+        for series in ("nascar", "nascar_xfinity", "nascar_truck", "irl", "f1"):
+            d = racing_ratings.resolve_driver_id(series, team or "")
+            if d:
+                out.add(d)
+                break
+    return out
+
+
+def _grid_matches_entrants(session, race_event_id, grid: dict) -> bool:
+    """Does this grid describe THIS event's field?
+
+    THE FAILURE THIS EXISTS TO MAKE STRUCTURALLY IMPOSSIBLE. Cup, Xfinity and
+    Truck run the same venue on adjacent days, and every NASCAR RaceEvent stores
+    series="nascar", so a date-based lookup can hand one series' grid to another.
+    The comment in the loop below already warned that a wrong-but-present grid is
+    WORSE than none: the staking gate in racing_markets only asks whether a grid
+    exists, so a foreign grid LIFTS the gate while strength() still sees grid=None
+    for every real entrant -- the race goes back to being staked on the flat
+    pre-qualifying model, silently, which is exactly what the gate is for.
+
+    Found live 2026-08-14: the Truck race at Richmond had a cached grid whose
+    driver ids matched none of its 39 entrants, and it priced flat all week.
+
+    So this does not TRUST the series routing -- it VERIFIES the result. A grid is
+    accepted only if it covers most of the field the markets are about, which no
+    other series' grid can do. The threshold is 0.5 rather than something stricter
+    because a legitimate grid can miss a few entrants (unrated part-timers: 36 of
+    39 resolved on the Richmond race), while a foreign grid overlaps at ~0.
+    """
+    entrants = _entrants_for_event(session, race_event_id)
+    if not entrants or not grid:
+        return False
+    overlap = len(entrants & set(grid)) / len(entrants)
+    if overlap < 0.5:
+        log.warning("racing grids: REJECTED grid for event %s -- covers %.0f%% of its "
+                    "%d entrants, so it belongs to a different race/series",
+                    race_event_id, overlap * 100, len(entrants))
+        return False
+    return True
+
+
+def _nascar_feed_grid(race_event_id):
+    """Starting grid from NASCAR's own feed, keyed by the app's driver ids."""
+    from app.clients import nascar_feed
+    from app.db.models import RaceEvent
+    from app.models.baseline import racing_ratings
+    try:
+        session = SessionLocal()
+        try:
+            ev = session.get(RaceEvent, race_event_id)
+            if ev is None or not ev.name:
+                return None
+            m = nascar_feed.match_race(ev.name)
+            if not m:
+                return None
+            series_key, race_id, _rname, _start = m
+            raw = nascar_feed.fetch_grid(series_key, race_id)
+            if not raw:
+                return None
+            grid = {}
+            for name, pos in raw.items():
+                d = racing_ratings.resolve_driver_id(series_key, name)
+                if d:
+                    grid[d] = pos
+            return grid or None
+        finally:
+            session.close()
+    except Exception:
+        log.exception("nascar feed grid failed for event %s", race_event_id)
+        return None
+
+
 def refresh_racing_grids():
     """Cache the starting grid for races that are SOON but not yet run, so live
     pricing can use it. The grid is set at qualifying (hours before the race) and
@@ -296,6 +442,29 @@ def refresh_racing_grids():
             # from Saturday qualifying (Qual) -- see fetch_race_grid.
             espn_session = SPRINT_SESSION if is_sprint_event(ev_ticker) else RACE_SESSION
             g = fetch_race_grid(cand, eid, espn_session)
+            if not g:
+                # ESPN PUBLISHES NO FIELD FOR MANY LOWER-SERIES RACES. Measured
+                # 2026-08-14 on the Truck race at Richmond, 90 minutes before the
+                # green flag: scoreboard 0 competitors, core event a single
+                # competition with no type, fetch_race_grid None -- while NASCAR's
+                # own feed had the full 39-car qualifying result. Over the four
+                # preceding Truck races ESPN missed the grid entirely on one and
+                # was short by two on another.
+                #
+                # Trusted only because it was cross-checked, not because it is
+                # official: on the three 2026 Truck races where BOTH sources
+                # published a field every position agreed, 104 of 104.
+                g = _nascar_feed_grid(rid)
+            # VERIFIED, NOT TRUSTED. Applies to the ESPN grid as much as the
+            # NASCAR one -- the wrong grid found cached on the Richmond Truck
+            # race came through the ESPN path.
+            if g:
+                vs = SessionLocal()
+                try:
+                    if not _grid_matches_entrants(vs, rid, g):
+                        g = None
+                finally:
+                    vs.close()
             if g:
                 grids[str(rid)] = g
         path = Path(settings.data_dir) / RACING_GRID_CACHE
