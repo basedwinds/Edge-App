@@ -180,12 +180,30 @@ def _pairwise(ids, order, ratings, k):
 def _compute_series(series: str) -> dict:
     path = _DATA_DIR / f"racing_{series}.json"
     if not path.exists():
-        return {"drivers": {}, "constructors": {}, "quali": {}, "current_constructor": {}, "name_to_id": {}, "id_to_name": {}}
+        return {"drivers": {}, "constructors": {}, "quali": {}, "starts": {},
+                "current_constructor": {}, "name_to_id": {}, "id_to_name": {}}
     races = list(json.loads(path.read_text(encoding="utf-8")).values())
     races.sort(key=lambda r: (r["date"] or "", r["id"]))
 
     drv: dict[str, float] = {}
     con: dict[str, float] = {}
+    # RACE STARTS PER DRIVER. Nothing downstream could previously tell a rating
+    # built on 40 starts from one built on 1 -- the state carried ratings but no
+    # counts, so a driver sitting at BASE was indistinguishable from a genuinely
+    # average one. Found 2026-08-14: of 263 rated Truck drivers, 215 sit within
+    # 25 points of BASE and 33 are within 1 point of it, and 4 of the 7 staked
+    # bets on the Richmond race were on drivers at 1499.9 against a BASE of 1500.
+    #
+    # DELIBERATELY NOT A GATE, and that is the point. The equivalent CS2
+    # threshold was challenged on exactly this hunch and UPHELD by measurement --
+    # thin ratings turned out to be the BEST-calibrated bucket there (3 games:
+    # claimed .799, delivered .784; 50+: .843 vs .755), because a near-default
+    # rating rarely lets the model get confident. Racing may or may not behave
+    # the same: here the GRID term can carry a confident prediction on its own,
+    # regardless of how thin the driver rating is, which is a real mechanistic
+    # difference. This exposes the count so that question can be MEASURED rather
+    # than assumed; see scripts/check_racing_start_counts.py.
+    starts: dict[str, int] = {}
     quali: dict[str, float] = {}  # qualifying/pole Elo (trained on start_order)
     current_constructor: dict[str, str] = {}  # driver_id -> most recent constructor
     name_to_id: dict[str, str] = {}
@@ -207,6 +225,8 @@ def _compute_series(series: str) -> dict:
             id_to_name[r["driver_id"]] = r["driver"]
             if r.get("constructor"):
                 current_constructor[r["driver_id"]] = r["constructor"]  # chronological -> last wins
+        for d in field:
+            starts[d] = starts.get(d, 0) + 1
         d_rat = {d: drv.get(d, BASE) for d in field}
         order = {r["driver_id"]: r["order"] for r in results}
         drv.update(_pairwise(field, order, d_rat, K_DRIVER))
@@ -224,7 +244,7 @@ def _compute_series(series: str) -> dict:
             q_rat = {d: quali.get(d, BASE) for d in field}
             q_order = {r["driver_id"]: r["start_order"] for r in results}
             quali.update(_pairwise(field, q_order, q_rat, K_DRIVER))
-    return {"drivers": drv, "constructors": con, "quali": quali,
+    return {"drivers": drv, "constructors": con, "quali": quali, "starts": starts,
             "current_constructor": current_constructor,
             "name_to_id": name_to_id, "id_to_name": id_to_name}
 
