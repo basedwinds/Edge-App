@@ -137,6 +137,31 @@ def _game_is_final(bet: PlacedBet, game) -> bool:
     if bet.sport == "soccer":
         return game.result_ft is not None
     if bet.sport == "tennis":
+        # A WINNER WITH NO SCORE IS NOT A PLAYED MATCH -- leave it to the
+        # platform (2026-08-13, user-reported).
+        #
+        # Bernard Tomic v Andre Ilagan settled as a WIN on a real $10 bet with
+        # the note "winner Andre Ilagan (score n/a)". It was a walkover: the
+        # opponent withdrew and no tennis was played. ESPN still records an
+        # advancing player, so winner_key was set and this graded it.
+        #
+        # THE OBVIOUS FIX -- treat an empty score as a void -- IS WRONG, and the
+        # data says so. Of the 6 REAL bets on such fixtures, two settled as
+        # "from Kalshi market resolution (result=yes)": Kalshi genuinely PAID
+        # those. Voiding on an empty score would have wrongly cancelled two
+        # legitimate wins. An empty score is also not always a walkover -- it can
+        # simply be a scraper gap on a match that was played.
+        #
+        # So the rule is neither pay nor void: DEFER. The platform's own
+        # resolution is the authoritative path here (Kalshi result=yes/no,
+        # Polymarket 50/50 refund), and it already runs and already settled the
+        # sibling set markets on this very fixture as refunds. Withholding the
+        # ESPN grade lets that path decide instead of racing it.
+        #
+        # Retirements are exempt: a player retiring mid-match means the match WAS
+        # played and the score is real, so those grade normally.
+        if not (game.score or "").strip() and not getattr(game, "is_retirement", 0):
+            return False
         return game.winner_key is not None
     if bet.sport == "mma":
         return game.winner_id is not None
