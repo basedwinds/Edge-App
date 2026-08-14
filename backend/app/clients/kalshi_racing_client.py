@@ -28,6 +28,26 @@ SERIES_MAP = {
     "KXF1POLE": ("f1", "pole", None),
     "KXINDYCARRACE": ("irl", "race_winner", None),
     "KXINDYCARTOP3": ("irl", "top_n", 3),   # IndyCar podium
+    # Added 2026-08-14. The top_n rungs were wired at 3 and 10 but not 5, and
+    # pole was wired for F1 and NASCAR but not IndyCar -- so the engine was
+    # already pricing both market types for this series and simply had two
+    # gaps in its ladder. No new model: top_n runs through the same per-series
+    # attrition fitted for TOP3/TOP10, and pole through the same path as
+    # KXF1POLE/KXNASCARPOLE.
+    #
+    # Verified live before wiring, alongside the rungs already ingested so the
+    # comparison is like-for-like:
+    #     KXINDYCARPOLE   25 open,  8 two-sided, median spread 0.060
+    #     KXINDYCARTOP5   25 open, 21 two-sided, median spread 0.070
+    #     (KXINDYCARTOP3  50 open, 28 two-sided, 0.040 -- already wired)
+    #     (KXINDYCARTOP10 50 open, 30 two-sided, 0.190 -- already wired)
+    # TOP5 sits between its neighbours, which is the shape a real ladder has.
+    "KXINDYCARTOP5": ("irl", "top_n", 5),
+    "KXINDYCARPOLE": ("irl", "pole", None),
+    # KXINDYCARFASTLAP is live too (50 open) and deliberately NOT wired: no
+    # fastest-lap model exists for ANY series, and the racing result scraper
+    # captures finishing position and pole, not lap times. It would ingest as
+    # unpriceable inventory and could never settle.
     "KXINDYCARTOP10": ("irl", "top_n", 10),
     # IndyCar drivers' title. Priced by the standings-aware season sim, NOT the
     # per-race model -- see racing_championship. Kalshi lists no IndyCar
