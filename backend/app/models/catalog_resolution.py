@@ -125,3 +125,67 @@ def auto_resolve_flagged(session: Session, apply: bool = True) -> dict:
         session.commit()
         log.info("catalog auto-resolve: closed %d flagged entries", len(resolved))
     return {"resolved": resolved, "blocked": blocked, "unverifiable": unverifiable}
+
+
+# ---------------------------------------------------------------------------
+# Untriaged entries whose series is ALREADY being ingested.
+# ---------------------------------------------------------------------------
+#
+# auto_resolve_flagged above closes entries a human already FLAGGED to build.
+# This closes the ones nobody has looked at yet, and it is what stops the New
+# Markets queue growing without bound: 167 entries on the morning of 2026-08-13
+# and 259 by that evening, roughly 90 a day, with nothing ever removing one.
+#
+# Today's CFB win totals are the proof. The parser was fixed, 420 Polymarket
+# markets began ingesting and pricing, and all 75 catalog rows still sat in the
+# queue asking to be triaged. A queue that cannot go down is not a work list, it
+# is noise, and real finds hide in it.
+#
+# THIS CLOSES THE POLYMARKET GAP THIS MODULE'S OWN DOCSTRING DOCUMENTS AS
+# IMPOSSIBLE. That note is right about source_ticker -- a Polymarket ticker is a
+# conditionId and can never prefix-match an event slug. But the ingested Market
+# row ALSO stores source_event_id, which IS the event slug, and joins to the
+# catalog identifier exactly. All 69 entries this closed on its first run were
+# Polymarket, i.e. precisely the ones the ticker route cannot see.
+#
+# SAFE BY CONSTRUCTION: the evidence for closing an entry is the existence of
+# this app's own ingested Market rows for it, so it cannot close something
+# unbuilt. It never touches `dismissed`, so a human rejection stands, and it
+# records which market proved the call.
+#
+# Identifier equality ONLY -- never a title or fuzzy match. Closing an entry on
+# a similar-looking name is how a real find gets silently buried, which is the
+# failure mode behind both the catalog-blindness and stale-dismissal findings.
+def auto_close_ingested(session: Session, apply: bool = True) -> dict:
+    """Close untriaged catalog entries whose series already has live markets."""
+    from app.db.models import Market
+
+    by_event: dict[str, int] = {}
+    example: dict[str, str] = {}
+    for market_id, event_id, ticker in session.query(
+            Market.id, Market.source_event_id, Market.source_ticker).all():
+        if not event_id:
+            continue
+        by_event[event_id] = by_event.get(event_id, 0) + 1
+        example.setdefault(event_id, str(ticker or market_id))
+
+    open_entries = [e for e in session.query(CatalogEntry).all()
+                    if not e.dismissed and not e.disposition]
+    closed: list[str] = []
+    for entry in open_entries:
+        n = by_event.get(entry.identifier or "")
+        if not n:
+            continue
+        closed.append(f"{entry.identifier} ({entry.title})")
+        if apply:
+            entry.disposition = "built"
+            entry.note = (
+                f"AUTO-CLOSED: this app already ingests this series -- {n} live market rows "
+                f"carry the same platform identifier (e.g. {example.get(entry.identifier)}). "
+                f"Nothing left to triage."
+            )
+    if apply and closed:
+        session.commit()
+        log.info("catalog auto-close: closed %d untriaged entries already ingested", len(closed))
+    return {"closed": closed, "open_before": len(open_entries),
+            "open_after": len(open_entries) - len(closed)}

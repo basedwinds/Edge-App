@@ -251,10 +251,19 @@ def run_catalog_scan():
         # scan because that is when the catalog picture is freshest, and it is
         # DB-only (no self-HTTP -- see app/shutdown.py). Without it the backlog
         # rots: 8 of 48 entries were describing finished work by 2026-08-07.
-        from app.models.catalog_resolution import auto_resolve_flagged
+        from app.models.catalog_resolution import auto_close_ingested, auto_resolve_flagged
         summary = auto_resolve_flagged(session)
         if summary["resolved"]:
             log.info("catalog auto-resolve closed: %s", "; ".join(summary["resolved"]))
+        # And close the UNTRIAGED entries whose series is already ingesting.
+        # Without this the New Markets queue only grows -- 167 -> 259 in a single
+        # day on 2026-08-13, with today's 75 CFB win totals still queued while
+        # 420 of their markets were live. Same DB-only, no-self-HTTP contract as
+        # the call above.
+        closed = auto_close_ingested(session)
+        if closed["closed"]:
+            log.info("catalog auto-close: %d untriaged entries already ingested (%d -> %d open)",
+                     len(closed["closed"]), closed["open_before"], closed["open_after"])
     except Exception:
         log.exception("catalog auto-resolve failed")
     finally:
