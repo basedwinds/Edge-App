@@ -338,6 +338,32 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
         stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, sport="cfb", team=m.team)
+        # SAME GATE THE FUTURES BLOCK ALREADY APPLIES, and it belonged here just
+        # as much. A team whose rating was built almost entirely outside the FBS
+        # pool is measured on a different scale from the opponent it is priced
+        # against, so the elo_diff -- and every spread probability derived from
+        # it -- is not meaningful.
+        #
+        # It was wired for futures only, which is the smaller half of the
+        # exposure: futures stake $2 a leg, game markets stake $10. Found by
+        # auditing the top of the board by EDGE rather than by count, which is
+        # how this app is actually bet. NDSU (FBS connectivity 0.081) is rated
+        # 1850 -- level with TCU's 1852 -- because it earns that rating against
+        # FCS opposition, and it was carrying three of the highest edges on the
+        # entire board: spread +49.4pp, +42.1pp and +24.8pp, at $10 each.
+        # Sacramento State (0.097) added a fourth at +23.0pp.
+        #
+        # For scale on how wrong the derived line gets: TCU 1852.6 vs UNC 1452.3
+        # is a 400-point gap, which MARGIN_SLOPE turns into an expected margin of
+        # ~34 points and P(cover 7.5) = 0.92. The market has that game near a
+        # touchdown.
+        #
+        # Zeroed AFTER sizing, deliberately, so the model number and its edge
+        # still surface for tracking -- same posture as the futures block and the
+        # player-stat projections. Shown, never staked.
+        if m.team is not None and elo_service_cfb.is_weakly_connected(m.team):
+            kelly = None
+            stake_dollars = None
 
         out.append(CfbMarketOut(
             id=m.id,
