@@ -169,10 +169,19 @@ def main() -> None:
 
     s = SessionLocal()
     try:
-        open_entries = [r for r in s.query(CatalogEntry).all()
-                        if not r.dismissed and not r.disposition]
+        # EVERY non-dismissed row, not just the undecided ones. A row that
+        # already carries a disposition but is still dismissed=0 is exactly the
+        # state that leaves the tab full while every entry has been ruled on --
+        # so it needs finishing, not skipping. Its existing verdict is KEPT: a
+        # prior call (an auto-close proving the series is ingested, or a human
+        # decision) is better evidence than these rules and must not be
+        # overwritten by a re-run.
+        open_entries = [r for r in s.query(CatalogEntry).all() if not r.dismissed]
         plan = []
         for r in open_entries:
+            if r.disposition and (r.note or "").strip():
+                plan.append((r, r.disposition, r.note))
+                continue
             got = rule(r)
             if got:
                 plan.append((r, got[0], got[1]))
@@ -193,11 +202,20 @@ def main() -> None:
             print("DRY RUN -- nothing written. Re-run with --apply.")
             return
         for r, d, n in plan:
+            # dismissed=1 IS WHAT CLEARS THE TAB -- /catalog/new filters on
+            # dismissed=0 alone and ignores disposition entirely, so a
+            # disposition without a dismissal leaves the row on screen looking
+            # untriaged. A `flagged` row stays fully visible either way: the
+            # Flagged backlog queries disposition=="flagged" independently of
+            # dismissed, which is the whole reason that second list exists.
+            r.dismissed = 1
             r.disposition = d
             r.note = n
         s.commit()
-        left = [r for r in s.query(CatalogEntry).all()
-                if not r.dismissed and not r.disposition]
+        # THE ENDPOINT'S predicate, not ours: /catalog/new filters on
+        # dismissed=0 alone. Reporting our own definition of "open" is how an
+        # earlier run claimed 259 -> 190 while the tab stayed at 259.
+        left = [r for r in s.query(CatalogEntry).all() if not r.dismissed]
         print(f"APPLIED. New Markets badge: {len(open_entries)} -> {len(left)}")
     finally:
         s.close()

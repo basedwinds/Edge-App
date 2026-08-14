@@ -19,9 +19,15 @@ today's CFB win totals.
 
 WHY THIS IS SAFE. It only ever marks entries whose markets DEMONSTRABLY exist in
 this app's own database -- it cannot dismiss something unbuilt, because the
-evidence for closing is the existence of the ingested row. It never touches
-`dismissed`, so a human decision to reject a series is untouched, and it writes
-a note saying which market proves it so the call is auditable.
+evidence for closing is the existence of the ingested row. It writes a note
+saying which market proves it, so the call is auditable and reversible.
+
+It DOES set dismissed=1, and must. /catalog/new filters on dismissed=0 alone and
+ignores disposition entirely, so writing a disposition by itself leaves the row
+sitting in New Markets looking untriaged -- which is exactly what happened on
+the first run here: it reported the badge going 259 -> 190 while the tab never
+moved off 259, because it counted its own predicate instead of the endpoint's.
+Setting both together is precisely what the UI's own dismiss button does.
 
 WHAT IT DELIBERATELY DOES NOT DO. It does not close an entry merely because a
 market exists with a *similar* name, and it does not guess from the title. Both
@@ -77,11 +83,22 @@ def main() -> None:
             return
 
         for r, mk in hits:
+            # dismissed=1 IS WHAT CLEARS THE TAB. /catalog/new returns every row
+            # with dismissed=0 regardless of disposition, so setting a
+            # disposition alone leaves the entry sitting in New Markets looking
+            # untriaged -- an earlier run of this script reported the badge
+            # going 259 -> 190 while the tab never moved off 259, because it
+            # counted its own predicate instead of the endpoint's. This mirrors
+            # exactly what the UI's own dismiss button does: dismissed +
+            # disposition + note, together.
+            r.dismissed = 1
             r.disposition = "built"
             r.note = NOTE.format(n=len(mk), ticker=(mk[0].source_ticker or mk[0].id))
         s.commit()
-        left = [r for r in s.query(CatalogEntry).all()
-                if not r.dismissed and not r.disposition]
+        # THE ENDPOINT'S predicate, not ours: /catalog/new filters on
+        # dismissed=0 alone. Reporting our own definition of "open" is how an
+        # earlier run claimed 259 -> 190 while the tab stayed at 259.
+        left = [r for r in s.query(CatalogEntry).all() if not r.dismissed]
         print(f"\nAPPLIED. New Markets badge: {len(open_entries)} -> {len(left)}")
     finally:
         s.close()
