@@ -177,9 +177,25 @@ def find_or_create_upcoming_match(
 ESPN_START_SOURCE = "espn"
 
 
-def update_match_estimated_start_time(match: SoccerMatch | None, estimated_start_time: str | None) -> None:
+def update_match_estimated_start_time(match: SoccerMatch | None, estimated_start_time: str | None,
+                                      source: str = "platform") -> None:
     """Keep estimated_start_time fresh from the platform while a match is
     upcoming -- but NEVER over an ESPN kickoff.
+
+    `source` NAMES THE VENUE ("kalshi" / "polymarket"), and the reason it is not
+    just "platform" any more is that the two venues put DIFFERENT THINGS in this
+    field and the shared tag made that undiagnosable:
+
+        kalshi      occurrence_datetime -- the market's occurrence point, a flat
+                    3h AFTER kickoff. Corrected at the client now, in
+                    kalshi_soccer_client._kickoff_from_occurrence.
+        polymarket  gameStartTime -- a real kickoff, correct as supplied.
+
+    So a blanket -3h applied HERE, in the shared writer, would have silently
+    moved every Polymarket fixture three hours EARLY while fixing Kalshi. The
+    correction has to live where the field's meaning is known. Tagging the venue
+    is what makes a future measurement able to tell them apart at all -- the
+    2026-08-14 audit below could only separate them by reading client source.
 
     THE BUG THIS CLOSES, user-reported 2026-08-09: two Brasileirao matches were
     recommended as 6pm fixtures while they were ~55 minutes into play. Every
@@ -198,13 +214,29 @@ def update_match_estimated_start_time(match: SoccerMatch | None, estimated_start
     flicker"); soccer had the same race and no guard.
 
     A platform's occurrence_datetime is an estimate it never revises. ESPN's is
-    an observation. So ESPN wins, and this defers rather than fighting it."""
+    an observation. So ESPN wins, and this defers rather than fighting it.
+
+    THAT DEFERRAL TREATED THE SYMPTOM, NOT THE CAUSE -- reopened 2026-08-14 by
+    the same user report, on Real Sociedad B vs Castellon: board said 21:30Z,
+    ESPN said 18:30Z, the match was at 46'. Note that the table above ALREADY
+    names the offset ("stored +3h late"), so the size of the error was known
+    here and simply never corrected; making ESPN win only hides it wherever
+    ESPN also has the fixture. Every fixture ESPN does NOT cover, or whose name
+    does not match (ESPN calls that club "Real Sociedad II", the market calls it
+    "Real Sociedad B"), kept the raw +3h value and stayed recommended while
+    being played.
+
+    Re-measured across 2026-08-13..16, matched BY TEAM NAME against ESPN:
+    espn-sourced 125/125 at +0.00h, platform-sourced 16/17 at exactly +3.00h.
+    Eight fixtures were live-but-listed-as-upcoming at the moment of the report,
+    two of them already full time. Fixed at the Kalshi client; this function now
+    receives an already-correct kickoff."""
     if match is None or match.result_ft is not None or not estimated_start_time:
         return
     if match.start_time_source == ESPN_START_SOURCE:
         return
     match.estimated_start_time = estimated_start_time
-    match.start_time_source = "platform"
+    match.start_time_source = source
 
 
 def _upsert_snapshot(session: Session, market: Market, last_price: float | None, volume: float | None,

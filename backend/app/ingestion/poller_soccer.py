@@ -485,7 +485,8 @@ def refresh_kalshi_soccer_markets():
                     session, first["division"], first["home_team"], first["away_team"],
                     start_day,
                 )
-                market_catalog_soccer.update_match_estimated_start_time(match, first.get("estimated_start_time"))
+                market_catalog_soccer.update_match_estimated_start_time(
+                    match, first.get("estimated_start_time"), source="kalshi")
                 match_id = match.id if match else None
                 match_id_by_event[event_ticker] = match_id
                 suffix_key = kalshi_match_suffix(event_ticker)
@@ -580,7 +581,8 @@ def refresh_polymarket_soccer_markets():
                 match = market_catalog_soccer.find_or_create_upcoming_match(
                     session, first["division"], first["home_team"], first["away_team"], first.get("match_date"),
                 )
-                market_catalog_soccer.update_match_estimated_start_time(match, first.get("estimated_start_time"))
+                market_catalog_soccer.update_match_estimated_start_time(
+                    match, first.get("estimated_start_time"), source="polymarket")
                 match_id_by_event[event_slug] = match.id if match else None
 
             matched = sum(1 for v in match_id_by_event.values() if v is not None)

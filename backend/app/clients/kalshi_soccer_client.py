@@ -27,6 +27,7 @@ kalshi_client.py's own get_spread_markets/get_total_markets docstrings):
   - TOTAL: one event per match ("...: Total Goals"), one market per rung
     (confirmed: 0.5 through 5.5 goals, 6 rungs), yes_sub_title "Over X.5
     goals scored", team-less (game-level, not per-team)."""
+import datetime
 import re
 import time
 
@@ -406,6 +407,57 @@ def _to_float(v):
         return None
 
 
+# Kalshi's soccer occurrence_datetime is NOT the kickoff. It is the point the
+# market stops being about a live event, which for soccer sits a flat 3 hours
+# after the first whistle -- 90 minutes of play, half time, stoppage and the
+# post-match settlement window. Assigning it straight to estimated_start_time
+# put every Kalshi-priced fixture 3 hours in the future, so a match already at
+# half time still read as "upcoming" and stayed on the recommended board.
+#
+# MEASURED 2026-08-14, not assumed. Every soccer fixture stored for 2026-08-13
+# to 08-16 was matched BY TEAM NAME against ESPN's real kickoff for the same
+# league:
+#
+#     start_time_source   n        offset vs ESPN
+#     espn              125/125    +0.00h   (control: that path is correct)
+#     platform           16/17     +3.00h   (this defect, a clean constant)
+#                         1/17    +27.00h   (+3h plus a day: a reschedule whose
+#                                            occurrence was never revised)
+#
+# A first pass matched fixtures by NEAREST KICKOFF in the same league instead of
+# by team, and reported a scattered +0.5/+0.75/+1.0/+2.25h spread that made this
+# look like noise rather than a constant -- fixtures with no ESPN counterpart
+# glom onto a neighbouring match and manufacture a fake offset. The ESPN control
+# row is what proves the join sound: 125 of 125 at exactly zero.
+#
+# THE CORRECTION BELONGS HERE, NOT IN THE SHARED WRITER. Polymarket's soccer
+# client fills the same estimated_start_time field from gameStartTime, which is
+# a REAL kickoff, and both venues are tagged "platform" downstream -- so a blanket
+# -3h in market_catalog_soccer would have silently moved every Polymarket fixture
+# 3 hours early. This is the only place that knows the value is an occurrence.
+OCCURRENCE_TO_KICKOFF_HOURS = 3
+
+
+def _kickoff_from_occurrence(occurrence: str | None) -> str | None:
+    """Real kickoff from Kalshi's occurrence_datetime, or None if unparseable.
+
+    Returns None rather than the raw value on a parse failure: a MISSING start
+    time degrades to match_date and lets the ESPN poller fill it in, whereas a
+    3-hours-wrong one actively recommends matches that are already being played.
+    """
+    if not occurrence:
+        return None
+    try:
+        t = datetime.datetime.strptime(str(occurrence), "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        try:
+            t = datetime.datetime.strptime(str(occurrence), "%Y-%m-%dT%H:%MZ")
+        except (TypeError, ValueError):
+            return None
+    t -= datetime.timedelta(hours=OCCURRENCE_TO_KICKOFF_HOURS)
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 _TITLE_SUFFIX_RE = re.compile(
     r"\s+Winner\?$|:\s*Spread$|:\s*Total Goals$"
     r"|:\s*First Half Winner$|:\s*First Half Spread$|:\s*First Half Total$|:\s*First Half BTTS$"
@@ -471,7 +523,7 @@ def get_moneyline_markets() -> list[dict]:
                     "ticker": m["ticker"],
                     "side": side,
                     "team": team,
-                    "estimated_start_time": m.get("occurrence_datetime"),
+                    "estimated_start_time": _kickoff_from_occurrence(m.get("occurrence_datetime")),
                     "yes_bid": _to_float(m.get("yes_bid_dollars")),
                     "yes_ask": _to_float(m.get("yes_ask_dollars")),
                     "last_price": _to_float(m.get("last_price_dollars")),
@@ -1324,7 +1376,7 @@ def _cup_row(cup: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **ext
         "home_team": home,
         "away_team": away,
         "ticker": m["ticker"],
-        "estimated_start_time": m.get("occurrence_datetime"),
+        "estimated_start_time": _kickoff_from_occurrence(m.get("occurrence_datetime")),
         "yes_bid": _to_float(m.get("yes_bid_dollars")),
         "yes_ask": _to_float(m.get("yes_ask_dollars")),
         "last_price": _to_float(m.get("last_price_dollars")),
@@ -1485,7 +1537,7 @@ def _leagues_cup_row(ev: dict, m: dict, home: str, away: str, **extra) -> dict:
         "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
         "competition": "leagues_cup", "competition_name": LEAGUES_CUP["name"],
         "home_team": home, "away_team": away,
-        "ticker": m["ticker"], "estimated_start_time": m.get("occurrence_datetime"),
+        "ticker": m["ticker"], "estimated_start_time": _kickoff_from_occurrence(m.get("occurrence_datetime")),
         "yes_bid": _to_float(m.get("yes_bid_dollars")), "yes_ask": _to_float(m.get("yes_ask_dollars")),
         "last_price": _to_float(m.get("last_price_dollars")), "volume": _to_float(m.get("volume_fp")),
         "status": m.get("status"),
@@ -1607,7 +1659,7 @@ def _national_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str,
         "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
         "competition": comp, "competition_name": cfg["name"],
         "home_team": home, "away_team": away,
-        "ticker": m["ticker"], "estimated_start_time": m.get("occurrence_datetime"),
+        "ticker": m["ticker"], "estimated_start_time": _kickoff_from_occurrence(m.get("occurrence_datetime")),
         "yes_bid": _to_float(m.get("yes_bid_dollars")), "yes_ask": _to_float(m.get("yes_ask_dollars")),
         "last_price": _to_float(m.get("last_price_dollars")), "volume": _to_float(m.get("volume_fp")),
         "status": m.get("status"),
@@ -1709,7 +1761,7 @@ def _uefa_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **e
         "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
         "competition": comp, "competition_name": cfg["name"],
         "home_team": home, "away_team": away,
-        "ticker": m["ticker"], "estimated_start_time": m.get("occurrence_datetime"),
+        "ticker": m["ticker"], "estimated_start_time": _kickoff_from_occurrence(m.get("occurrence_datetime")),
         "yes_bid": _to_float(m.get("yes_bid_dollars")), "yes_ask": _to_float(m.get("yes_ask_dollars")),
         "last_price": _to_float(m.get("last_price_dollars")), "volume": _to_float(m.get("volume_fp")),
         "status": m.get("status"),
