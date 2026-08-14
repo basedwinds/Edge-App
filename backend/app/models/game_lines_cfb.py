@@ -12,6 +12,40 @@ routine and blowouts are ordinary -- so a given Elo gap converts to many more
 points, and the outcome scatters much further around it. Pricing CFB with NFL's
 numbers would have called every game far more certain than it is.
 
+REFITTED 2026-08-14 -- THE ORIGINAL FIT USED THE WRONG SPORT'S ELO.
+
+calibrate_cfb_lines.py imported `app.models.baseline.elo`, the NFL module, so
+the replay ran K=20 with 1/3 season regression while production prices off
+elo_service_cfb, which is elo_cfb: K=100 with none. Over the same 4,836 games
+those scales give elo_diff sd 127.3 and 229.8 -- a 1.8x difference -- so a slope
+fitted on the narrow one overstated every CFB margin by ~65% where it was used.
+
+This is the SAME failure the note below describes and claims to have fixed. It
+was only half-fixed: the replay moved off a hand-rolled Elo onto "the app's own
+primitives", but reached for the wrong sport's. The tell was that the numbers
+below no longer reproduced -- re-running the replay with elo.py returns 0.08569
+to the digit, and with elo_cfb returns 0.05194.
+
+What it cost, measured on the live board: TCU vs UNC sits ~400 Elo apart, where
+the old constants centred the margin on 34.3 points against a real bucket
+average of ~25 and put P(cover 7.5) at 0.919. TCU spreads were the single
+largest edges on the whole board.
+
+CORRECTED, leave-one-season-out on the elo_cfb scale (folds 0.04586-0.04784,
+held-out residual centred within 0.7 points):
+
+                     old (NFL scale)   new (CFB scale)
+    MARGIN_SLOPE     0.08569           0.04698
+    HOME_FIELD_ADV   80.0              140.0
+    MARGIN_STD       19.16             19.15
+
+MARGIN_STD barely moves because the SPREAD of outcomes was always measured
+against real margins; it was the CENTRE that was wrong.
+
+The old numbers below are kept verbatim as the record of what was believed and
+why -- the out-of-sample table in particular looked entirely healthy, which is
+the point: a stable fit on the wrong ruler is still stable.
+
 HOW THE NUMBERS WERE FITTED (scripts/calibrate_cfb_lines.py, kept):
 data/cfb_game_cache.json, 4,836 games over 2021-2025, all with final scores,
 replayed chronologically with the same Elo update elo_service_cfb uses so every
@@ -59,12 +93,31 @@ closing line.
 """
 import math
 
-# Points of margin per Elo point of pre-game difference. See module docstring.
-MARGIN_SLOPE = 0.08569
-# Standard deviation of actual margin around that prediction.
-MARGIN_STD = 19.16
-# Elo points of home-field advantage, swept for the least-biased residual.
-HOME_FIELD_ADV = 80.0
+# REFITTED 2026-08-14 on the CORRECT Elo scale. The previous values
+# (MARGIN_SLOPE 0.08569, HOME_FIELD_ADV 80.0) were fitted by a replay that
+# imported app.models.baseline.elo -- the NFL module, K=20 with 1/3 season
+# regression -- while production prices off elo_service_cfb, which is elo_cfb:
+# K=100 with none. On the same 4,836 games those two scales give elo_diff sd
+# 127.3 and 229.8 respectively, so the slope was ~65% too steep everywhere it
+# was used. Proof: re-running the replay with elo.py reproduces 0.08569 to the
+# digit, and with elo_cfb gives 0.05194.
+#
+# Points of margin per Elo point of pre-game difference.
+MARGIN_SLOPE = 0.04698
+# Standard deviation of actual margin around that prediction. Barely moved
+# (19.16 -> 19.15) because the SPREAD of outcomes was always measured on real
+# margins; it was the CENTRE that was wrong.
+MARGIN_STD = 19.15
+# Elo points of home-field advantage for the MARGIN model, re-swept on the
+# correct scale for the least-biased residual: 140 leaves -0.23 points against
+# +1.87 at the old 80 and +5.77 at zero. Residual sd is flat across the sweep
+# (19.15-19.22), so this is chosen on bias, exactly as the original was.
+#
+# This is the MARGIN model's home-field constant and is deliberately NOT
+# elo_cfb.HOME_FIELD_ADV (80), which is fitted for WIN PROBABILITY and stays
+# where it is -- the same distinction the original docstring drew against
+# elo.py's 55, just now measured on the right ruler.
+HOME_FIELD_ADV = 140.0
 
 
 def _norm_cdf(x: float, mu: float, sigma: float) -> float:

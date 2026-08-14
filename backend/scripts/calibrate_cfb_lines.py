@@ -17,7 +17,19 @@ Reports out-of-sample by season -- fit on prior seasons, score the held-out one
 import json
 import statistics
 
-from app.models.baseline.elo import EloState, effective_home_field_adv, update_ratings
+# elo_cfb, NOT elo. This import was `app.models.baseline.elo` -- the NFL module --
+# and that single wrong word invalidated every constant this script produced.
+# elo.py runs K=20 with 1/3 season regression; elo_cfb.py runs K=100 with none,
+# which is a completely different rating scale (elo_diff sd 127 against 230 on
+# the same 4,836 games). The slope fitted on the narrow scale was then applied at
+# runtime to the wide one, overstating every CFB margin by ~65%.
+#
+# That is the SAME failure the comment below already describes and claims to have
+# fixed. It was half-fixed: the replay moved off a hand-rolled Elo and onto "the
+# app's own primitives", but reached for the wrong sport's primitives. Proof, by
+# re-running both replays on identical data: the elo.py replay reproduces the
+# shipped 0.08569 exactly, and the elo_cfb replay gives 0.05194.
+from app.models.baseline.elo_cfb import EloState, effective_home_field_adv, update_ratings
 
 CACHE = "data/cfb_game_cache.json"
 
