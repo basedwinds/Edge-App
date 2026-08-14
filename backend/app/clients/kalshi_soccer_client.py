@@ -84,6 +84,21 @@ MONEYLINE_SERIES = {
     "NOR1": "KXELITESERIENGAME",
     "DNK1": "KXDENSUPERLIGAGAME",
     "CHN1": "KXCHNSLGAME",
+    # ---- 2026-08-14, added on the rule the comment above set ----------------
+    # F2 was deliberately left out on 2026-08-08 because its season had not
+    # started and "a ticker that 404s is indistinguishable from an off-season
+    # one, so they get added when they are observed live". It is now observed
+    # live: KXLIGUE2GAME 42 open, all 42 two-sided, median spread 0.020.
+    "F2": "KXLIGUE2GAME",
+    # Saudi is a NEW league here, not a re-check. Rated since the ESPN wave-2
+    # build; its settlement slug (ksa.1) was added to espn_soccer_client at the
+    # same time as this entry, since without it the bets could never settle.
+    # KXSAUDIPLGAME 33 open, all two-sided, median spread 0.030.
+    "KSA1": "KXSAUDIPLGAME",
+    # STILL ABSENT, re-checked the same day and deliberately not guessed at:
+    # I2 (KXSERIEBGAME 3 open, median spread 0.110 -- listed but far too wide),
+    # E3 (KXEFLL2GAME 0 open), G1 (no series found under KXGREEKSL/KXGREECESL/
+    # KXSUPERLEAGUE). All three stay rated-but-unwired.
 }
 
 SPREAD_SERIES = {
@@ -101,8 +116,8 @@ SPREAD_SERIES = {
     "ARG1": "KXARGPREMDIVSPREAD",
     "MEX1": "KXLIGAMXSPREAD",
     # Only the four with live spread inventory at the 2026-08-08 check. E2/SP2/T1
-    # list GAME markets but ZERO spread and ZERO total, so they are absent here
-    # rather than wired hopefully -- an entry that never resolves is a silent
+    # listed GAME markets but ZERO spread and ZERO total then, so they were absent
+    # here rather than wired hopefully -- an entry that never resolves is a silent
     # per-pass fetch that always returns nothing.
     "B1": "KXBELGIANPLSPREAD",
     "D2": "KXBUNDESLIGA2SPREAD",
@@ -111,6 +126,26 @@ SPREAD_SERIES = {
     "NOR1": "KXELITESERIENSPREAD",
     "DNK1": "KXDENSUPERLIGASPREAD",
     "CHN1": "KXCHNSLSPREAD",
+    # ---- 2026-08-14: E2/SP2/T1 re-checked and now HAVE inventory ------------
+    # The note above is why they were missing, not a permanent verdict. Their
+    # seasons have started and all three now quote two-sided:
+    #   E2  KXEFLL1SPREAD    48 open, 48 quoted, median 0.040
+    #   SP2 KXLALIGA2SPREAD   4 open,  4 quoted, median 0.015
+    #   T1  KXSUPERLIGSPREAD  4 open,  4 quoted, median 0.010
+    # plus the two new leagues wired in MONEYLINE_SERIES above:
+    #   F2  KXLIGUE2SPREAD   36 open, 36 quoted, median 0.010
+    #   KSA1 KXSAUDIPLSPREAD 24 open, 24 quoted, median 0.020
+    #
+    # A CAUTION worth recording: an earlier read the same afternoon put
+    # KXEFLL1SPREAD at 0.110 and KXLIGUE2TOTAL at 0.090 over a comparable
+    # sample, and the book tightened as kickoff approached. One spread snapshot
+    # is not a stable property of a series -- these were wired on the later,
+    # fuller read, and a series that looks wide hours out may not be.
+    "E2": "KXEFLL1SPREAD",
+    "SP2": "KXLALIGA2SPREAD",
+    "T1": "KXSUPERLIGSPREAD",
+    "F2": "KXLIGUE2SPREAD",
+    "KSA1": "KXSAUDIPLSPREAD",
 }
 
 LEAGUE_WINNER_SERIES = {
@@ -190,6 +225,18 @@ TOTAL_SERIES = {
     "NOR1": "KXELITESERIENTOTAL",
     "DNK1": "KXDENSUPERLIGATOTAL",
     "CHN1": "KXCHNSLTOTAL",
+    # 2026-08-14, same live re-check as SPREAD_SERIES above (see that comment
+    # for the "one snapshot is not a stable property" caution):
+    #   E2  KXEFLL1TOTAL     72 open, 72 quoted, median 0.040
+    #   SP2 KXLALIGA2TOTAL    6 open,  6 quoted, median 0.020
+    #   T1  KXSUPERLIGTOTAL   6 open,  6 quoted, median 0.010
+    #   F2  KXLIGUE2TOTAL    54 open, 54 quoted, median 0.020
+    #   KSA1 KXSAUDIPLTOTAL  36 open, 36 quoted, median 0.020
+    "E2": "KXEFLL1TOTAL",
+    "SP2": "KXLALIGA2TOTAL",
+    "T1": "KXSUPERLIGTOTAL",
+    "F2": "KXLIGUE2TOTAL",
+    "KSA1": "KXSAUDIPLTOTAL",
 }
 
 # BTTS (Both Teams To Score) confirmed live 2026-07-19 with real open

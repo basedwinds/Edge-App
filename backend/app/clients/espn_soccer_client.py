@@ -96,6 +96,16 @@ LEAGUE_CODES = {
     # at this step (no feed / zero events), which is why they are absent from
     # football_data_client.EXTRA_DIVISIONS too.
     "SWE1": "swe.1", "NOR1": "nor.1", "DNK1": "den.1", "CHN1": "chn.1",
+    # Saudi Pro League, 2026-08-14. Its RATINGS have been in the pool since the
+    # ESPN wave-2 build (scripts/build_espn_soccer_league_caches.py maps
+    # KSA1 -> ksa.1), but that build only sourced history -- it never added a
+    # settlement slug here, because those 15 leagues were admitted to support
+    # UEFA/cup pricing rather than to trade in their own right. Wiring the
+    # KXSAUDIPL* market series without this entry would produce bets that can
+    # never settle, which is exactly why Poland and Switzerland were refused at
+    # this same step. Verified live before adding: ksa.1 returned 10 events in
+    # the Aug 4-24 window.
+    "KSA1": "ksa.1",
     # Leagues Cup, 2026-08-08. Present so its bets can SETTLE -- this dict is
     # what refresh_soccer_results iterates, so a competition missing from it
     # produces markets that stay pending forever. The slug is "concacaf.
