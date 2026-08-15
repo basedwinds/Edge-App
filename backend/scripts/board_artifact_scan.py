@@ -251,6 +251,60 @@ def check_grids() -> None:
 
 
 # --------------------------------------------- 3. DEGENERATE MODEL OUTPUT
+def check_soccer_xg_freshness() -> None:
+    """Is the Understat xG cache still keeping up with played fixtures?
+
+    THE FAILURE MODE IS SILENCE (#203). The soccer ratings blend xG into the
+    attack/defence residual for E0/SP1/D1/I1/F1. If the weekly refresh stops --
+    the endpoint changes, the header requirement moves, a promoted club is
+    missing from the alias map -- nothing errors. Every new fixture just quietly
+    falls back to pure goals, which is CORRECT per-fixture behaviour and exactly
+    why nobody would notice the model getting worse.
+
+    So the check is coverage over a recent window, not liveness of a job.
+    A promoted club missing from the alias map produces the same symptom as a
+    dead refresh, and both matter.
+    """
+    try:
+        from app.ingestion import soccer_data
+        from app.models.baseline import soccer_xg
+    except Exception as exc:
+        record("WARN", "soccer xG freshness", f"could not import ({type(exc).__name__})")
+        return
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=30)).date().isoformat()
+    recent = have = 0
+    missing_teams = Counter()
+    for m in soccer_data.load_matches():
+        lg = m.get("league")
+        if lg not in soccer_xg.XG_LEAGUES:
+            continue
+        d = (m.get("match_date") or "")[:10]
+        if not d or d < cutoff:
+            continue
+        if m.get("home_goals_ft") is None:
+            continue           # not played yet -- xG cannot exist
+        recent += 1
+        if soccer_xg.lookup(lg, d, m.get("home_team"), m.get("away_team")):
+            have += 1
+        else:
+            missing_teams[f"{lg}:{m.get('home_team')}"] += 1
+    if not recent:
+        record("PASS", "soccer xG freshness", "no big-5 fixtures played in the last 30d (off-season)")
+        return
+    pct = 100 * have // recent
+    if pct >= 90:
+        record("PASS", "soccer xG freshness", f"{have}/{recent} recent big-5 fixtures have xG ({pct}%)")
+    elif pct >= 50:
+        record("WARN", "soccer xG freshness",
+               f"only {have}/{recent} recent fixtures have xG ({pct}%) -- refresh may be "
+               f"lagging or a club is unmapped; top gaps {missing_teams.most_common(3)}")
+    else:
+        record("FAIL", "soccer xG freshness",
+               f"{have}/{recent} recent fixtures have xG ({pct}%) -- the blend has "
+               f"effectively stopped; top gaps {missing_teams.most_common(3)}")
+
+
+
 def check_degenerate(board: list[dict]) -> None:
     """Probabilities of exactly 0/1, and fields the model cannot separate."""
     hard = [r for r in board if r.get("model_prob") is not None
@@ -383,6 +437,7 @@ def main() -> int:
         check_start_times()
         check_grids()
         check_degenerate(board)
+        check_soccer_xg_freshness()
         check_books(board)
         check_default_ratings(board)
 

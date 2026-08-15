@@ -8,6 +8,7 @@ from app.db.database import SessionLocal
 from app.ingestion.catalog_scan import scan_catalog, wake_dormant_sports
 from app.ingestion.poller import run_full_refresh
 from app.ingestion.poller_soccer import refresh_mls_playoff_sim
+from app.ingestion import soccer_xg_refresh
 from app.models import observation_logger
 from app.ingestion.poller_nba import run_full_refresh_nba
 from app.ingestion.poller_mlb import run_full_refresh_mlb
@@ -293,6 +294,27 @@ def start():
     # MLS playoff Monte Carlo -- 10,000 sims + ~10 live ESPN calls per run, for
     # a league table that moves at most daily. Its own slow job precisely
     # because it used to ride the 5-minute soccer refresh and pinned a core.
+    # UNDERSTAT xG REFRESH (#203). The soccer ratings blend xG into the
+    # attack/defence residual for E0/SP1/D1/I1/F1 (w=0.50, see
+    # baseline/soccer_xg.py). Its cache was a one-off crawl, and ratings update
+    # after every match -- so WITHOUT this the blend degrades to pure goals for
+    # each new fixture and the improvement decays SILENTLY through a season.
+    # Silent decay is the reason this is automated; the gain itself is 0.30%
+    # logloss on 5 of 33 leagues.
+    #
+    # WEEKLY IS PLENTY. Understat publishes a season-long rate, not a live feed,
+    # and a refresh is five requests. It also rebuilds the alias map, which is
+    # the part that would rot quietly -- promoted clubs arrive each August with
+    # names the map has never seen, and an unmapped club falls back to pure
+    # goals for its whole season with no error anywhere.
+    scheduler.add_job(
+        soccer_xg_refresh.refresh,
+        "interval",
+        days=7,
+        id="soccer_xg_refresh",
+        next_run_time=base_tick + timedelta(seconds=9 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
     scheduler.add_job(
         refresh_mls_playoff_sim,
         "interval",
