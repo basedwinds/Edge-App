@@ -66,6 +66,17 @@ figure that would have to change for the answer to change.
 | 2026-08 | Per-map Elo for CS2 | **REJECTED** | Brier 0.23748 vs 0.23368. Valorant and LoL KEPT per-map | — |
 | 2026-08 | Esports idle/roster decay | **REJECTED** | Only family with no season regression; CS2/Valorant null | — |
 
+## Tennis
+
+| Date | Hypothesis | Verdict | Decisive number | Script |
+|---|---|---|---|---|
+| 2026-08-15 | Tennis moneyline is mis-calibrated at the extremes | **CONFIRMED** | Near-perfect MIRROR: p=0.1-0.2 claimed 0.156 delivered **0.315** (+0.158), p=0.8-0.9 claimed 0.844 delivered **0.685** (−0.158). Both ends, equal magnitude = logistic too steep. Not a mix effect — WTA +0.154/−0.154 and ATP +0.173/−0.173 independently | `check_tennis_calibration.py` |
+| 2026-08-15 | A global temperature fixes it (reuse `calibration_temp`) | **REJECTED** | T=1.53 improves Brier (0.22789→0.22610) and logloss, but **ECE gets WORSE (0.0355→0.0394)**. Module rule needs BOTH. Deciles show why: the middle is already excellent (±0.015) and softening globally wrecks it (−0.050 to +0.047) to repair thin tails. ~19% of volume is in the bad tails; a global T trades the other 81% | `fit_tennis_temperature.py` |
+
+**Do not retry a global temperature on tennis.** Any fix must leave 0.2–0.8
+untouched. A tail-only parameter was NOT attempted: ~326 rows split across both
+ends is too thin to fit one without curve-fitting the noise that motivated it.
+
 ## MLB / soccer / other
 
 | Date | Hypothesis | Verdict | Decisive number | Script |
