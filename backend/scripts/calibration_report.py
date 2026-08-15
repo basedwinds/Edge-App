@@ -96,6 +96,57 @@ def worst_miss(dec):
     return worst
 
 
+def paired_complement_share(rows):
+    """Per (sport, market_type): what SHARE of rows are the arithmetic complement
+    of another row on the SAME event and line?
+
+    WHY THIS EXISTS. On 2026-08-15 I cited an over/under "mirror" as proof an MLB
+    totals bias was real -- over claimed 0.605 delivered 0.519, under claimed
+    0.438 delivered 0.562, opposite directions, apparently independent
+    confirmation. It was not. All 201 under rows sat on a (game, line) that also
+    had an over row, and all 201 had model probs summing to 1.000: the under is
+    `1 - over` on the same event and contributes nothing. That is the identical
+    artifact behind the #193 retraction (tennis p=0.1-0.2 and p=0.8-0.9 were the
+    same 124 matches logged twice) -- made a second time, which is why it is now
+    a check instead of a lesson.
+
+    A mirror is evidence only when the two sides are INDEPENDENT observations. For
+    a venue listing one-sided YES/NO contracts -- how Kalshi lists totals and team
+    totals, where the under IS the NO side of the same contract -- they never are,
+    and no amount of extra logging changes that.
+
+    Deliberately cheap and approximate: keys on (event id, line) and asks whether
+    two model probs sum to ~1. A genuine two-sided market whose sides happen to
+    agree can false-positive. It is a WARNING to check, never a filter."""
+    by_event = defaultdict(list)
+    for r in rows:
+        m = r._mapping
+        gid = next((m.get(c) for c in (
+            "mlb_game_id", "nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id",
+            "tennis_match_id", "soccer_match_id", "cs2_match_id", "lol_match_id",
+            "valorant_match_id", "cod_match_id", "mma_fight_id", "race_event_id",
+        ) if m.get(c)), None)
+        if gid is None or m.get("model_prob") is None:
+            continue
+        by_event[(m.get("sport"), m.get("market_type"), str(gid), m.get("line"))].append(m.get("model_prob"))
+
+    paired, total = defaultdict(int), defaultdict(int)
+    for (sp, mt, _g, _l), probs in by_event.items():
+        total[(sp, mt)] += len(probs)
+        found = False
+        for a in range(len(probs)):
+            for b in range(a + 1, len(probs)):
+                if abs(probs[a] + probs[b] - 1.0) < 0.02:
+                    found = True
+                    break
+            if found:
+                break
+        if found:
+            paired[(sp, mt)] += len(probs)
+    return {k: paired.get(k, 0) / v for k, v in total.items() if v}
+
+
+
 def main() -> int:
     min_cell = MIN_CELL
     if "--min-n" in sys.argv:
@@ -103,7 +154,7 @@ def main() -> int:
 
     s = SessionLocal()
     rows = s.execute(text("""
-        SELECT sport, market_type, model_prob, market_prob, edge, status
+        SELECT *
         FROM model_observations
         WHERE status IN ('won','lost') AND model_prob IS NOT NULL
     """)).fetchall()
@@ -113,8 +164,8 @@ def main() -> int:
     print("=" * 84)
 
     # ---------------- CONTROL ARM ----------------
-    ctrl = [(r[2], r[5] == "won") for r in rows
-            if r[4] is not None and abs(r[4]) < CONTROL_EDGE]
+    ctrl = [(r.model_prob, r.status == "won") for r in rows
+            if r.edge is not None and abs(r.edge) < CONTROL_EDGE]
     print(f"\nCONTROL ARM -- rows where model and market AGREE (|edge| < {CONTROL_EDGE:.0%})")
     print("  These MUST land near zero. If they do not, grading or prices are broken")
     print("  and nothing below can be trusted.")
@@ -132,9 +183,10 @@ def main() -> int:
 
     # ---------------- PER CELL ----------------
     cells = defaultdict(list)
-    for sp, mt, mp, _mk, _e, st in rows:
-        cells[(sp, mt)].append((mp, st == "won"))
+    for r in rows:
+        cells[(r.sport, r.market_type)].append((r.model_prob, r.status == "won"))
 
+    total_by_cell = {k: len(v) for k, v in cells.items()}
     print(f"\nPER SPORT x MARKET TYPE  (cells with n >= {min_cell})")
     print("  'mean gap' is a FOOTNOTE -- it is structurally 0 on symmetric markets")
     print("  and hides cancelling errors. The WORST DECILE MISS is the verdict.")
@@ -156,11 +208,26 @@ def main() -> int:
                 flagged.append((sp, mt, w, len(v)))
         print(f"{sp:9}{str(mt)[:24]:24}{len(v):>6}{claimed-actual:>+10.3f}   {desc}")
 
+    # ---------------- ARITHMETIC-MIRROR WARNING ----------------
+    share = paired_complement_share(rows)
+    flagged_pairs = [(k, v) for k, v in share.items()
+                     if v > 0.05 and total_by_cell.get(k, 0) >= min_cell]
+    print("")
+    print("ARITHMETIC MIRRORS -- rows that are `1 - other` on the SAME event")
+    print("  A two-sided 'confirmation' between such rows is NOT independent evidence.")
+    if flagged_pairs:
+        for (sp, mt), v in sorted(flagged_pairs, key=lambda x: -x[1]):
+            print(f"    {sp}/{mt}: {v:.0%} of rows have a complement partner")
+        print("  Do NOT cite an over/under or yes/no agreement in these cells as")
+        print("  corroboration -- it is forced. Judge them on ONE side plus outcomes.")
+    else:
+        print("  none above 5% in any reported cell")
+
     # ---------------- TOP EDGE DECILE ----------------
     print(f"\nTOP EDGE DECILE -- the only rows that actually get staked")
-    ranked = sorted([r for r in rows if r[4] is not None], key=lambda r: -abs(r[4]))
+    ranked = sorted([r for r in rows if r.edge is not None], key=lambda r: -abs(r.edge))
     top = ranked[:max(50, len(ranked) // 10)]
-    tv = [(r[2], r[5] == "won") for r in top]
+    tv = [(r.model_prob, r.status == "won") for r in top]
     if tv:
         c = sum(p for p, _ in tv) / len(tv)
         a = sum(1 for _, y in tv if y) / len(tv)
