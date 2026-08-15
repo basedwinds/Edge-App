@@ -264,8 +264,84 @@ def expected_total(home_team: str, temp_f: float | None = None, out_wind_mph: fl
     return total
 
 
+# RUN TOTALS ARE SKEWED COUNTS, NOT A NORMAL (#194, 2026-08-15).
+#
+# Found via calibration_report: `mlb/total` was one of five flagged cells, and
+# BOTH SIDES of the market missed in opposite directions -- which is what proves
+# it real rather than a one-sided logging artifact:
+#
+#     side=over   n=982  claimed 0.605  actual 0.519  gap +0.086
+#     side=under  n=201  claimed 0.438  actual 0.562  gap -0.124
+#
+# One directional fact: the model over-predicted scoring. NOT the stale mean --
+# LEAGUE_AVG_TOTAL 9.0486 against a real 2026 mean of 8.958 is 0.09 runs, worth
+# under 1pp at this sigma, while the live miss was 13-15pp.
+#
+# It is the SHAPE. Real regular-season totals, from statsapi:
+#
+#     2023 n=2433 mean 9.235 median 9.0 std 4.577 skew +0.636
+#     2024 n=2428 mean 8.782 median 8.0 std 4.312 skew +0.731
+#     2025 n=2429 mean 8.897 median 8.0 std 4.593 skew +0.823
+#     2026 n=1839 mean 8.958 median 8.0 std 4.533 skew +0.739
+#
+# The median sits a full run below the mean EVERY season. A right-skewed variable
+# has P(over ~mean) below 0.5; a symmetric Normal says exactly 0.5. Handed the
+# CORRECT mean, the Normal still overstated P(over) by +0.060 at 7.5 and +0.054
+# at 8.5 and 9.5 -- the lines that carry the volume.
+#
+# NEGATIVE BINOMIAL, NOT POISSON: variance ~20.2 against a mean ~9.0 is heavily
+# overdispersed, and Poisson forces variance == mean (std ~3.0 vs a real ~4.5).
+# NB has exactly the extra dispersion parameter that gap calls for and yields the
+# right skew as a consequence rather than an assumption.
+#
+# FITTED 2023-2025 (n=7,290), VALIDATED ON 2026 (n=1,838) which was never used to
+# fit. Both models given the test season's own mean, so this isolates shape:
+#
+#     line   actual   Normal (err)    NegBin (err)
+#      6.5    0.680   0.708 (+0.028)  0.676 (-0.004)
+#      7.5    0.567   0.627 (+0.060)  0.581 (+0.014)
+#      8.5    0.487   0.540 (+0.053)  0.488 (+0.001)
+#      9.5    0.397   0.452 (+0.054)  0.401 (+0.004)
+#     10.5    0.329   0.365 (+0.037)  0.323 (-0.006)
+#     11.5    0.259   0.285 (+0.026)  0.255 (-0.004)
+#   mean |err|         0.0430          0.0054      NegBin wins 6/6
+#
+# The Normal's errors are all POSITIVE (systematic); NegBin's are +-0.01 with
+# mixed sign (noise). See scripts/fit_mlb_total_distribution.py.
+#
+# TOTAL_STD is deliberately KEPT: it is still the honest residual spread and is
+# referenced by the module docstring and backtest ablations. It is simply no
+# longer what prices a total.
+TOTAL_NB_DISPERSION = 7.1376       # r, fitted 2023-2025 (n=7,290)
+TEAM_TOTAL_NB_DISPERSION = 3.5593  # r, team-level runs, same seasons (n=14,580)
+
+
+def _nb_sf(line: float, mean: float, r: float) -> float:
+    """P(X > line) for a negative-binomial count with this mean and dispersion.
+
+    Lines are half-integers, so there is no push and no continuity correction to
+    argue about: P(X > 8.5) is exactly P(X >= 9).
+
+    Falls back to the Normal if the mean is non-positive -- park/weather offsets
+    are small enough (well under a run) that this cannot trigger for real inputs,
+    but a NB is undefined at mean <= 0 and silently returning nonsense is worse
+    than returning the old answer."""
+    if mean <= 0.0 or r <= 0.0:
+        return 1.0 - _norm_cdf(line, mean, TOTAL_STD)
+    p = mean / (mean + r)
+    k_max = int(math.floor(line))
+    if k_max < 0:
+        return 1.0
+    base = -math.lgamma(r) + r * math.log1p(-p)
+    log_p = math.log(p)
+    cdf = 0.0
+    for k in range(k_max + 1):
+        cdf += math.exp(base + math.lgamma(k + r) - math.lgamma(k + 1) + k * log_p)
+    return min(1.0, max(0.0, 1.0 - cdf))
+
+
 def prob_over(line: float, home_team: str, temp_f: float | None = None, out_wind_mph: float | None = None) -> float:
-    return 1.0 - _norm_cdf(line, expected_total(home_team, temp_f, out_wind_mph), TOTAL_STD)
+    return _nb_sf(line, expected_total(home_team, temp_f, out_wind_mph), TOTAL_NB_DISPERSION)
 
 
 def expected_f5_margin(elo_diff: float) -> float:
@@ -310,4 +386,10 @@ def prob_team_over(line: float, home_team: str, temp_f: float | None = None, out
         mu += TEMP_SLOPE * (temp_f - LEAGUE_AVG_TEMP_F) / 2
     if out_wind_mph is not None:
         mu += OUT_WIND_SLOPE * out_wind_mph / 2
-    return 1.0 - _norm_cdf(line, mu, TEAM_TOTAL_STD)
+    # Same skew fix as prob_over, and team runs are MORE skewed than game
+    # totals, not less -- train skew +1.013 vs +0.739, because a single team's
+    # runs are bounded below by 0 with the same long upper tail. Validated on
+    # the same held-out 2026 season (n=3,676 team-games), NegBin winning all 5
+    # volume lines: mean |err| 0.0534 -> 0.0089. Normal errors again all
+    # POSITIVE (+0.031 to +0.072), NegBin's mixed-sign and inside +-0.013.
+    return _nb_sf(line, mu, TEAM_TOTAL_NB_DISPERSION)
