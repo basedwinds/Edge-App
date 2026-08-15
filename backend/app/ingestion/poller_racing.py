@@ -475,6 +475,24 @@ def refresh_racing_grids():
             except Exception:
                 existing = {}
         existing.update(grids)
+
+        # PURGE GRIDS THAT NO LONGER DESCRIBE THEIR EVENT. Verifying only at
+        # WRITE time left every grid cached BEFORE the check was added in place
+        # forever -- the board scanner found 5 such entries still covering ~8% of
+        # their events' entrants, the same defect that priced the Richmond Truck
+        # race flat all week. A stale wrong grid is worse than none: the staking
+        # gate only asks whether a grid EXISTS.
+        vs = SessionLocal()
+        try:
+            for rid in [k for k in existing]:
+                try:
+                    if not _grid_matches_entrants(vs, int(rid), existing[rid]):
+                        log.warning("racing grids: PURGING stale grid for event %s", rid)
+                        existing.pop(rid, None)
+                except Exception:
+                    pass
+        finally:
+            vs.close()
         path.write_text(json.dumps(existing))
         log.info("racing grids: cached %d race grids (%d events checked)", len(grids), len(want))
     except Exception:
