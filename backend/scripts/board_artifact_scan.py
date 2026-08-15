@@ -505,6 +505,92 @@ def check_default_ratings(board: list[dict]) -> None:
         record("PASS", "thin racing ratings", "no staked bet on a <5-start driver")
 
 
+
+def check_start_gate_coverage() -> None:
+    """Every sport's /markets payload must carry an ABSOLUTE start instant.
+
+    WHY THIS IS A CHECK AND NOT AN ASSUMPTION. The response cache serves a
+    payload past its TTL only because app/api/start_gate.py re-applies the
+    started-gate at serve time, and that gate can only see sports whose rows
+    expose an instant it can parse. A sport that stops emitting one does not
+    error -- it silently opts out of the safety gate while still being served
+    stale. That is the exact failure shape of the futures spread guard (wired to
+    3 of 13 routers) and the duplicate-listing cap (4 of 13, $4,180 double
+    staked): the helper existed, it just was not CALLED everywhere.
+
+    Checked against STAKED rows only. An unstaked row cannot be gated by
+    definition (there is no stake to clear), so counting it would let a sport
+    pass on rows the gate never touches."""
+    from app.api.start_gate import START_FIELDS
+
+    missing, covered = [], []
+    for sport in SPORTS:
+        path = f"/{sport}/markets" if sport else "/markets"
+        try:
+            rows = fetch(path)
+        except Exception as exc:
+            record("WARN", "start-gate coverage", f"{path} unreachable ({type(exc).__name__})")
+            continue
+        staked = [r for r in rows if isinstance(r, dict) and r.get("suggested_stake_dollars") is not None]
+        if not staked:
+            continue          # nothing to protect right now -- not a failure
+        with_field = [r for r in staked if any(f in r for f in START_FIELDS)]
+        # A field that is present but null on EVERY row is coverage on paper
+        # only -- the gate would never fire. Reported separately from absence.
+        resolvable = [r for r in with_field
+                      if any(r.get(f) for f in START_FIELDS)]
+        if not with_field:
+            missing.append(f"{path} ({len(staked)} staked, no start field)")
+        elif not resolvable:
+            missing.append(f"{path} ({len(staked)} staked, start field always null)")
+        else:
+            covered.append(f"{path.strip('/').split('/')[0] or 'nfl'} {len(resolvable)}/{len(staked)}")
+
+    if missing:
+        record("FAIL", "start-gate coverage",
+               f"{len(missing)} sport(s) served stale WITHOUT a re-checkable start: {missing}")
+    elif covered:
+        record("PASS", "start-gate coverage",
+               f"all {len(covered)} sports with staked rows expose a start instant ({', '.join(covered[:5])}...)")
+    else:
+        record("WARN", "start-gate coverage", "no staked rows anywhere -- nothing to verify")
+
+
+def check_cache_freshness() -> None:
+    """Is the warm pass still keeping up with TTL + STALE_SERVE_SECONDS?
+
+    The banner this whole mechanism exists to kill came from a warm pass (290s)
+    that had silently outgrown the TTL (180s) as sports and model layers were
+    added. It had drifted once before -- 61.7s at sizing, 548s by the time #159
+    caught it. A number nobody measures is a number that rots, so it is measured
+    here rather than trusted.
+
+    Uses /health's report of the last pass rather than re-running one: timing a
+    pass from this script would itself perturb the thing being timed."""
+    try:
+        h = fetch("/health")
+    except Exception as exc:
+        record("WARN", "cache freshness", f"/health unreachable ({type(exc).__name__})")
+        return
+    pass_s = h.get("cache_warm_pass_seconds") if isinstance(h, dict) else None
+    if pass_s is None:
+        record("WARN", "cache freshness",
+               "/health does not report cache_warm_pass_seconds -- cannot verify the "
+               "pass still fits inside TTL + STALE_SERVE_SECONDS")
+        return
+    from app.api.response_cache import CACHE_TTL_SECONDS, STALE_SERVE_SECONDS
+    budget = CACHE_TTL_SECONDS + STALE_SERVE_SECONDS
+    if pass_s > budget:
+        record("FAIL", "cache freshness",
+               f"warm pass {pass_s:.0f}s EXCEEDS TTL+grace {budget}s -- entries age out "
+               f"entirely and users compute live again. Re-size both constants.")
+    elif pass_s > budget * 0.75:
+        record("WARN", "cache freshness",
+               f"warm pass {pass_s:.0f}s is {100*pass_s/budget:.0f}% of the {budget}s budget")
+    else:
+        record("PASS", "cache freshness", f"warm pass {pass_s:.0f}s of a {budget}s budget")
+
+
 def main() -> int:
     board = load_board()
     warm = check_warmth(board)
@@ -515,6 +601,8 @@ def main() -> int:
         check_soccer_xg_freshness()
         check_books(board)
         check_default_ratings(board)
+        check_start_gate_coverage()
+        check_cache_freshness()
 
     print(f"\nBOARD ARTIFACT SCAN  {datetime.datetime.utcnow():%Y-%m-%d %H:%M}Z")
     print("=" * 78)

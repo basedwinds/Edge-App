@@ -156,6 +156,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    from app import scheduler as scheduler_module
+
     @app.get("/health")
     def health(session: Session = Depends(get_session)):
         """`last_refresh_at` is the age of the NEWEST market snapshot -- i.e. how
@@ -193,6 +195,14 @@ def create_app() -> FastAPI:
             # naive UTC ISO, no offset -- the frontend appends "Z" itself
             "last_refresh_at": newest.isoformat() if newest else (row.value if row else None),
             "last_full_refresh_at": row.value if row else None,
+            # Duration of the last completed cache-warm pass. Published so the
+            # sizing invariant in response_cache.py (CACHE_TTL_SECONDS +
+            # STALE_SERVE_SECONDS > one full pass) is OBSERVABLE rather than
+            # assumed -- it has silently drifted twice (61.7s at sizing -> 548s
+            # caught by #159 -> 290s caught by the "Incomplete board" banner).
+            # None until the first pass finishes after a restart.
+            # Read by scripts/board_artifact_scan.py::check_cache_freshness.
+            "cache_warm_pass_seconds": scheduler_module.LAST_CACHE_WARM_PASS_SECONDS,
         }
 
     @app.post("/markets/refresh")

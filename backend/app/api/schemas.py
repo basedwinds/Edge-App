@@ -12,6 +12,11 @@ class MarketOut(BaseModel):
     game_label: str | None
     gameday: str | None
     gametime: str | None  # "HH:MM" local kickoff time, may be blank far out -- see NflGame.gametime
+    # The ABSOLUTE kickoff instant, "...Z" or null. gameday+gametime cannot be
+    # resolved outside the router (the timezone is the home stadium's), and the
+    # response cache needs an instant it can re-check when it serves a payload
+    # past its TTL -- see app/api/start_gate.py.
+    start_time_utc: str | None = None
     line: float | None
     side: str | None
     implied_prob: float | None

@@ -14,10 +14,15 @@ instant. A per-key lock collapses a thundering herd (concurrent identical
 requests) into a single computation.
 """
 import asyncio
+import logging
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+
+from app.api.start_gate import apply_start_gate
+
+log = logging.getLogger(__name__)
 
 # Generous TTL because a background warmer (scheduler.py::run_cache_warm)
 # refreshes these every ~150s off the request path -- so user requests should
@@ -51,20 +56,57 @@ from starlette.responses import Response
 # spare. See scheduler.py's cache_warm job -- change the two together or the
 # flicker comes straight back.
 #
-# This does mean a safety decision can now be up to ~3 minutes old rather than
-# 1. That is still better than the 300s it was before today, but it is a
-# stop-gap, not the real answer: the right fix is to re-evaluate the cheap
-# time-based gates (already_started/already_decided) when a cached payload is
-# SERVED, so cache age cannot produce a stale safety decision at all. Logged as
-# the follow-up rather than bolted on here, since it touches every sport's
-# payload shape, not just tennis.
+# 2026-08-15, THIRD revision. The invariant above is now VIOLATED and cannot be
+# restored by tuning it: a measured full warm pass is 290s (slowest
+# /tennis/markets 60.1s, /markets/cross-platform-divergences 57.4s,
+# /soccer/markets 35.6s, /markets 32.5s), so the requirement reads 180 > 90+290.
+# Because the pass exceeds the interval, APScheduler runs passes back-to-back
+# and each entry is refreshed once per ~290-380s while expiring at 180s -- every
+# entry sat COLD for roughly a third of the time, and whichever route the user
+# landed on then computed live, past the frontend's 18s guard(). That is the
+# "Incomplete board: X did not load in time" banner, reported repeatedly.
+#
+# THIS IS NOT A SCHEDULING PROBLEM. 290s of compute per 180s window is over
+# 100% duty cycle, so no interval, ordering or priority scheme keeps everything
+# fresh. Concurrency does not rescue it either: measured at 4 workers the pass
+# only fell to 219s, and individual routes got much WORSE (divergences 57s ->
+# 176s) because these are CPU-bound model computes contending with the pollers'
+# SQLite writes. The choice is therefore to serve something slightly stale or to
+# make the user wait a minute -- and the second is what was already happening.
+#
+# So the answer is the follow-up this file has carried since 2026-08-03: --
+#   "re-evaluate the cheap time-based gates (already_started/already_decided)
+#    when a cached payload is SERVED, so cache age cannot produce a stale safety
+#    decision at all"
+# -- now implemented in app/api/start_gate.py and wired for all thirteen sports.
+# With the started-gate re-applied at serve time, an expired entry is safe to
+# serve, so STALE_SERVE_SECONDS below buys the coverage the TTL alone cannot.
 CACHE_TTL_SECONDS = 180
+# How long past the TTL an entry may still be served, with the start gate
+# re-applied, instead of making the user wait for a live recompute.
+#
+# Sized against the MEASURED worst-case refresh period, not chosen: pass 290s
+# plus up to one 90s interval of idle before the next pass = 380s. 420 covers
+# that with ~40s of headroom. Past this point the warmer is not merely slow but
+# absent (crashed, shut down, wedged), and computing live is the right answer
+# again -- a genuinely restarting backend SHOULD show the banner, which is what
+# it says.
+#
+# What staleness costs: a PRICE up to TTL+grace old. That is bounded and small
+# next to what the frontend already does -- guard() falls back to a
+# sessionStorage "last good" copy of UNBOUNDED age with no gate applied at all
+# (see Combined.tsx). Serving a bounded, gated payload is strictly better on
+# both axes than the fallback it replaces.
+STALE_SERVE_SECONDS = 420
 # The warmer sends this header to force a recompute+recache even when the
 # current entry is still fresh, so the cache never ages out from under a user.
 REFRESH_HEADER = "x-cache-refresh"
 
 # key -> (expires_at, status_code, body_bytes, media_type)
 _cache: dict[str, tuple[float, int, bytes, str | None]] = {}
+# Counts stale serves per key so the board scan can tell "the warmer is keeping
+# up" from "the warmer has quietly fallen behind and every read is stale".
+_stale_serves: dict[str, int] = {}
 _locks: dict[str, asyncio.Lock] = {}
 
 _EXPLICIT = {
@@ -92,6 +134,35 @@ def _fresh(key: str):
     return None
 
 
+def _stale(key: str):
+    """An EXPIRED entry, still young enough to serve, with the started-gate
+    re-applied. Returns None once it is too old to be trustworthy.
+
+    The gate runs only here, not on fresh hits: a fresh payload is at most
+    CACHE_TTL_SECONDS old, which is the staleness the routers' own gates were
+    already sized against, and re-parsing 11k soccer rows on every fast hit
+    would tax the common path to fix the rare one."""
+    entry = _cache.get(key)
+    if not entry:
+        return None
+    age_past_ttl = time.time() - entry[0]
+    if age_past_ttl <= 0 or age_past_ttl > STALE_SERVE_SECONDS:
+        return None
+    body, gated = apply_start_gate(entry[2])
+    _stale_serves[key] = _stale_serves.get(key, 0) + 1
+    if gated:
+        log.info("cache: served %s stale by %.0fs, start-gate cleared %d stake(s)",
+                 key, age_past_ttl, gated)
+    return Response(content=body, status_code=entry[1], media_type=entry[3])
+
+
+def stale_serve_counts() -> dict[str, int]:
+    """Read by scripts/board_artifact_scan.py -- a key that is ALWAYS served
+    stale means the warm pass has outgrown TTL + STALE_SERVE_SECONDS and the
+    two constants need re-sizing against a fresh measurement."""
+    return dict(_stale_serves)
+
+
 class ResponseCacheMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path
@@ -105,11 +176,19 @@ class ResponseCacheMiddleware(BaseHTTPMiddleware):
             hit = _fresh(key)
             if hit is not None:
                 return hit
+            # Expired but recent: serve it rather than make the user wait out a
+            # 20-60s recompute. The warmer's next pass replaces it. See
+            # STALE_SERVE_SECONDS.
+            hit = _stale(key)
+            if hit is not None:
+                return hit
 
         lock = _locks.setdefault(key, asyncio.Lock())
         async with lock:
             if not force:
                 hit = _fresh(key)  # another request may have filled it while we waited
+                if hit is None:
+                    hit = _stale(key)
                 if hit is not None:
                     return hit
             response = await call_next(request)

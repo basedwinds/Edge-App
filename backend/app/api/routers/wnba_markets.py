@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob, _seeded_choice
 from app.api.routers.settings import get_staking_params, get_flat_params, get_unit_dollars, get_wnba_pool_dollars
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
+from app.api.start_gate import iso_z
 from app.db.database import get_session
 from app.db.models import Market, WnbaGame
 from app.ingestion.market_catalog_wnba import wnba_news_cache_to_pydantic
@@ -101,6 +102,10 @@ class WnbaMarketOut(BaseModel):
     wnba_game_id: str | None
     gameday: str | None
     gametime: str | None
+    # ABSOLUTE start instant ("...Z") or null. gameday+gametime cannot be
+    # resolved outside this router, and the response cache needs an instant it
+    # can re-check when serving a payload past its TTL -- see app/api/start_gate.py.
+    start_time_utc: str | None = None
     game_type: str | None
     no_baseline_reason: str | None
     implied_prob: float | None
@@ -345,21 +350,28 @@ def list_wnba_markets(session: Session = Depends(get_session)):
         game = games_by_id.get(m.wnba_game_id) if m.wnba_game_id else None
         return game is not None and game.home_score is not None
 
-    def _game_already_started(m: Market) -> bool:
+    def _game_start_utc(m: Market) -> datetime.datetime | None:
+        """The game's real start INSTANT, or None when it cannot be resolved.
+        Split out of the started-gate so the SAME instant is serialised as
+        start_time_utc and the response cache can re-check it when it serves a
+        payload past its TTL -- see app/api/start_gate.py."""
         # gameday + gametime are BOTH the UTC date/time from ESPN's single ISO
         # instant, so combine directly as UTC (no arena-timezone round-trip).
         game = games_by_id.get(m.wnba_game_id) if m.wnba_game_id else None
         if game is None or not game.gameday or not game.gametime:
-            return False
+            return None
         try:
-            kickoff = datetime.datetime.combine(
+            return datetime.datetime.combine(
                 datetime.date.fromisoformat(game.gameday),
                 datetime.time.fromisoformat(game.gametime),
                 tzinfo=datetime.timezone.utc,
             )
         except ValueError:
-            return False
-        return now_utc >= kickoff
+            return None
+
+    def _game_already_started(m: Market) -> bool:
+        start = _game_start_utc(m)
+        return start is not None and now_utc >= start
 
     markets = [
         m for m in markets
@@ -433,6 +445,7 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 wnba_game_id=m.wnba_game_id,
                 gameday=game.gameday if game else None,
                 gametime=game.gametime if game else None,
+                start_time_utc=iso_z(_game_start_utc(m)),
                 game_type=game.game_type if game else None,
                 no_baseline_reason=no_baseline_reason,
                 implied_prob=implied,

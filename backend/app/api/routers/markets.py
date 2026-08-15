@@ -56,6 +56,7 @@ from app.models.clv_selection import bucket_clv_stats, gate_kelly
 from app.api.routers.settings import get_pool_dollars, get_unit_dollars, get_staking_params, get_flat_params
 from app.data.divisions import DIVISIONS
 from app.api.schemas import FuturesMarketOut, MarketOut, ReasoningFactorOut, ReasoningOut
+from app.api.start_gate import iso_z
 
 router = APIRouter(prefix="/markets", tags=["markets"])
 
@@ -745,22 +746,33 @@ def list_markets(session: Session = Depends(get_session)):
     games_by_id = {g.id: g for g in session.query(NflGame).filter(NflGame.id.in_(game_ids)).all()} if game_ids else {}
     now_utc = datetime.datetime.now(datetime.timezone.utc)
 
-    def _game_already_started(m: Market) -> bool:
+    def _game_start_utc(m: Market) -> datetime.datetime | None:
+        """The game's real kickoff INSTANT, or None when it cannot be resolved.
+
+        Split out of `_game_already_started` (which now just compares this to
+        now) so the same instant can be SERIALISED onto every row as
+        start_time_utc. The response cache re-applies the started-gate when it
+        serves a payload that has outlived its TTL, and it can only do that if
+        the payload carries the instant -- see response_cache.py::_start_gate.
+        One function, so the gate and the field can never disagree."""
         game = games_by_id.get(m.nfl_game_id) if m.nfl_game_id else None
         # "00:00" is nflverse's own placeholder for "kickoff not yet
         # announced" (see RecommendedBetsTable.tsx's formatGameDate), not a
         # real midnight kickoff -- treated as unknown, same as a blank gametime.
         if game is None or not game.gameday or not game.gametime or game.gametime == "00:00":
-            return False
+            return None
         tz_name = NFL_TEAM_TZ.get(game.home_team)
         if tz_name is None:
-            return False
+            return None
         try:
             local_naive = datetime.datetime.strptime(f"{game.gameday} {game.gametime}", "%Y-%m-%d %H:%M")
         except ValueError:
-            return False
-        kickoff_utc = local_naive.replace(tzinfo=ZoneInfo(tz_name)).astimezone(datetime.timezone.utc)
-        return now_utc >= kickoff_utc
+            return None
+        return local_naive.replace(tzinfo=ZoneInfo(tz_name)).astimezone(datetime.timezone.utc)
+
+    def _game_already_started(m: Market) -> bool:
+        kickoff_utc = _game_start_utc(m)
+        return kickoff_utc is not None and now_utc >= kickoff_utc
 
     # THIRD gap (2026-07-19, found while chasing the same class of bug for
     # Tennis/MMA/MLB/NBA -- see ladder_sanity.py): the checks above depend
@@ -907,6 +919,7 @@ def list_markets(session: Session = Depends(get_session)):
                 game_label=f"{game.away_team} @ {game.home_team}" if game else None,
                 gameday=game.gameday if game else None,
                 gametime=game.gametime if game else None,
+                start_time_utc=iso_z(_game_start_utc(m)),
                 line=m.line,
                 side=m.side,
                 implied_prob=implied,

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.api.routers.markets import _batch_latest_snapshots, _edge_sentence, _implied_prob, _seeded_choice, _WEIGHT_SCORE
 from app.api.routers.settings import get_nba_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
+from app.api.start_gate import iso_z
 from app.data.nba_arenas import NBA_TEAM_TZ
 from app.db.database import get_session
 from app.db.models import Market, NbaGame
@@ -74,6 +75,10 @@ class NbaMarketOut(BaseModel):
     nba_game_id: str | None  # real game id, needed by the frontend's cross-platform dedup key for game-tied rows
     gameday: str | None
     gametime: str | None  # "HH:MM" UTC tip-off time, may be blank far out -- see NbaGame.gametime
+    # ABSOLUTE start instant ("...Z") or null. gameday+gametime cannot be
+    # resolved outside this router, and the response cache needs an instant it
+    # can re-check when serving a payload past its TTL -- see app/api/start_gate.py.
+    start_time_utc: str | None = None
     game_type: str | None  # SUMMER | PRE | REG | PLAYIN | POST -- see NbaGame.game_type
     line: float | None
     side: str | None
@@ -298,14 +303,25 @@ def list_nba_markets(session: Session = Depends(get_session)):
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
 
-    def _game_already_started(m: Market) -> bool:
+    def _game_start_utc(m: Market) -> datetime.datetime | None:
+        """The game's real start INSTANT, or None when it cannot be resolved.
+        Split out of the started-gate so the SAME instant is serialised as
+        start_time_utc and the response cache can re-check it when it serves a
+        payload past its TTL -- see app/api/start_gate.py."""
         game = games_by_id.get(m.nba_game_id) if m.nba_game_id else None
         if game is None or not game.gameday or not game.gametime:
-            return False
+            return None
         tz_name = NBA_TEAM_TZ.get(game.home_team)
         if tz_name is None:
-            return False
-        return now_utc >= _game_kickoff_utc(game.gameday, game.gametime, tz_name)
+            return None
+        try:
+            return _game_kickoff_utc(game.gameday, game.gametime, tz_name)
+        except ValueError:
+            return None
+
+    def _game_already_started(m: Market) -> bool:
+        start = _game_start_utc(m)
+        return start is not None and now_utc >= start
 
     # THIRD gap (2026-07-19, found while chasing the same class of bug for
     # Tennis/MMA/MLB -- see ladder_sanity.py): the checks above depend on
@@ -383,6 +399,7 @@ def list_nba_markets(session: Session = Depends(get_session)):
                 nba_game_id=m.nba_game_id,
                 gameday=game.gameday if game else None,
                 gametime=game.gametime if game else None,
+                start_time_utc=iso_z(_game_start_utc(m)),
                 game_type=game.game_type if game else None,
                 line=m.line,
                 side=m.side,

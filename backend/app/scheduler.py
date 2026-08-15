@@ -93,6 +93,11 @@ _WARM_PATHS = [
 ]
 
 
+# Duration of the most recent completed cache-warm pass, or None before the
+# first one finishes. Read by /health; see run_cache_warm.
+LAST_CACHE_WARM_PASS_SECONDS: float | None = None
+
+
 def run_cache_warm():
     """Keeps the response cache (response_cache.py) warm by recomputing each
     heavy list endpoint off the request path, so real user requests -- the
@@ -149,6 +154,14 @@ def run_cache_warm():
         log.exception("cache warm failed")
 
     elapsed = time.monotonic() - started
+    # Published so /health -- and through it board_artifact_scan's cache
+    # freshness check -- can see whether the pass still fits inside
+    # CACHE_TTL_SECONDS + STALE_SERVE_SECONDS. The sizing drifted unnoticed
+    # twice (61.7s -> 548s caught by #159, then -> 290s caught by the banner);
+    # a number nobody measures is a number that rots, so it is now reported
+    # rather than left in a log line.
+    global LAST_CACHE_WARM_PASS_SECONDS
+    LAST_CACHE_WARM_PASS_SECONDS = elapsed
     slowest.sort(reverse=True)
     worst = ", ".join(f"{p} {s:.0f}s" for s, p in slowest[:5])
     if elapsed > CACHE_TTL_SECONDS:

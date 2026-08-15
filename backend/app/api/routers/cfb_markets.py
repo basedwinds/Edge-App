@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
 from app.api.routers.settings import get_staking_params, get_flat_params, get_unit_dollars, get_cfb_pool_dollars
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
+from app.api.start_gate import iso_z
 from app.db.database import get_session
 from app.db.models import CfbGame, Market
 from app.models import calibration_temp
@@ -136,6 +137,10 @@ class CfbMarketOut(BaseModel):
     cfb_game_id: str | None
     gameday: str | None
     gametime: str | None
+    # ABSOLUTE start instant ("...Z") or null. gameday+gametime cannot be
+    # resolved outside this router, and the response cache needs an instant it
+    # can re-check when serving a payload past its TTL -- see app/api/start_gate.py.
+    start_time_utc: str | None = None
     game_type: str | None
     neutral: bool
     no_baseline_reason: str | None
@@ -278,21 +283,28 @@ def list_cfb_markets(session: Session = Depends(get_session)):
         g = games_by_id.get(m.cfb_game_id) if m.cfb_game_id else None
         return g is not None and g.home_score is not None
 
-    def _already_started(m: Market) -> bool:
+    def _game_start_utc(m: Market) -> datetime.datetime | None:
+        """The game's real start INSTANT, or None when it cannot be resolved.
+        Split out of the started-gate so the SAME instant is serialised as
+        start_time_utc and the response cache can re-check it when it serves a
+        payload past its TTL -- see app/api/start_gate.py."""
         # gameday + gametime are both UTC, split from ESPN's single ISO instant,
         # so they combine directly -- no stadium-timezone round-trip.
         g = games_by_id.get(m.cfb_game_id) if m.cfb_game_id else None
         if g is None or not g.gameday or not g.gametime:
-            return False
+            return None
         try:
-            kickoff = datetime.datetime.combine(
+            return datetime.datetime.combine(
                 datetime.date.fromisoformat(g.gameday),
                 datetime.time.fromisoformat(g.gametime),
                 tzinfo=datetime.timezone.utc,
             )
         except ValueError:
-            return False
-        return now_utc >= kickoff
+            return None
+
+    def _already_started(m: Market) -> bool:
+        start = _game_start_utc(m)
+        return start is not None and now_utc >= start
 
     # Season ladders have no game to be final or started, so the per-game guards
     # only apply to game markets -- filtering season rows through them would drop
@@ -408,6 +420,7 @@ def list_cfb_markets(session: Session = Depends(get_session)):
             cfb_game_id=m.cfb_game_id,
             gameday=game.gameday if game else None,
             gametime=game.gametime if game else None,
+            start_time_utc=iso_z(_game_start_utc(m)),
             game_type=game.game_type if game else None,
             neutral=bool(game.neutral) if game else False,
             no_baseline_reason=no_baseline_reason,

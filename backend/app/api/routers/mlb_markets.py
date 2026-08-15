@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 from app.api.routers.markets import _batch_latest_snapshots, _edge_sentence, _implied_prob, _seeded_choice, _WEIGHT_SCORE
 from app.api.routers.settings import get_mlb_pool_dollars, get_staking_params, get_flat_params, get_unit_dollars
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
+from app.api.start_gate import iso_z
 from app.clients import weather_client
 from app.data.mlb_ballparks import BALLPARKS, ORIENTATION_DEG, TEAM_TZ
 from app.db.database import get_session
@@ -90,6 +91,10 @@ class MlbMarketOut(BaseModel):
     mlb_game_id: str | None
     gameday: str | None
     gametime: str | None
+    # ABSOLUTE start instant ("...Z") or null. gameday+gametime cannot be
+    # resolved outside this router, and the response cache needs an instant it
+    # can re-check when serving a payload past its TTL -- see app/api/start_gate.py.
+    start_time_utc: str | None = None
     game_type: str | None  # R | S | F | D | L | W | A -- see MlbGame.game_type
     home_probable_pitcher: str | None
     away_probable_pitcher: str | None
@@ -448,15 +453,25 @@ def list_mlb_markets(session: Session = Depends(get_session)):
     # here for clarity/documentation rather than collapsing into one.
     now_utc = datetime.datetime.now(datetime.timezone.utc)
 
-    def _game_already_started(m: Market) -> bool:
+    def _game_start_utc(m: Market) -> datetime.datetime | None:
+        """The game's real start INSTANT, or None when it cannot be resolved.
+        Split out of the started-gate so the SAME instant is serialised as
+        start_time_utc and the response cache can re-check it when it serves a
+        payload past its TTL -- see app/api/start_gate.py."""
         game = games_by_id.get(m.mlb_game_id) if m.mlb_game_id else None
         if game is None or not game.gameday or not game.gametime:
-            return False
+            return None
         tz_name = TEAM_TZ.get(game.home_team)
         if tz_name is None:
-            return False
-        kickoff = _game_kickoff_local(game.gameday, game.gametime, tz_name)
-        return now_utc >= kickoff
+            return None
+        try:
+            return _game_kickoff_local(game.gameday, game.gametime, tz_name)
+        except ValueError:
+            return None
+
+    def _game_already_started(m: Market) -> bool:
+        start = _game_start_utc(m)
+        return start is not None and now_utc >= start
 
     # THIRD gap (2026-07-19, found while chasing the same class of bug for
     # Tennis/MMA -- see ladder_sanity.py): the checks above depend on this
@@ -562,6 +577,7 @@ def list_mlb_markets(session: Session = Depends(get_session)):
                 mlb_game_id=m.mlb_game_id,
                 gameday=game.gameday if game else None,
                 gametime=game.gametime if game else None,
+                start_time_utc=iso_z(_game_start_utc(m)),
                 game_type=game.game_type if game else None,
                 home_probable_pitcher=game.home_probable_pitcher if game else None,
                 away_probable_pitcher=game.away_probable_pitcher if game else None,
