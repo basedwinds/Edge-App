@@ -146,6 +146,51 @@ def implausible_disagreement(model_prob: float, market_price: float) -> bool:
     return ratio >= IMPLAUSIBLE_ODDS_RATIO
 
 
+def implausible_certainty(model_prob: float, market_price: float) -> bool:
+    """The OTHER half of the same pathology: the model claims near-certainty
+    where the market still sees real doubt.
+
+    `implausible_disagreement` covers the two LONGSHOT quadrants -- the model
+    liking a side the market prices as remote (its `market <= 0.5` branch) and
+    the model hating a side the market prices as near-locked (its complement
+    branch, the "market says 94%, model says 3%" case in its docstring). Both
+    are bets ON a longshot.
+
+    Neither branch fires when the model is the more extreme one toward the
+    FAVOURITE. Found 2026-08-15 while scoping the NO side (#186), on the live
+    board:
+
+        cs2  Spirit vs BIG    market 0.175  model 0.0172   BIG to win a Bo3
+        lol  T1 vs DN Freecs  market 0.500  model 0.0212
+
+    A 1.7% for a real CS2 team in a best-of-three is not a probability the model
+    has any basis to assert, and 2.1% against a market of exactly even money is
+    worse. Under `implausible_disagreement` both score ~0.1x and sail through,
+    because it only measures the ratio in the direction that makes a longshot
+    look good.
+
+    THIS IS NOT A NO-SIDE GUARD -- it is a gap on BOTH sides, and closing it
+    changes YES behaviour too. Measured on the live board: 121 YES bets before,
+    120 after (one row where the model asserted a near-lock the market priced
+    with real doubt), and 463 NO candidates before, 461 after. Disclosed rather
+    than silently absorbed, because a guard that moves live YES exposure is not
+    a no-op no matter how small the count.
+
+    Same unit and same threshold as its sibling, for the same reason: an odds
+    ratio has no cliff and treats both tails alike."""
+    if not (0.0 < market_price < 1.0):
+        return False
+    if not (0.0 < model_prob < 1.0):
+        return False        # the exact-0/1 guard owns that case
+    if market_price <= 0.5:
+        # Market sees doubt; model says the outcome is far MORE remote than that.
+        ratio = market_price / model_prob
+    else:
+        # Mirror above 0.5: model says the complement is far more remote.
+        ratio = (1.0 - market_price) / (1.0 - model_prob)
+    return ratio >= IMPLAUSIBLE_ODDS_RATIO
+
+
 def kelly_fraction(
     model_prob: float | None,
     market_price: float | None,
@@ -240,6 +285,8 @@ def kelly_fraction(
     if model_prob is not None and market_price is not None:
         if implausible_disagreement(model_prob, market_price):
             return None
+        if implausible_certainty(model_prob, market_price):
+            return None
 
     if model_prob is None or market_price is None:
         return None
@@ -282,6 +329,102 @@ def kelly_fraction(
         return None
 
     return round(min(full_kelly * fractional_kelly, max_stake_fraction), 4)
+
+
+# ---------------------------------------------------------------- NO side ---
+#
+# WHICH CELLS MAY BET THE NO SIDE, AND WHY ONLY THESE (#186, 2026-08-15).
+#
+# `kelly_fraction` refuses negative edge, so the app has only ever surfaced YES.
+# That leaves the larger half of the board unharvested: 1,858 rows at >= +10pp
+# against 3,642 at <= -10pp. A backtest over 11,166 settled `model_observations`
+# said the unharvested half pays -- NO +16.0% [+10.5,+21.5] vs YES +15.2%
+# [+9.4,+21.0], with a control arm (|edge| < 2pp) near zero on both sides, which
+# is what makes the grading and the price field believable.
+#
+# THE AGGREGATE IS NOT THE BUILD. Decomposed by cell, it is concentrated, and
+# two of the pieces reverse the naive reading:
+#
+#     tennis  set_spread     n= 282  +24.7%        cs2  series_winner n=149 +14.2%
+#     tennis  set_winner     n= 231  +31.5%        lol  series_winner n= 70 +13.5%
+#     tennis  game_total     n= 101  +52.8%
+#     tennis  total_sets     n=  78  +11.6%
+#     tennis  MONEYLINE      n= 363   -0.9%   <-- the liquid one does NOT pay
+#     soccer  (all)          n= 105   -0.7%   <-- but would be 310 of 461 live
+#     valorant series_winner n=  46   -1.9%
+#     mlb / wnba             n= 273   ~+3%    noise
+#
+# Tennis moneyline losing is exactly what #192 predicts: that model's logistic is
+# too steep (claimed 0.844 delivered 0.685 at the top, mirrored at the bottom),
+# so its extreme calls are wrong in the direction that sinks a NO bet. The +20.3%
+# "tennis" headline came entirely from the DERIVED markets, a different model
+# path that #192 never touched. Aggregating the two hid both facts.
+#
+# SO THE ALLOWLIST IS THE EVIDENCE, NOT A SPORT LIST. A cell is here only if it
+# has settled rows of its own showing profit. Soccer is excluded despite being
+# the largest live source of NO candidates precisely because it is the largest:
+# shipping 310 unmeasured bets on the strength of an aggregate driven by other
+# sports is the mistake this comment exists to prevent.
+#
+# NOT YET MEASURABLE, deliberately absent: cfb, nfl, racing, mma have ZERO
+# settled NO observations. Silence is not evidence either way -- revisit when
+# `calibration_report.py` has rows for them.
+NO_SIDE_CELLS = {
+    ("tennis", "set_spread"),
+    ("tennis", "set_winner"),
+    ("tennis", "game_total"),
+    ("tennis", "total_sets"),
+    ("cs2", "series_winner"),
+    ("lol", "series_winner"),
+}
+
+
+def no_side_allowed(sport: str | None, market_type: str | None) -> bool:
+    """True if this cell has its own settled evidence for betting NO."""
+    return (sport, market_type) in NO_SIDE_CELLS
+
+
+def kelly_fraction_no(
+    model_prob: float | None,
+    market_price: float | None,
+    yes_bid: float | None = None,
+    **kwargs,
+) -> float | None:
+    """Stake fraction for betting the NO side, or None.
+
+    Arguments are in the YES frame -- the same `model_prob` and midpoint
+    `market_price` every router already computes -- because asking callers to
+    invert them is asking thirteen routers to each get a subtraction right.
+
+    EVERY GUARD IS INHERITED, NOT REIMPLEMENTED. A NO bet is arithmetically a
+    YES bet on the complement:
+
+        NO model prob = 1 - model_prob
+        NO midpoint   = 1 - market_price
+        NO ask (paid) = 1 - yes_bid      <- mirror of paying the YES ask
+
+    so this delegates to `kelly_fraction` under that substitution and the
+    exact-0/1 guard, both implausibility guards, `has_traded`, the ask guard and
+    the Kelly maths all apply unchanged. Reimplementing them here would be the
+    partial-wiring defect this codebase keeps producing.
+
+    THE ASK MATTERS MORE HERE, NOT LESS. Betting NO costs `1 - yes_bid` against
+    a `1 - mid` midpoint, so the haircut is half the spread either way -- the
+    economics are symmetric. What is NOT symmetric is the inventory: the tennis
+    cells that pay are 79-97% untraded and the tennis cell that is liquid does
+    not pay. `has_traded` and the spread cap are what keep that from being
+    surfaced as edge, so callers must keep passing them.
+
+    Caller is responsible for `no_side_allowed` -- this function will happily
+    size a soccer NO bet, and soccer NO measured -0.7%."""
+    if model_prob is None or market_price is None:
+        return None
+    return kelly_fraction(
+        model_prob=1.0 - model_prob,
+        market_price=1.0 - market_price,
+        execution_price=(1.0 - yes_bid) if yes_bid is not None else None,
+        **kwargs,
+    )
 
 
 def has_real_trading(source: str, volume: float | None, last_price: float | None) -> bool:
