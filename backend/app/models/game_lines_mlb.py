@@ -34,6 +34,34 @@ to unpredictable from team-behavior signals at the precision needed to beat
 a flat league-average baseline, unlike NFL's modest improvement or NBA's
 large one.
 
+RE-TESTED ON BETTER METRICS 2026-08-15 (#201), AFTER the pitcher term shipped.
+Candidate 1's rejection above used CURRENT-season trailing RUNS. Re-asked with
+PRIOR-season team OPS -- a different time base and a rate rather than an outcome,
+which is exactly the distinction that overturned the pitcher rejection (see
+PITCHER_KBB_SLOPE: ERA said no, K-BB% said yes). Fitted on the RESIDUAL after
+park + pitchers so it could not claim variance the shipped model already
+explains:
+
+    team offence   +2.264 runs per 1.000 OPS   95% CI [-3.876, +8.392]
+                   1-sd better matchup = +0.061 runs
+
+CI spans zero. Two independent metrics on two different time bases now agree, so
+the original rejection is STRENGTHENED rather than merely repeated.
+
+BULLPEN, both halves, now also dead. Workload was rejected in #168
+(corr -0.005 with the residual, check_mlb_bullpen_fatigue.py). Quality, tested
+here on prior-season combined relief ERA against the same residual:
+
+    bullpen ERA    -0.386 runs per 1.00 ERA    95% CI [-0.8019, +0.0321]
+
+CI spans zero AND the sign is backwards -- negative means a WORSE bullpen would
+predict FEWER runs, which is a noise signature, not a finding.
+
+WHAT REMAINS UNMEASURED: all four of these used prior-season or trailing values.
+A current-season AS-OF-DATE offence or bullpen measure is untested and would need
+day-by-day accumulation to stay lookahead-free. Given four independent negatives,
+the prior on it is low.
+
 SCOPE OF THE PITCHER REJECTION, tightened 2026-08-14. Candidate 2 tested
 combined current-season ERA and nothing else. ERA charges a pitcher for balls
 in play his defence handled, and it is measurably the weakest of the three
