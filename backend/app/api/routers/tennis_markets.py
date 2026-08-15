@@ -360,6 +360,32 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         match = matches_by_id.get(m.tennis_match_id) if m.tennis_match_id else None
         return match is not None and match.winner_key is not None
 
+    # ONE PLATFORM HALTING IS INFORMATION THE OTHER HAS NOT PRICED YET.
+    #
+    # Same guard cs2/soccer/lol/valorant already carry, and it belongs here at
+    # least as much: tennis has the most exposure of any sport. A per-market
+    # `status == "active"` filter cannot catch this, because the rows it drops
+    # are not the rows being recommended -- the OTHER platform's untouched quote
+    # is, and against a phantom price the model's own number reads as a large
+    # edge on a match that will not be played.
+    #
+    # COUNTED BEFORE SHIPPING, because "never block genuine matches" is a
+    # standing constraint. Of 174 tennis fixtures carrying a halted market, 104
+    # also carry a live one -- and of those 104:
+    #
+    #     69  already DECIDED (winner_key set)   -> hiding them is a no-op
+    #     35  undecided                          -> of which 0 START IN THE FUTURE
+    #
+    # So on today's board this blocks no live bet at all; every fixture it
+    # touches is finished or abandoned. It exists for the day that is not true.
+    halted_fixture_ids = {
+        m.tennis_match_id for m in markets
+        if m.tennis_match_id and (m.status or "") == "inactive"
+    }
+
+    def _fixture_halted(m: Market) -> bool:
+        return bool(m.tennis_match_id) and m.tennis_match_id in halted_fixture_ids
+
     # REAL BUG this guards against (user-reported 2026-07-19: recommended
     # bets with market prices near 0%): TennisMatch.winner_key only gets set
     # by the slow offline tennisdata/tennisexplorer crawl, which can lag a
@@ -702,6 +728,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         and not _match_live_on_flashscore(m)
         and not _match_pair_resolved(m)
         and not _start_time_untrusted(m)
+        and not _fixture_halted(m)
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]

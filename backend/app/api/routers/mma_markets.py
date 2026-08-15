@@ -193,6 +193,22 @@ def list_mma_markets(session: Session = Depends(get_session)):
         fight = fights_by_id.get(m.mma_fight_id) if m.mma_fight_id else None
         return fight is not None and fight.winner_id is not None
 
+    # ONE PLATFORM HALTING IS INFORMATION THE OTHER HAS NOT PRICED YET. Same
+    # guard cs2/soccer/lol/valorant/tennis carry: a per-market status filter
+    # cannot catch it, because the rows it drops are not the rows being
+    # recommended -- the other platform's untouched quote is.
+    #
+    # Counted before shipping ("never block genuine matches"): 25 inactive MMA
+    # market rows across 2 fights, both of which also carry a live market. Small,
+    # which is the point -- this is a narrow filter, not a broad mute.
+    halted_fixture_ids = {
+        m.mma_fight_id for m in markets
+        if m.mma_fight_id and (m.status or "") == "inactive"
+    }
+
+    def _fixture_halted(m: Market) -> bool:
+        return bool(m.mma_fight_id) and m.mma_fight_id in halted_fixture_ids
+
     # SECOND, related gap (audited 2026-07-19 alongside NFL/NBA/MLB's own
     # version of this fix): winner_id only gets set once ufcstats posts a
     # real result, which can lag a fight's actual conclusion -- and unlike
@@ -312,6 +328,7 @@ def list_mma_markets(session: Session = Depends(get_session)):
         if not _fight_already_decided(m)
         and not _fight_already_started(m)
         and not _fight_ladder_resolved(m)
+        and not _fixture_halted(m)
         and (m.status or "active") == "active"
         and not _market_stale(m)
     ]
