@@ -95,6 +95,7 @@ ends is too thin to fit one without curve-fitting the noise that motivated it.
 | Date | Hypothesis | Verdict | Decisive number | Script |
 |---|---|---|---|---|
 | 2026-08-14 | K-BB% beats FIP/ERA for pitcher quality | **BLOCKED** | Evidence complete; real signal r=**0.089** (the 0.305 figure is the REDUNDANCY correlation with elo_diff). Blocked on a prior-season fallback constant (#173) | `check_mlb_pitcher_metric.py` |
+| 2026-08-15 | Recent bullpen WORKLOAD predicts beyond team strength | **REJECTED** | corr(fatigue differential, residual) = **−0.0046** on n=2,212 — zero, and the WRONG SIGN. No gradient by bucket (+0.025, +0.007, +0.002, −0.055, −0.039, −0.007, +0.067); both extremes positive. Team-only screen: if it cannot beat team Elo alone it cannot beat team+pitcher | `check_mlb_bullpen_fatigue.py` |
 | 2026-08-14 | MLB air density affects run scoring | **REJECTED** | Failed all three gates | `check_mlb_air_density_signal.py` |
 | 2026-08-14 | xG beats goals for soccer ratings | **OPEN** | Feasibility passed: beats goals at all 3 windows in 5 of 33 leagues. Understat needs `X-Requested-With` or 404s | `#167` |
 | 2026-08 | Per-league soccer home advantage | **PARTIAL** | Tilt was an ERA effect; only BRA1 shipped | — |

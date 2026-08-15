@@ -1,176 +1,92 @@
-"""Investigation script (not a registered backtest): does recent bullpen
-workload carry real, non-redundant predictive signal beyond team Elo (+
-starting-pitcher blend) -- checked on real data BEFORE committing to build
-it, same "check before you build" discipline as check_mlb_pitcher_signal.py.
-Flagged in this project's own notes as "the most promising remaining
-MLB-native candidate" but never checked because it needs box-score-level
-pitching lines -- see build_mlb_boxscore_cache.py.
+"""Does recent BULLPEN WORKLOAD predict beyond team strength?
 
-Feature: for each team-game, TRAILING_DAYS calendar days immediately before
-this game (not including today), sum that team's own RELIEF pitch count
-(every pitcher after the starter in boxscore's own appearance-order list) --
-a rough "how much bullpen arm was used recently" workload proxy. Higher
-workload -> more fatigued -> expected to hurt that team's own performance
-today, so the test is whether (away_workload - home_workload), i.e. the
-home team's REST ADVANTAGE, has a positive coefficient predicting home wins.
+MEASURED BEFORE ANY BUILD. The MLB model prices off team Elo plus a
+starting-pitcher adjustment and carries no bullpen term at all -- the biggest
+named structural hole. But "there is a hole" is not evidence there is signal in
+it, so this asks the cheap question first.
 
-Only ONE season (2024) of box-score data was cached (see
-build_mlb_boxscore_cache.py's own scoping note) -- too little for a
-per-season sign-consistency check like the pitcher-signal validation used,
-so this instead splits the season in half (first vs second half by date) as
-a same-season out-of-sample consistency check, alongside the usual
-redundancy-with-Elo correlation check and a walk-forward Brier comparison.
+DATA IS ALREADY CACHED: mlb_boxscore_cache.json carries relief_ip per side for
+all 2,430 games of 2024. No new source, no crawl.
+
+METHOD. Walk 2024 in date order. Before each game, compute each team's relief
+innings over the trailing 3 days (the standard fatigue window) from PRIOR games
+only. Predict with the app's OWN elo_mlb primitives -- predict_and_update, which
+applies SEASON_REGRESSION -- then ask whether the fatigue differential explains
+the residual the model leaves behind.
+
+DELIBERATELY TEAM-ONLY (pitcher_adj=0) AS A SCREEN. If bullpen fatigue cannot
+beat team strength alone it certainly will not beat team+pitcher, so a null here
+closes the question cheaply. A POSITIVE result would NOT be sufficient -- it
+would have to be re-tested with the pitcher adjustment in, because starter
+quality and bullpen usage are correlated (a short start empties the pen).
 """
-import sys
-from pathlib import Path
+import json, sys, statistics as st
+from collections import defaultdict, deque
+sys.path.insert(0, ".")
+from app.models.baseline import elo_mlb
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+box = json.load(open("../data/mlb_boxscore_cache.json", encoding="utf-8"))
+sched = json.load(open("../data/mlb_schedule_cache.json", encoding="utf-8"))
+rows = list(sched.values()) if isinstance(sched, dict) else sched
+games = [g for g in rows if g.get("home_score") is not None
+         and str(g.get("gameday", "")).startswith("2024") and g.get("game_type") == "R"]
+games.sort(key=lambda g: (g["gameday"], g.get("gametime") or "", g.get("game_number") or 0))
+print(f"2024 regular-season games with a final score: {len(games)}")
 
-import datetime as dt  # noqa: E402
-import json  # noqa: E402
-from collections import defaultdict  # noqa: E402
+# boxscore keyed by game id; index by (gameday, home, away) instead
+bx = {}
+for v in box.values():
+    k = (v.get("gameday"), v.get("home_team"), v.get("away_team"))
+    if all(k): bx[k] = v
+print(f"boxscores indexable by (date, home, away): {len(bx)}")
 
-import numpy as np  # noqa: E402
-from sklearn.linear_model import LogisticRegression  # noqa: E402
-from sklearn.preprocessing import StandardScaler  # noqa: E402
+state = elo_mlb.EloState()
+recent = defaultdict(deque)      # team -> deque of (date, relief_ip)
+pts = []                          # (fatigue_diff, residual, pred)
+matched = 0
+from datetime import date
+def d(s): 
+    y,m,dd = s.split("-"); return date(int(y),int(m),int(dd))
 
-from app.models.baseline.elo_mlb import EloState, HOME_FIELD_ADV, NEUTRAL_SITE_HOME_FIELD_ADV, predict_and_update  # noqa: E402
-from app.models.calibration import brier_score  # noqa: E402
-from app.models.pitcher_ratings_mlb import MIN_IP, pitcher_elo_adjustment  # noqa: E402
+for g in games:
+    h, a, day = g["home_team"], g["away_team"], g["gameday"]
+    gd = d(day)
+    def fatigue(team):
+        q = recent[team]
+        while q and (gd - q[0][0]).days > 3:
+            q.popleft()
+        return sum(ip for _, ip in q)
+    fh, fa = fatigue(h), fatigue(a)
+    hr, ar = state.get(h), state.get(a)
+    pred = elo_mlb.win_prob(hr, ar)
+    actual = 1.0 if g["home_score"] > g["away_score"] else 0.0
+    b = bx.get((day, h, a))
+    if b is not None:
+        matched += 1
+        # AWAY tired minus HOME tired: positive = away pen more worked
+        pts.append((fa - fh, actual - pred, pred))
+        for side, team in (("home", h), ("away", a)):
+            ip = (b.get(side) or {}).get("relief_ip")
+            if ip is not None: recent[team].append((gd, float(ip)))
+    elo_mlb.predict_and_update(state, g)
 
-SCHEDULE_PATH = Path(__file__).resolve().parents[2] / "data" / "mlb_schedule_cache.json"
-BOXSCORE_CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "mlb_boxscore_cache.json"
-PITCHER_CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "mlb_pitcher_snapshot_cache.json"
-TARGET_SEASON = 2024
-TRAILING_DAYS = 2
+print(f"games with a usable pre-game fatigue window: {matched}\n")
+xs = [p[0] for p in pts if abs(p[0]) > 0]
+ys = [p[1] for p in pts if abs(p[0]) > 0]
+mx, my = st.mean(xs), st.mean(ys)
+num = sum((x-mx)*(y-my) for x, y in zip(xs, ys))
+den = (sum((x-mx)**2 for x in xs)**.5) * (sum((y-my)**2 for y in ys)**.5)
+r = num/den if den else 0.0
+print(f"corr(away_fatigue - home_fatigue, home residual) = {r:+.4f}   n={len(xs)}")
+print("  positive would mean: a more-worked AWAY pen -> home wins more than the model said\n")
 
-
-def _snapshot_for(pitcher_cache: dict, season: int, game_date: dt.date, pitcher_id: str) -> dict | None:
-    best = None
-    for date_str, snap in pitcher_cache.get(str(season), {}).items():
-        snap_date = dt.date.fromisoformat(date_str)
-        if snap_date >= game_date:
-            continue
-        if best is None or snap_date > best[0]:
-            best = (snap_date, snap)
-    return best[1].get(pitcher_id) if best else None
-
-
-def main():
-    games = json.loads(SCHEDULE_PATH.read_text())
-    boxscores = json.loads(BOXSCORE_CACHE_PATH.read_text())
-    pitcher_cache = json.loads(PITCHER_CACHE_PATH.read_text())
-    season_games = [g for g in games if g["game_type"] == "R" and g["season"] == TARGET_SEASON]
-    season_games.sort(key=lambda g: (g["gameday"], g["game_number"], g["id"]))
-    print(f"{len(season_games)} {TARGET_SEASON} REG games, {len(boxscores)} box scores cached")
-
-    # Build per-team relief-pitch-count-by-date history from the box score cache.
-    relief_by_team_date: dict[str, dict[dt.date, float]] = defaultdict(dict)
-    for gid, box in boxscores.items():
-        d = dt.date.fromisoformat(box["gameday"])
-        relief_by_team_date[box["home_team"]][d] = box["home"]["relief_pitches"]
-        relief_by_team_date[box["away_team"]][d] = box["away"]["relief_pitches"]
-
-    def trailing_workload(team: str, game_date: dt.date) -> float:
-        history = relief_by_team_date.get(team, {})
-        return sum(
-            pitches for d, pitches in history.items()
-            if 0 < (game_date - d).days <= TRAILING_DAYS
-        )
-
-    # Walk-forward Elo+pitcher-blend state, same as backtest_moneyline_mlb.py, so
-    # this checks the feature against the SAME baseline the live app actually uses.
-    state = EloState()
-    rows = []  # (gameday, elo_diff, workload_advantage, outcome, margin)
-    skipped_no_data = 0
-
-    for g in season_games:
-        home_field_adv = NEUTRAL_SITE_HOME_FIELD_ADV if g.get("location") == "Neutral" else HOME_FIELD_ADV
-        home_r = state.get(g["home_team"])
-        away_r = state.get(g["away_team"])
-
-        pitcher_adj = 0.0
-        home_pid, away_pid = g.get("home_probable_pitcher_id"), g.get("away_probable_pitcher_id")
-        if home_pid and away_pid:
-            game_date_p = dt.date.fromisoformat(g["gameday"])
-            home_snap = _snapshot_for(pitcher_cache, g["season"], game_date_p, str(home_pid))
-            away_snap = _snapshot_for(pitcher_cache, g["season"], game_date_p, str(away_pid))
-            if home_snap and away_snap and home_snap["ip"] >= MIN_IP and away_snap["ip"] >= MIN_IP:
-                pitcher_adj = pitcher_elo_adjustment(home_snap["era"], away_snap["era"], home_snap["ip"], away_snap["ip"])
-
-        elo_diff = (home_r + pitcher_adj + home_field_adv) - away_r
-        predict_and_update(state, g)  # walk forward regardless of downstream qualification
-
-        if g.get("home_score") is None or g.get("away_score") is None or g["home_score"] == g["away_score"]:
-            continue
-        if g["id"] not in boxscores:
-            skipped_no_data += 1
-            continue
-
-        game_date = dt.date.fromisoformat(g["gameday"])
-        home_workload = trailing_workload(g["home_team"], game_date)
-        away_workload = trailing_workload(g["away_team"], game_date)
-        # positive = home team's bullpen is MORE RESTED than away's (away threw more recently)
-        rest_advantage = away_workload - home_workload
-
-        outcome = 1.0 if g["home_score"] > g["away_score"] else 0.0
-        margin = g["home_score"] - g["away_score"]
-        rows.append((g["gameday"], elo_diff, rest_advantage, outcome, margin))
-
-    print(f"Qualifying games: {len(rows)}  (skipped, no box score cached: {skipped_no_data})")
-    print()
-
-    gamedays = [r[0] for r in rows]
-    elo_diffs = np.array([r[1] for r in rows])
-    rest_adv = np.array([r[2] for r in rows])
-    outcomes = np.array([r[3] for r in rows])
-    margins = np.array([r[4] for r in rows])
-
-    print(f"rest_advantage: mean={rest_adv.mean():.1f} pitches, std={rest_adv.std():.1f}, "
-          f"range=[{rest_adv.min():.0f}, {rest_adv.max():.0f}]")
-    print(f"Raw correlation, rest_advantage vs outcome: {np.corrcoef(rest_adv, outcomes)[0, 1]:.4f}")
-    print(f"Raw correlation, rest_advantage vs run margin: {np.corrcoef(rest_adv, margins)[0, 1]:.4f}")
-    print(f"Raw correlation, rest_advantage vs elo_diff (redundancy check): {np.corrcoef(rest_adv, elo_diffs)[0, 1]:.4f}")
-    print()
-
-    mid = sorted(gamedays)[len(gamedays) // 2]
-    halves = {"first_half": np.array([d < mid for d in gamedays]), "second_half": np.array([d >= mid for d in gamedays])}
-
-    print(f"{'Half':<14}{'coef_elo':>12}{'coef_rest':>12}{'n':>8}")
-    coefs = {}
-    for name, mask in halves.items():
-        X = np.column_stack([elo_diffs[mask], rest_adv[mask]])
-        y = outcomes[mask]
-        Xs = StandardScaler().fit_transform(X)
-        clf = LogisticRegression()
-        clf.fit(Xs, y)
-        coefs[name] = clf.coef_[0][1]
-        print(f"{name:<14}{clf.coef_[0][0]:>12.4f}{clf.coef_[0][1]:>12.4f}{mask.sum():>8}")
-
-    X_full = np.column_stack([elo_diffs, rest_adv])
-    Xs_full = StandardScaler().fit_transform(X_full)
-    clf_full = LogisticRegression()
-    clf_full.fit(Xs_full, outcomes)
-    print()
-    print(f"Full-season coef: elo={clf_full.coef_[0][0]:.4f}  rest_advantage={clf_full.coef_[0][1]:.4f}  n={len(rows)}")
-    same_sign = (coefs["first_half"] > 0) == (coefs["second_half"] > 0) == (clf_full.coef_[0][1] > 0)
-    print(f"Sign-consistent across first half / second half / full season: {same_sign}")
-
-    # Brier comparison: elo-only vs elo+rest_advantage, both as plain logistic fits
-    # on the SAME data (not the live model's own calibrated win_prob -- this is a
-    # skill-ceiling check on whether the feature helps at all, same role
-    # check_mlb_pitcher_signal.py's correlation checks played before that signal
-    # was trusted enough to fold into the live model).
-    clf_elo_only = LogisticRegression()
-    Xs_elo_only = StandardScaler().fit_transform(elo_diffs.reshape(-1, 1))
-    clf_elo_only.fit(Xs_elo_only, outcomes)
-    p_elo_only = clf_elo_only.predict_proba(Xs_elo_only)[:, 1]
-    p_blend = clf_full.predict_proba(Xs_full)[:, 1]
-    print()
-    print(f"In-sample Brier -- elo-only: {brier_score(list(p_elo_only), list(outcomes)):.4f}  "
-          f"elo+rest_advantage: {brier_score(list(p_blend), list(outcomes)):.4f}")
-    print("(in-sample, not walk-forward -- a quick skill-ceiling check, not a final validated number)")
-
-
-if __name__ == "__main__":
-    main()
+print("residual by fatigue-differential bucket (relief IP over trailing 3 days):")
+b = defaultdict(list)
+for fd, res, _ in pts:
+    k = max(-3, min(3, int(round(fd / 2.0))))
+    b[k].append(res)
+print(f"{'away-home rel IP':>18}{'n':>7}{'mean residual':>16}")
+for k in sorted(b):
+    v = b[k]
+    if len(v) < 60: continue
+    print(f"{k*2:>+15} ip{len(v):>7}{st.mean(v):>+16.4f}")
