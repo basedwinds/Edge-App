@@ -413,6 +413,9 @@ def list_wnba_markets(session: Session = Depends(get_session)):
             staking_mode, kelly, futures_pool if _is_futures else weekly_pool,
             model_prob, implied, unit_dollars, flat_marginal, flat_full,
             FUTURES_UNIT_SCALE if _is_futures else 1.0,
+            max_spread=FUTURES_MAX_SPREAD,
+            yes_bid=snap.yes_bid if snap else None,
+            yes_ask=snap.yes_ask if snap else None,
             sport="wnba",
             team=m.team,
         )

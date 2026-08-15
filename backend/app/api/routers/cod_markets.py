@@ -73,7 +73,7 @@ from app.db.database import get_session
 from app.db.models import CodMatch, Market, MarketSnapshot
 from app.models.baseline import elo_service_cod
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
-from app.models.staking import has_real_trading, kelly_fraction, size_stake_dollars
+from app.models.staking import FUTURES_MAX_SPREAD, has_real_trading, kelly_fraction, size_stake_dollars
 
 log = logging.getLogger("cod_markets")
 
@@ -238,7 +238,7 @@ def list_cod_markets(session: Session = Depends(get_session)):
             clv_stats, "cod", m.market_type)
         stake_dollars = size_stake_dollars(
             staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars,
-            flat_marginal, flat_full, sport="cod", team=m.team)
+            flat_marginal, flat_full, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None,  sport="cod", team=m.team)
 
         out.append(CodMarketOut(
             id=m.id, market_type=m.market_type, source=m.source, team=m.team,

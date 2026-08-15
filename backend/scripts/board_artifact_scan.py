@@ -65,18 +65,37 @@ def fetch(path: str):
 
 
 def load_board() -> list[dict]:
+    """Fetch every sport's board. A NON-200 IS A FAIL IN ITS OWN RIGHT.
+
+    Added after shipping a NameError to a live server on 2026-08-15: a mechanical
+    edit across 10 routers added `max_spread=FUTURES_MAX_SPREAD` but skipped the
+    IMPORT in two of them, because the check for an existing import matched the
+    constant's name inside a COMMENT. py_compile passes on an undefined name --
+    it is a NameError at request time, not a syntax error -- so all 10 files
+    "compiled" while /mma/markets and /cod/markets returned 500.
+
+    It surfaced as MMA showing 0 staked bets against 74 upcoming fights, and was
+    briefly misread as the new guard working. Compiling N files is not
+    verification of an N-file edit; CALLING the endpoints is.
+    """
     out = []
+    broken = []
     for s in SPORTS:
         path = f"/{s}/markets" if s else "/markets"
         try:
             rows = fetch(path)
         except Exception as e:
-            record("FAIL", "board fetch", f"{path}: {type(e).__name__}")
+            code = getattr(e, "code", None)
+            broken.append(f"{path}={code or type(e).__name__}")
             continue
         for r in rows if isinstance(rows, list) else []:
             if isinstance(r, dict):
                 r["_sport"] = s or "nfl"
                 out.append(r)
+    if broken:
+        record("FAIL", "endpoint health", f"{len(broken)} endpoint(s) not serving: {broken}")
+    else:
+        record("PASS", "endpoint health", f"all {len(SPORTS)} market endpoints returned 200")
     return out
 
 

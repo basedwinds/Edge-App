@@ -504,7 +504,7 @@ def list_lol_markets(session: Session = Depends(get_session)):
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "lol", m.market_type)
         pool = futures_pool if m.market_type == "tournament_winner" else weekly_pool
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=_uscale, sport="lol", team=m.team)
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None,  unit_scale=_uscale, sport="lol", team=m.team)
         # Zeroed AFTER sizing so the model number and edge still surface for
         # tracking (see MAP_MARKET_NOTE).
         _map_only = m.market_type == "map_winner"

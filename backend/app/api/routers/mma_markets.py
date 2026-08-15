@@ -57,7 +57,7 @@ from app.models import distance_service_mma, method_service_mma, rounds_service_
 from app.models import mma_model_disagreement
 from app.models.baseline import elo_service_mma
 from app.models.ladder_sanity import find_resolved_entities
-from app.models.staking import apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import FUTURES_MAX_SPREAD, apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 
 import logging
 log = logging.getLogger("mma_markets")
@@ -364,7 +364,7 @@ def list_mma_markets(session: Session = Depends(get_session)):
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "mma", m.market_type)
-        stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, sport="mma")  # every GAME_MARKET_TYPES entry is per-fight, "weekly" pool
+        stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None,  sport="mma")  # every GAME_MARKET_TYPES entry is per-fight, "weekly" pool
         out.append(
             MmaMarketOut(
                 id=m.id,
