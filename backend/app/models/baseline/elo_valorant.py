@@ -256,8 +256,54 @@ class SeriesDistribution:
         return sum(p for (a, b), p in self.dist.items() if (b - a) > -line)
 
 
+# HOW MUCH OF THE RATING GAP TO BELIEVE WHEN PRICING (#197, 2026-08-15).
+#
+# Same defect and same remedy as CS2 (#196), but a DIFFERENT constant, fitted on
+# Valorant's own data. Measured walk-forward over 9,603 predictions where both
+# sides clear MIN_GAMES, harness verified identical to production at lambda=1 on
+# all 19,644 replayed matches:
+#
+#       gap        n   claimed   actual     miss   CI excludes claim?
+#      0-49    3314    0.5504   0.5549  +0.0046   no
+#     50-99    2406    0.6555   0.6272  -0.0283   YES
+#   100-149    1625    0.7467   0.7194  -0.0273   YES
+#   150-199     948    0.8218   0.7542  -0.0676   YES
+#   200-299     834    0.8944   0.8369  -0.0575   YES
+#      300+     329    0.9647   0.8784  -0.0862   YES
+#
+# WHY THE CONSTANT DIFFERS FROM CS2's 0.80. Valorant KEPT per-map Elo updates (a
+# Bo3 won 2-1 is three observations, not one) where CS2 REJECTED them on its own
+# data. More updates per match means a different rating spread, so the same
+# underlying defect needs a different multiplier. Copying CS2's number across
+# would have been the exact mistake this repo's esports findings keep warning
+# about -- per-map Elo, patch adjustment and idle decay all failed to transfer
+# between titles.
+#
+# LOL WAS TESTED AT THE SAME TIME AND SHIPS NOTHING: its own sweep chose
+# lambda=1.00 on train Brier, so no shrink applies there. Three titles, three
+# different answers, each from its own data.
+#
+# Fitted on TRAIN Brier alone (earlier 70% by date), then the held-out 30%:
+#
+#     brier    0.22537 -> 0.22340   BETTER
+#     ece      0.05201 -> 0.03467   BETTER
+#     logloss  0.64945 -> 0.64099   BETTER
+#
+# meeting calibration_temp.py's rule that a fit ships only if it improves BOTH
+# ECE and Brier out of sample. Test-set miss by gap: 50-99 -0.053 -> -0.033,
+# 100-149 -0.030 -> -0.000, 150-199 -0.131 -> -0.097, 200-299 -0.112 -> -0.079,
+# 300+ -0.075 -> -0.056. The 0-49 bucket pays a small cost (+0.013 -> +0.020,
+# slightly more UNDER-confident) which is the expected price of a proportional
+# correction and stays well inside its interval.
+#
+# APPLIED AT PREDICTION TIME ONLY -- the update loop is untouched, so ratings
+# keep their meaning and the fit cannot move under its own feet.
+# See scripts/fit_esports_elo_gap_shrink.py.
+GAP_SHRINK = 0.86
+
+
 def predict_series(state: ValorantEloState, team_a: str, team_b: str, best_of: int) -> SeriesDistribution:
-    map_p = map_win_prob(state.get(team_a), state.get(team_b))
+    map_p = map_win_prob((state.get(team_a) - state.get(team_b)) * GAP_SHRINK, 0.0)
     dist = series_score_distribution(map_p, best_of)
     return SeriesDistribution(map_p=map_p, best_of=best_of, dist=dist)
 

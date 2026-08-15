@@ -160,6 +160,27 @@ class SeriesDistribution:
 
 
 def predict_series(state: LolEloState, team_a: str, team_b: str, best_of: int) -> SeriesDistribution:
+    # NO GAP_SHRINK HERE, AND THAT IS A MEASURED RESULT, NOT AN OVERSIGHT
+    # (#197, 2026-08-15). CS2 ships GAP_SHRINK=0.80 and Valorant 0.86, both
+    # because their Elo gaps are too steep. LoL was tested identically -- same
+    # harness, same protocol, verified against production on all 5,604 replayed
+    # matches -- and its own sweep chose lambda=1.00 on TRAIN Brier:
+    #
+    #     lam 1.00  train brier 0.20212  train ece 0.02313   <- best on both
+    #     lam 0.80  train brier 0.20321  train ece 0.04241
+    #     lam 0.60  train brier 0.20700  train ece 0.07270
+    #
+    # Only the 200+ buckets were significantly overconfident (-0.036, -0.053),
+    # 16.9% of gated predictions; everything below sat inside its interval and
+    # 0-49 was mildly UNDER-confident. Shrinking a title whose error is confined
+    # to a tail drags a correctly calibrated majority toward 0.5 -- the tennis
+    # temperature failure (#192).
+    #
+    # WORTH RE-TESTING LATER, for a specific reason: the HELD-OUT period shows
+    # overconfidence at every gap (-0.024 to -0.079) while train does not
+    # (train ece 0.02313 vs test 0.04078). That looks like recent drift a
+    # train-fitted constant structurally cannot see. If it persists, re-run
+    # scripts/fit_esports_elo_gap_shrink.py once more of that period is history.
     map_p = map_win_prob(state.get(team_a), state.get(team_b))
     dist = series_score_distribution(map_p, best_of)
     return SeriesDistribution(map_p=map_p, best_of=best_of, dist=dist)
