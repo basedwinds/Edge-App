@@ -55,6 +55,17 @@ figure that would have to change for the answer to change.
 | 2026-08-14 | Model probabilities of exactly 0/1 should not stake | **SHIPPED** | 277 priced rows; 0 staked at the time, so preventive. A Monte Carlo 0.0000 means "below sim resolution", not "impossible" | — |
 | 2026-08-03 | Longshot price floor for futures | **REJECTED** | Check the UI that renders a gate, not just the gate | — |
 
+## Soccer market coverage
+
+| Date | Hypothesis | Verdict | Decisive number | Script |
+|---|---|---|---|---|
+| 2026-08-15 | Only moneyline soccer bets ever get recommended | **REFUTED** | 8 types stake today: moneyline_3way 29, game_total 20, team_total 8, btts 2, uefa/national variants, spread 1. Moneyline just dominates by count | — |
+| 2026-08-15 | Half-markets (first_half_*/second_half_*) are wrongly suppressed | **WORKING AS DESIGNED** | Two gates, both correct. (1) **92–99% have ZERO volume** vs 51% for moneyline, so `has_traded` refuses to price against an untouched market-maker quote. (2) Of the 4 traded rows clearing 10pp, all fail the **ask** guard: `first_half_total` reads **+20.1pp at the mid and −16.9pp at the ask** on a 0.20/0.94 book | — |
+
+**Do not "fix" half-market suppression.** It is thin inventory quoted so wide the
+edge inverts at the executable price. The ask guard in `kelly_fraction`
+(`execution_price`) is what catches it.
+
 ## Esports
 
 | Date | Hypothesis | Verdict | Decisive number | Script |
