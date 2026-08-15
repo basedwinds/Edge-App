@@ -103,6 +103,15 @@ IMPLAUSIBLE_EDGE = 0.25
 # the disagreement stops being an edge and starts being a bug.
 IMPLAUSIBLE_ODDS_RATIO = 10.0
 
+# A standing BID above this proves the market still books a futures leg as able
+# to win. Used by the esports tournament gate (#207) to tell a live team from an
+# eliminated one when the model itself cannot see the bracket: nobody bids to BUY
+# a team that is already out, so a real bid is the market asserting the team is
+# alive. An eliminated leg collapses to bid 0 with an ask around a cent.
+# One cent, not a fitted number -- it is the exchange's minimum tick, so this
+# says "someone is bidding at all" rather than imposing a price view.
+MIN_LIVE_FUTURES_BID = 0.01
+
 
 def implausible_disagreement(model_prob: float, market_price: float) -> bool:
     """Is this disagreement too large to believe?

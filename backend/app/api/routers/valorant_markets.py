@@ -57,6 +57,7 @@ from app.models.ladder_sanity import (
 )
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
 from app.models.staking import apply_duplicate_listing_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import MIN_LIVE_FUTURES_BID
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 _NO_BASELINE_METHODOLOGY = "No detailed methodology available for this market type yet -- see the module docstring above."
@@ -260,30 +261,33 @@ def list_valorant_futures(session: Session = Depends(get_session)):
         if _settled:
             _kelly = None
             _stake = None
-        # ---- STAKE ONLY WHAT THE SIM COULD SEE (#207) ----
+        # ---- BLIND TOURNAMENTS: STAKE ONLY DEMONSTRABLY LIVE TEAMS (#207) ----
         #
-        # A tournament group is priced one of two ways. WITH real group
-        # standings and the real playoff slot count, the model knows who is
-        # through and who is already out. WITHOUT them it falls back to a flat
-        # rating-seeded bracket that re-simulates the whole event from scratch
-        # on every pass -- so a team knocked out yesterday keeps its full
-        # pre-tournament win probability, and the market moving it to a few
-        # cents reads to this app as a large EDGE rather than as a dead leg.
+        # A tournament group is priced one of two ways. WITH real group standings
+        # and the real playoff slot count, the model knows who is through and who
+        # is out (only Valorant has a source -- vlr.gg). WITHOUT them it falls
+        # back to a flat rating-seeded bracket that re-simulates the whole event
+        # from scratch, so a team knocked out yesterday keeps its full
+        # pre-tournament win probability.
         #
-        # Measured 2026-08-15: only VALORANT has a reachable source (vlr.gg
-        # publishes group standings and the bracket's slot count -- confirmed
-        # live, 12-team fields into an 8-slot double-elim playoff). CS2, LoL and
-        # CoD have none: HLTV is Cloudflare-gated, Liquipedia 403s and the rows
-        # it does yield do not cover the events we price, gol.gg trails real
-        # time by ~6 days. So on those titles EVERY tournament group is blind.
+        # THE FIRST VERSION OF THIS GATE BLOCKED THE WHOLE TITLE, and that was
+        # too blunt. Measured on the four legs it removed: three were tight,
+        # liquid books on teams the market plainly has alive -- CS2 Vitality
+        # (bid 0.22 / ask 0.23), LCK Gen.G (0.29/0.31), LCS Team Liquid
+        # (0.32/0.35). Those are ordinary model-vs-market disagreements about
+        # LIVE teams, which is the thing this app exists to find. Only the fourth
+        # was a real defect, and it was a missing FIELD rather than a missing
+        # bracket -- now refused upstream by MIN_BRACKET_FIELD.
         #
-        # PRICED AND SHOWN, NOT STAKED -- the same treatment map_winner gets.
-        # The number stays visible so the approximation can still be tracked
-        # against the market; it just stops sizing money. This narrows, but does
-        # not reverse, the 2026-08-02 decision to stake these for forward CLV:
-        # the arm that can actually see the tournament still accrues it.
-        _blind = (m.group_label or "") not in _progress_aware
-        if _blind:
+        # So the test is per-leg and asks the narrower question the failure
+        # actually poses: is this team still alive? A two-sided book with a real
+        # BID is the answer. Nobody bids to BUY an eliminated team, so a standing
+        # bid is the market asserting the team can still win -- the same book
+        # data has_real_trading and the ASK guard already rely on. An eliminated
+        # leg collapses to bid 0 / ask ~0.01 and is refused here.
+        _bid = snap.yes_bid if snap else None
+        _live_book = _bid is not None and _bid > MIN_LIVE_FUTURES_BID
+        if not _live_book and (m.group_label or "") not in _progress_aware:
             _kelly = None
             _stake = None
         out.append(

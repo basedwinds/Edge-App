@@ -227,6 +227,32 @@ def _covered_mass(group, priced_ids, implied_by_market) -> float | None:
 # refuses only LCK Challengers League, where 3 rated teams held 14.9%.
 MIN_FIELD_COVERAGE = 0.40
 
+# A KNOCKOUT BRACKET CANNOT HOLD THREE ENTRANTS. Structural, not a fitted
+# threshold: with fewer than four rated teams there is no bracket to simulate,
+# and the sim normalises 100% of the win probability across whatever it was
+# handed. Found live 2026-08-15 -- "KeSPA Cup 2026: Winner" listed exactly THREE
+# legs, and the sim returned T1 at 0.952 against a tight, liquid market at 0.235
+# (bid 0.23 / ask 0.24). That is a +71.7pp "edge" produced entirely by the
+# missing field, and it was being STAKED.
+#
+# NOTHING ELSE CATCHES IT, which is why it needs its own rule:
+#   * _covered_mass passes, because the three listed legs sum to 1.006 in market
+#     terms -- and a sum of 1.000 does NOT prove a field is complete, the exact
+#     trap already recorded in project_group_coherence_check.
+#   * implausible_disagreement / implausible_certainty both work on an ODDS
+#     RATIO with a 10x threshold. This is 0.952/0.235 = 4.05x, comfortably
+#     inside a bar that was validated against 3,912 settled bets. Widening that
+#     bar to catch this would break the thing it was measured to do.
+# Measured across all 15 live tournament groups: KeSPA Cup is the ONLY one below
+# four rated entrants, so this refuses exactly the broken case and nothing else.
+MIN_BRACKET_FIELD = 4
+SHORT_FIELD_REASON = (
+    "Not priced: only {n} of this tournament's teams are listed as separate markets, and a "
+    "knockout bracket cannot be run on fewer than four entrants. The simulator would spread the "
+    "whole field's win probability across just those few, which reads as an enormous edge that "
+    "is really a missing field rather than a mispriced one."
+)
+
 
 def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_OF,
                              trials: int = DEFAULT_TRIALS, event_state_for=None,
@@ -305,6 +331,16 @@ def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_O
                 unfielded[m.id] = (THIN_HISTORY_REASON
                                    if elo_service.get_team_rating(m.team) is not None
                                    else "")
+
+        # See MIN_BRACKET_FIELD. Refused rather than priced-but-unstaked, so the
+        # number never appears at all -- a 95% that comes from a missing field is
+        # not a tracking datapoint, it is a wrong answer.
+        if 0 < len(field) < MIN_BRACKET_FIELD:
+            log.info("tournament %r NOT priced: only %d rated entrants (need >= %d)",
+                     _label, len(field), MIN_BRACKET_FIELD)
+            if refusals is not None:
+                refusals[_label] = SHORT_FIELD_REASON.format(n=len(field))
+            continue
 
         if not _is_single_event(_label, len(group)):
             continue  # season-long aggregate / not a single bracket -- leave unpriced
