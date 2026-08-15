@@ -112,7 +112,18 @@ def _logloss(p: np.ndarray, y: np.ndarray) -> float:
     return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
 
 
-def main() -> None:
+def build_rows():
+    """The walk-forward game loop, extracted from main() so the constant
+    derivation (derive_mlb_pitcher_kbb_constant.py) can reuse the EXACT same
+    qualification, snapshot lookup and diff conventions.
+
+    A PURE REFACTOR -- no behaviour change. Verified by diffing this script's
+    full output before and after extraction. That matters because the whole
+    point of reusing it is that a second harness would drift from this one, and
+    an extraction that quietly changed a gate would defeat the purpose.
+
+    Returns (rows, mean_fip, mean_era, skipped) where each row is
+    (season, elo_diff, era_diff, fip_diff, kbb_diff, outcome, margin)."""
     if not FIP_CACHE_PATH.exists():
         raise SystemExit(f"missing {FIP_CACHE_PATH} -- run build_mlb_pitcher_fip_cache.py first")
 
@@ -163,6 +174,12 @@ def main() -> None:
         rows.append((g["season"], elo_diff, era_diff, fip_diff, kbb_diff,
                      1.0 if g["home_score"] > g["away_score"] else 0.0,
                      g["home_score"] - g["away_score"]))
+
+    return rows, mean_fip, mean_era, skipped
+
+
+def main() -> None:
+    rows, mean_fip, mean_era, skipped = build_rows()
 
     print(f"league-average raw FIP {mean_fip:+.3f}   league-average ERA {mean_era:.3f}")
     print(f"Qualifying games: {len(rows)}   skipped: {skipped}")

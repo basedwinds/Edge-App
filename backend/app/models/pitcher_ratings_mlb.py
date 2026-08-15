@@ -75,6 +75,43 @@ ERA_DIFF_TO_ELO_POINTS = 9.73
 # current-season coefficient blindly. See module docstring.
 ERA_DIFF_TO_ELO_POINTS_PRIOR_SEASON = 6.02
 
+# K-BB% CONVERSION (#163, 2026-08-15) -- the metric this adjustment now PREFERS.
+#
+# WHY SWAP. check_mlb_pitcher_metric settled it on 15,352 walk-forward games:
+# correlation with the outcome is era 0.0890, fip 0.1047, kbb 0.1096, and
+# out-of-sample K-BB% beats an elo-only baseline in 8 of 9 held-out seasons
+# against ERA's 6 of 9. ERA charges a pitcher for balls in play his defence
+# handled; K-BB% uses only what he controls nearly alone. Same "prefer the metric
+# closest to what the competitor controls" frame that produced the totals pitcher
+# term (#199) and the soccer xG blend (#167).
+#
+# DERIVED IN ONE HARNESS WITH ERA AS A CONTROL. A pooled RAW-units logistic
+# (outcome ~ elo_diff + metric_diff) over the same games reproduces the shipped
+# ERA constant at 9.7862 against 9.73 -- a 0.6% miss -- so the harness is on the
+# incumbent's basis and the K-BB number from it is directly comparable. The raw
+# K-BB ratio is 350.39; it is then SCALED off the incumbent
+# (9.73 * ratio_kbb/ratio_era = 348.38) so any residual basis difference cancels
+# and the incumbent's conservatism is inherited rather than silently changed.
+#
+# SHRUNK 0.9, AND THE REASON IS THE CAP. At full strength the adjustment hits
+# MAX_PITCHER_ELO_POINTS on 16.8% of games against ERA's 3.9% -- the cap is
+# documented as a hard backstop for small samples, not a routine clamp, and a
+# constant that is overridden on one game in six is not really the constant.
+# Swept on train seasons only (a very flat basin, 0.67216-0.67222 across
+# 0.6-1.0), then the held-out three seasons spent once:
+#
+#     elo only           0.68428
+#     +era (incumbent)   0.68395   -0.00033 vs elo-only
+#     +kbb full          0.68369   -0.00026 vs incumbent
+#     +kbb shrunk x0.9   0.68362   -0.00033 vs incumbent, and clamps 12.9%
+#
+# HONEST SIZE: ~0.0003 log-loss. K-BB% roughly DOUBLES what the pitcher term
+# contributes over elo-only, but both are small -- which is what r=0.089 vs
+# r=0.110 predicts. The 0.305 figure once quoted for era_diff is the REDUNDANCY
+# correlation with elo_diff, not signal.
+KBB_DIFF_TO_ELO_POINTS = 313.54                # 348.38 * 0.9
+KBB_DIFF_TO_ELO_POINTS_PRIOR_SEASON = 193.96   # same 0.9, scaled by 6.02/9.73
+
 # Conservatism lever instead: a hard cap on the total Elo-point swing one
 # game's starters can contribute (~1.8x HOME_FIELD_ADV) -- bounds the effect
 # of any one still-small in-season sample rather than discounting the fitted
@@ -85,9 +122,21 @@ ERA_DIFF_TO_ELO_POINTS_PRIOR_SEASON = 6.02
 MAX_PITCHER_ELO_POINTS = 40.0
 
 
+def _kbb_rate(stats: dict | None) -> float | None:
+    """(SO - BB) / BF, or None when any component is missing. No MIN_BF gate --
+    see get_adjustment for why this path gates on MIN_IP instead."""
+    if not stats:
+        return None
+    bf, k, bb = stats.get("bf"), stats.get("k"), stats.get("bb")
+    if not bf or k is None or bb is None:
+        return None
+    return (k - bb) / bf
+
+
 def pitcher_elo_adjustment(
-    home_era: float | None, away_era: float | None, home_ip: float, away_ip: float,
+    home_metric: float | None, away_metric: float | None, home_ip: float, away_ip: float,
     home_is_prior_season: bool = False, away_is_prior_season: bool = False,
+    metric: str = "era",
 ) -> float:
     """Returns an Elo-point adjustment (added to the home team's effective
     rating before win_prob) -- 0.0 if either starter has too little
@@ -100,15 +149,24 @@ def pitcher_elo_adjustment(
     common case (one fresh rookie starter vs. an established current-season
     starter) is exactly the situation this app has the LEAST current-season
     read on."""
-    if home_era is None or away_era is None:
+    if home_metric is None or away_metric is None:
         return 0.0
     if home_ip < MIN_IP or away_ip < MIN_IP:
         return 0.0
-    home_era = min(home_era, ERA_OUTLIER_CAP)
-    away_era = min(away_era, ERA_OUTLIER_CAP)
-    era_diff = away_era - home_era  # positive favors home (lower ERA = better)
-    conversion = ERA_DIFF_TO_ELO_POINTS_PRIOR_SEASON if (home_is_prior_season or away_is_prior_season) else ERA_DIFF_TO_ELO_POINTS
-    return max(-MAX_PITCHER_ELO_POINTS, min(MAX_PITCHER_ELO_POINTS, era_diff * conversion))
+    prior = home_is_prior_season or away_is_prior_season
+    if metric == "kbb":
+        # SIGN FLIPS: higher K-BB% is BETTER, where lower ERA is better. No
+        # outlier cap -- K-BB% is a bounded rate (a share of batters faced) and
+        # cannot run away the way an ERA off a handful of innings can, which is
+        # the only thing ERA_OUTLIER_CAP exists to contain.
+        diff = home_metric - away_metric
+        conversion = KBB_DIFF_TO_ELO_POINTS_PRIOR_SEASON if prior else KBB_DIFF_TO_ELO_POINTS
+    else:
+        home_metric = min(home_metric, ERA_OUTLIER_CAP)
+        away_metric = min(away_metric, ERA_OUTLIER_CAP)
+        diff = away_metric - home_metric  # positive favors home (lower ERA = better)
+        conversion = ERA_DIFF_TO_ELO_POINTS_PRIOR_SEASON if prior else ERA_DIFF_TO_ELO_POINTS
+    return max(-MAX_PITCHER_ELO_POINTS, min(MAX_PITCHER_ELO_POINTS, diff * conversion))
 
 
 class PitcherRatingCache:
@@ -185,6 +243,29 @@ class PitcherRatingCache:
                 away = prior
                 away_is_prior = True
 
+        # PREFER K-BB%, FALL BACK TO ERA -- never to nothing (#163).
+        #
+        # A pure swap would LOSE coverage: a K-BB% rate wants batters faced to
+        # stabilise, and the natural gate (MIN_BF_FOR_KBB=150, roughly 35 IP) is
+        # far stricter than ERA's MIN_IP=15. Every starter between those two
+        # thresholds would silently drop to NO pitcher adjustment at all, trading
+        # a validated ERA signal for nothing on exactly the pitchers the model
+        # knows least about.
+        #
+        # So K-BB% is gated on MIN_IP here -- the same population the constant was
+        # fitted on (check_mlb_pitcher_metric's build_rows gates on `ip < MIN_IP`)
+        # -- and ERA carries any game where the K-BB components are absent
+        # entirely. The stricter MIN_BF_FOR_KBB stays where it was validated, on
+        # get_combined_kbb for the totals model.
+        kbb = _kbb_rate(home), _kbb_rate(away)
+        if kbb[0] is not None and kbb[1] is not None:
+            return pitcher_elo_adjustment(
+                kbb[0], kbb[1],
+                home["ip"] if home else 0.0,
+                away["ip"] if away else 0.0,
+                home_is_prior, away_is_prior,
+                metric="kbb",
+            )
         return pitcher_elo_adjustment(
             home["era"] if home else None,
             away["era"] if away else None,
