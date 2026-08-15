@@ -13,6 +13,8 @@ import { MARKET_TYPE_LABELS } from "../components/markets/FuturesTable";
 import { describeTennisSpread, TENNIS_MARKET_TYPE_LABELS } from "./tennisLabel";
 
 export type PickLike = {
+  /** "no" = the stake buys AGAINST this pick (#195). Optional; absent = "yes". */
+  position?: "yes" | "no" | null;
   marketType: string;
   team: string | null;
   side: string | null;
@@ -147,6 +149,24 @@ function describeSpreadPick(team: string, line: number): string {
 }
 
 export function describePick(row: PickLike): string {
+  // A NO BET IS THE OPPOSITE OF WHAT THE REST OF THIS FUNCTION DESCRIBES (#195).
+  //
+  // Every branch below names the YES outcome ("Spirit wins", "Over 2.5"), which
+  // is what the row is ABOUT -- but a NO stake wins when that does NOT happen.
+  // The user places these by hand on Kalshi/Polymarket, where YES and NO are
+  // two different buttons, so a row that reads "BIG wins" while the intended
+  // trade is "BIG does not win" is a mis-click waiting to happen.
+  //
+  // Wrapping the whole description rather than editing ~20 branches: each branch
+  // has its own grammar (handicaps, set numbers, exact scores, method of
+  // finish), and negating them individually is 20 chances to get one wrong.
+  if (row.position === "no") {
+    return `NO — ${describeYesPick(row)}`;
+  }
+  return describeYesPick(row);
+}
+
+function describeYesPick(row: PickLike): string {
   const { team, line, side, marketType, sport } = row;
   if (marketType === "f5") return side === "tie" ? "Tie after 5 innings" : `${team ?? "—"} wins first 5 innings`;
   if (marketType === "rfi") return side === "no" ? "No run in the 1st inning" : "A run scores in the 1st inning";

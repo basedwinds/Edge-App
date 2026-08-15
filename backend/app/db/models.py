@@ -800,6 +800,26 @@ class PlacedBet(Base):
     lol_match_id = Column(Integer, nullable=True)  # present only for LoL match-tied market types
     cod_match_id = Column(Integer, nullable=True)  # present only for CoD match-tied market types
     race_event_id = Column(Integer, nullable=True)  # present only for motorsport (f1/irl/nascar) bets
+    # WHICH SIDE OF THE CONTRACT: "yes" (buy the outcome) | "no" (buy against it).
+    #
+    # A SEPARATE COLUMN FROM `side` ON PURPOSE (#195, 2026-08-15). `side` above is
+    # the OUTCOME SELECTOR and is already fully occupied -- measured across this
+    # table: over 7343, set_1 605, yes 550, away 537, home 511, set_2 490, draw
+    # 252, no 145, under 132, 2-0 88, kotko 46, submission 36, decision 33, tie 17.
+    # Overloading it would erase the selector on an over/under row: a NO bet on
+    # "Over 2.5" has to keep BOTH facts, "the Over rung" and "betting against it".
+    # The 550 `yes` / 145 `no` values there are markets whose outcome literally IS
+    # yes/no, which is a different thing again.
+    #
+    # Default "yes" is not a placeholder -- every row written before this column
+    # existed is a YES bet by construction, because kelly_fraction refuses
+    # negative edge and so the app could only ever surface YES. No backfill.
+    #
+    # SETTLEMENT MUST READ THIS. A NO bet wins exactly when the YES outcome
+    # loses; grading one as a YES puts a wrong result in the tracker and a wrong
+    # sign in every downstream ROI/CLV number. All five sites that assign
+    # won/lost go through settlement.resolve_status_for_position().
+    position = Column(String, nullable=False, default="yes")  # yes | no
     stake_pool = Column(String, nullable=False)  # "weekly" | "futures"
     stake_dollars = Column(Float, nullable=False)
     stake_units = Column(Float, nullable=True)

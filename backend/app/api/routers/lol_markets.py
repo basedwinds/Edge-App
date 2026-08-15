@@ -39,7 +39,7 @@ from app.models.esports_tournament_pricing import (
 )
 from app.models.ladder_sanity import futures_group_decided, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, LOL_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
-from app.models.staking import apply_duplicate_listing_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import no_side_inputs, apply_duplicate_listing_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 
 import logging
 log = logging.getLogger("lol_markets")
@@ -502,9 +502,33 @@ def list_lol_markets(session: Session = Depends(get_session)):
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "lol", m.market_type)
+        # ---- NO SIDE (#195) ----------------------------------------------
+        # Only for cells with their own settled evidence (staking.NO_SIDE_CELLS)
+        # and only when the YES side found no edge -- the two are mutually
+        # exclusive by construction, since YES needs model > mid + threshold and
+        # NO needs model < mid - threshold.
+        #
+        # The complement inputs go through the SAME kelly + sizing calls, so
+        # every guard applies untouched. That is deliberate: a parallel NO
+        # pricing path is how the spread guard reached 3 of 13 routers.
+        _position = "yes"
+        _smp, _smk = model_prob, implied
+        _sbid = snap.yes_bid if snap else None
+        _sask = snap.yes_ask if snap else None
+        if kelly is None:
+            _no = no_side_inputs("lol", m.market_type, model_prob, implied,
+                                 snap.yes_bid if snap else None, snap.yes_ask if snap else None)
+            if _no is not None:
+                _nmp, _nmk, _nbid, _nask = _no
+                _nkelly = gate_kelly(kelly_fraction(_nmp, _nmk, fractional_kelly, max_stake_fraction,
+                                                    min_edge_to_bet, has_traded, _nask),
+                                     clv_stats, "lol", m.market_type)
+                if _nkelly is not None:
+                    _position, kelly = "no", _nkelly
+                    _smp, _smk, _sbid, _sask = _nmp, _nmk, _nbid, _nask
         pool = futures_pool if m.market_type == "tournament_winner" else weekly_pool
         _uscale = FUTURES_UNIT_SCALE if pool is futures_pool else 1.0
-        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None,  unit_scale=_uscale, sport="lol", team=m.team)
+        stake_dollars = size_stake_dollars(staking_mode, kelly, pool, _smp, _smk, unit_dollars, flat_marginal, flat_full, max_spread=FUTURES_MAX_SPREAD, yes_bid=_sbid, yes_ask=_sask,  unit_scale=_uscale, sport="lol", team=m.team)
         # Zeroed AFTER sizing so the model number and edge still surface for
         # tracking (see MAP_MARKET_NOTE).
         _map_only = m.market_type == "map_winner"
@@ -513,6 +537,7 @@ def list_lol_markets(session: Session = Depends(get_session)):
             stake_dollars = None
         out.append(
             LolMarketOut(
+                position=_position,
                 id=m.id,
                 market_type=m.market_type,
                 source=m.source,

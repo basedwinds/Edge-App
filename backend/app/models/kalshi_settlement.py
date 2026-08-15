@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.clients.kalshi_client import BASE as KALSHI_BASE
 from app.db.models import Market, PlacedBet
+from app.models.bet_position import position_note, resolve_status_for_position
 
 log = logging.getLogger("kalshi_settlement")
 
@@ -228,9 +229,11 @@ def settle_pending_from_kalshi(session: Session, bets: list[PlacedBet]) -> int:
         if status not in _SETTLED_STATUSES or result not in ("yes", "no"):
             # Still trading, or settled without a usable result -- leave pending.
             continue
-        bet.status = "won" if result == "yes" else "lost"
+        bet.status = resolve_status_for_position(bet, "won" if result == "yes" else "lost")
         bet.settled_at = datetime.datetime.utcnow()
-        bet.settlement_note = f"auto-settled from Kalshi market result ({result})"
+        bet.settlement_note = (
+            f"auto-settled from Kalshi market result ({result})" + position_note(bet)
+        )
         # Mirror the outcome onto the market row so the UI stops treating a
         # resolved market as live even before the next full poll.
         market.status = "closed"

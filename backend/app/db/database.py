@@ -93,6 +93,7 @@ _MISSING_COLUMNS_BY_TABLE = {
     "news_adjustment_cache": [("home_scoring_penalty_pp", "FLOAT"), ("away_scoring_penalty_pp", "FLOAT")],
     "placed_bets": [
         ("was_recommended", "BOOLEAN"),
+        ("position", "VARCHAR"),   # yes | no -- backfilled by _backfill_position_column
         ("sport", "VARCHAR"),
         ("nba_game_id", "VARCHAR"),
         ("wnba_game_id", "VARCHAR"),
@@ -169,6 +170,25 @@ def _backfill_sport_column():
             conn.execute(text(f"UPDATE {table} SET sport = 'nfl' WHERE sport IS NULL"))
 
 
+def _backfill_position_column():
+    """`position` is NOT NULL with a Python-side default of "yes", but
+    _add_missing_columns emits a bare `ADD COLUMN` with no DEFAULT clause, so
+    every pre-existing row lands NULL. Same shape as _backfill_sport_column
+    above, and for the same reason.
+
+    "yes" IS CORRECT FOR EVERY EXISTING ROW, not merely a convenient filler:
+    `kelly_fraction` refuses negative edge, so until #186 the app could not
+    surface a NO bet at all. Every row written before this column existed is a
+    YES bet by construction. Idempotent -- only touches NULLs."""
+    inspector = inspect(engine)
+    if "placed_bets" not in set(inspector.get_table_names()):
+        return
+    if "position" not in {c["name"] for c in inspector.get_columns("placed_bets")}:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE placed_bets SET position = 'yes' WHERE position IS NULL"))
+
+
 def _add_missing_indexes():
     """Same reasoning as _add_missing_columns -- `create_all` only adds
     indexes for brand-new tables, not ones that already exist in an
@@ -184,6 +204,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _add_missing_columns()
     _backfill_sport_column()
+    _backfill_position_column()
     _add_missing_indexes()
 
 

@@ -32,6 +32,7 @@ from app.db.models import (
     CfbGame, CodMatch, Cs2Match, LolMap, LolMatch, Market, MlbGame, MmaFight, NbaGame, NflGame, PlacedBet,
     RaceEvent, SoccerMatch, TennisMatch, ValorantMap, ValorantMatch, WnbaGame,
 )
+from app.models.bet_position import position_note, resolve_status_for_position
 
 log = logging.getLogger("bet_settlement")
 
@@ -1266,9 +1267,9 @@ def settle_finished_games(session: Session) -> int:
         result = grader(bet, game)
         if result not in ("won", "lost", "push"):
             continue  # grader couldn't resolve (e.g. team-name mismatch, draw) -> leave pending
-        bet.status = result
+        bet.status = resolve_status_for_position(bet, result)
         bet.settled_at = datetime.datetime.utcnow()
-        bet.settlement_note = _settlement_note(bet, game)
+        bet.settlement_note = _settlement_note(bet, game) + position_note(bet)
         settled += 1
 
     if settled:

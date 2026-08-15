@@ -152,6 +152,11 @@ class PlacedBetIn(BaseModel):
     team: str | None = None
     line: float | None = None
     side: str | None = None
+    # WHICH SIDE OF THE CONTRACT (#195). Distinct from `side` above, which is the
+    # OUTCOME SELECTOR (over/home/draw/set_1/kotko/2-0). A NO bet on "Over 2.5"
+    # carries side="over" AND position="no" -- both facts, neither overwriting
+    # the other. Defaults to "yes" so every existing caller is unaffected.
+    position: str = "yes"
     label: str
     nfl_game_id: str | None = None
     nba_game_id: str | None = None
@@ -184,6 +189,7 @@ class PlacedBetOut(BaseModel):
     team: str | None
     line: float | None
     side: str | None
+    position: str = "yes"   # yes | no -- see PlacedBetIn
     label: str
     nfl_game_id: str | None
     nba_game_id: str | None

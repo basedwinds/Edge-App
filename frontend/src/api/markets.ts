@@ -647,6 +647,16 @@ export interface RecommendedBetRow {
   team: string | null;
   line: number | null;
   side: string | null;
+  /** WHICH SIDE OF THE CONTRACT this stake is for. "no" means buy AGAINST the
+   * outcome -- the model thinks it is LESS likely than the market does. Distinct
+   * from `side`, which is the outcome selector (over/home/set_1/...): a NO bet on
+   * "Over 2.5" carries side="over" AND position="no".
+   *
+   * estProb/edge stay in the YES frame on every row so the numbers mean the same
+   * thing everywhere; the UI reads this to say what is actually being bought.
+   * Optional -- only cs2/lol/tennis routers emit it (staking.NO_SIDE_CELLS), and
+   * absent means "yes". */
+  position?: "yes" | "no";
   /** Soccer's correct_score market_type only -- the real scoreline this
    * row's YES side resolves on. Optional since every other sport/market
    * type never sets it. */
@@ -1919,6 +1929,7 @@ export function buildTennisRecommendedBets(
       marketId: m.id,
       label,
       marketType: m.market_type,
+      position: (m.position === "no" ? "no" : "yes"),
       team: m.team,
       line: m.line,
       side: m.side,
@@ -2160,7 +2171,7 @@ export function buildSoccerRecommendedBets(
  * title's own market_type set is passed in as `ladderTypes` since it
  * differs slightly per title (e.g. series_handicap only exists for
  * Valorant) -- see each title's own GAME_MARKET_TYPES in its router. */
-function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: string; source: "kalshi" | "polymarket"; kelly_fraction: number | null; suggested_stake_dollars: number | null; suggested_stake_units: number | null; stake_pool: "weekly" | "futures" | null; team: string | null; line: number | null; side: string | null; match_date: string | null; estimated_start_time: string | null; implied_prob: number | null; model_prob: number | null; edge: number | null; volume: number | null; match_label?: string | null; group_label?: string | null; event_name?: string | null }>(
+function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: string; source: "kalshi" | "polymarket"; kelly_fraction: number | null; suggested_stake_dollars: number | null; suggested_stake_units: number | null; stake_pool: "weekly" | "futures" | null; team: string | null; line: number | null; side: string | null; position?: string; match_date: string | null; estimated_start_time: string | null; implied_prob: number | null; model_prob: number | null; edge: number | null; volume: number | null; match_label?: string | null; group_label?: string | null; event_name?: string | null }>(
   sport: "valorant" | "cs2" | "lol" | "cod",
   markets: M[],
   matchIdOf: (m: M) => number | null,
@@ -2188,6 +2199,7 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
       league: m.event_name ?? null,
       label,
       marketType: m.market_type,
+      position: (m.position === "no" ? "no" : "yes"),
       team: m.team,
       line: m.line,
       side: m.side,
@@ -2856,6 +2868,9 @@ export async function markBetPlaced(row: RecommendedBetRow): Promise<PlacedBetPa
     team: row.team,
     line: row.line,
     side: row.side,
+    // WITHOUT THIS A NO BET IS STORED AS A YES AND SETTLES BACKWARDS (#195).
+    // `side` above is the outcome selector, not the contract side.
+    position: row.position ?? "yes",
     label: row.label,
     nfl_game_id: row.nflGameId,
     nba_game_id: row.nbaGameId,

@@ -171,6 +171,14 @@ class TennisMarketOut(BaseModel):
     team: str | None  # holds a player's real full name (no fixed roster, see market_catalog_tennis.py)
     line: float | None  # set_winner: set number; game_spread/game_total: the line
     side: str | None  # exact_score: "{player_sets}-{opponent_sets}" e.g. "2-1"
+    # WHICH SIDE OF THE CONTRACT this row's stake is for: "yes" (buy the outcome)
+    # or "no" (buy against it). #195. Distinct from `side` above, which is the
+    # OUTCOME SELECTOR. Always "yes" unless (sport, market_type) is in
+    # staking.NO_SIDE_CELLS and the NO side is the one carrying the edge --
+    # the two are mutually exclusive, a market cannot have edge both ways.
+    # model_prob/edge stay in the YES frame so the number means the same thing
+    # on every row; the UI reads `position` to say what is being bought.
+    position: str = "yes"
     match_label: str | None
     tennis_match_id: int | None
     # Collapses rows that are the SAME real match (see
@@ -280,6 +288,14 @@ class Cs2MarketOut(BaseModel):
     source: str
     team: str | None  # real team name; null for series_total (game-level) and tournament_winner's group row
     side: str | None  # series_total only: "over"
+    # WHICH SIDE OF THE CONTRACT this row's stake is for: "yes" (buy the outcome)
+    # or "no" (buy against it). #195. Distinct from `side` above, which is the
+    # OUTCOME SELECTOR. Always "yes" unless (sport, market_type) is in
+    # staking.NO_SIDE_CELLS and the NO side is the one carrying the edge --
+    # the two are mutually exclusive, a market cannot have edge both ways.
+    # model_prob/edge stay in the YES frame so the number means the same thing
+    # on every row; the UI reads `position` to say what is being bought.
+    position: str = "yes"
     line: float | None  # map_winner: the map number; series_total: total-maps threshold
     match_label: str | None  # "{team_a} vs {team_b}"
     cs2_match_id: int | None
@@ -317,6 +333,14 @@ class LolMarketOut(BaseModel):
     source: str
     team: str | None  # real team name; null for series_total (game-level) and tournament_winner's group row
     side: str | None  # series_total only: "over"
+    # WHICH SIDE OF THE CONTRACT this row's stake is for: "yes" (buy the outcome)
+    # or "no" (buy against it). #195. Distinct from `side` above, which is the
+    # OUTCOME SELECTOR. Always "yes" unless (sport, market_type) is in
+    # staking.NO_SIDE_CELLS and the NO side is the one carrying the edge --
+    # the two are mutually exclusive, a market cannot have edge both ways.
+    # model_prob/edge stay in the YES frame so the number means the same thing
+    # on every row; the UI reads `position` to say what is being bought.
+    position: str = "yes"
     line: float | None  # map_winner: the map number; series_total: total-maps threshold
     match_label: str | None  # "{team_a} vs {team_b}"
     lol_match_id: int | None

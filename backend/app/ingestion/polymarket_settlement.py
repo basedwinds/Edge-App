@@ -46,6 +46,7 @@ from app.db.database import SessionLocal
 from app.db.models import Market, PlacedBet
 from app.ingestion.poller_lock import db_write_lock
 from app.ingestion.polymarket_resolution import _BATCH, _GAMMA_MARKETS, condition_id
+from app.models.bet_position import position_note, resolve_status_for_position
 
 log = logging.getLogger("polymarket_settlement")
 
@@ -198,9 +199,11 @@ def settle_from_polymarket_resolution() -> int:
                 bet = session.get(PlacedBet, bid)
                 if bet is None or bet.status != "pending":
                     continue
-                bet.status = status
+                bet.status = resolve_status_for_position(bet, status)
                 bet.settled_at = now
-                bet.settlement_note = f"auto-settled from Polymarket resolution ({reason})"
+                bet.settlement_note = (
+                    f"auto-settled from Polymarket resolution ({reason})" + position_note(bet)
+                )
                 settled += 1
             if settled:
                 session.commit()

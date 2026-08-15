@@ -20,6 +20,7 @@ from app.clients.base import get_json
 from app.db.database import SessionLocal
 from app.db.models import Market, PlacedBet
 from app.ingestion.poller_lock import db_write_lock
+from app.models.bet_position import position_note, resolve_status_for_position
 
 log = logging.getLogger("market_resolution_settlement")
 
@@ -292,9 +293,12 @@ def settle_from_kalshi_resolution() -> int:
                 bet = session.get(PlacedBet, bid)
                 if bet is None or bet.status != "pending":
                     continue
-                bet.status = status
+                bet.status = resolve_status_for_position(bet, status)
                 bet.settled_at = now
-                bet.settlement_note = f"auto-settled from Kalshi market resolution (result={r or 'void'})"
+                bet.settlement_note = (
+                    f"auto-settled from Kalshi market resolution (result={r or 'void'})"
+                    + position_note(bet)
+                )
                 settled += 1
             if settled:
                 session.commit()

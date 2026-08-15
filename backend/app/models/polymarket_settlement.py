@@ -28,6 +28,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.db.models import Market, PlacedBet
+from app.models.bet_position import position_note, resolve_status_for_position
 
 log = logging.getLogger("polymarket_settlement")
 
@@ -225,13 +226,16 @@ def settle_pending_from_polymarket(session: Session, bets: list[PlacedBet]) -> i
             log.warning("polymarket outcome %r not in %s", leg, sorted(resolved))
             continue
         if price >= _DECISIVE:
-            bet.status = "won"
+            bet.status = resolve_status_for_position(bet, "won")
         elif price <= 1 - _DECISIVE:
-            bet.status = "lost"
+            bet.status = resolve_status_for_position(bet, "lost")
         else:
             continue
         bet.settled_at = datetime.datetime.utcnow()
-        bet.settlement_note = f"auto-settled from Polymarket resolution ({parts[1]} @ {price:g})"
+        bet.settlement_note = (
+            f"auto-settled from Polymarket resolution ({parts[1]} @ {price:g})"
+            + position_note(bet)
+        )
         market.status = "closed"
         settled += 1
 

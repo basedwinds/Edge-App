@@ -384,6 +384,43 @@ def no_side_allowed(sport: str | None, market_type: str | None) -> bool:
     return (sport, market_type) in NO_SIDE_CELLS
 
 
+def no_side_inputs(
+    sport: str | None,
+    market_type: str | None,
+    model_prob: float | None,
+    market_price: float | None,
+    yes_bid: float | None,
+    yes_ask: float | None,
+) -> "tuple[float, float, float | None, float | None] | None":
+    """Complement inputs for pricing the NO side, or None if this cell may not.
+
+    Returns `(model_prob, market_price, bid, ask)` already in the NO frame, so a
+    router feeds them to the SAME `kelly_fraction` / `size_stake_dollars` calls
+    it already makes. Every gate then applies untouched -- which is the point.
+    The alternative, a parallel NO pricing path per router, is how the spread
+    guard ended up on 3 of 13 routers and the duplicate cap on 4 of 13.
+
+    NOTE THE BID/ASK SWAP, it is not a typo:
+
+        NO bid = 1 - yes_ask        NO ask = 1 - yes_bid
+
+    You BUY the NO at `1 - yes_bid` (you cross to whoever is bidding for YES),
+    so that is the ask in this frame. The swap also keeps the spread invariant:
+    (1 - yes_bid) - (1 - yes_ask) == yes_ask - yes_bid, so `size_stake_dollars`'
+    `max_spread` check measures the same book width either way and needs no
+    NO-specific constant."""
+    if not no_side_allowed(sport, market_type):
+        return None
+    if model_prob is None or market_price is None:
+        return None
+    return (
+        1.0 - model_prob,
+        1.0 - market_price,
+        (1.0 - yes_ask) if yes_ask is not None else None,
+        (1.0 - yes_bid) if yes_bid is not None else None,
+    )
+
+
 def kelly_fraction_no(
     model_prob: float | None,
     market_price: float | None,

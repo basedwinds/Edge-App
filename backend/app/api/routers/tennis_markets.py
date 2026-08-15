@@ -40,7 +40,7 @@ from app.models.ladder_sanity import (
     pair_looks_resolved,
 )
 from app.models.duplicate_fixtures import canonical_tennis_fixture_ids
-from app.models.staking import FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import no_side_inputs, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/tennis", tags=["tennis"])
@@ -770,9 +770,34 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "tennis", m.market_type)
-        stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None,  sport="tennis")
+        # ---- NO SIDE (#195) ----------------------------------------------
+        # Only for cells with their own settled evidence (staking.NO_SIDE_CELLS)
+        # and only when the YES side found no edge -- the two are mutually
+        # exclusive by construction, since YES needs model > mid + threshold and
+        # NO needs model < mid - threshold.
+        #
+        # The complement inputs go through the SAME kelly + sizing calls, so
+        # every guard applies untouched. That is deliberate: a parallel NO
+        # pricing path is how the spread guard reached 3 of 13 routers.
+        _position = "yes"
+        _smp, _smk = model_prob, implied
+        _sbid = snap.yes_bid if snap else None
+        _sask = snap.yes_ask if snap else None
+        if kelly is None:
+            _no = no_side_inputs("tennis", m.market_type, model_prob, implied,
+                                 snap.yes_bid if snap else None, snap.yes_ask if snap else None)
+            if _no is not None:
+                _nmp, _nmk, _nbid, _nask = _no
+                _nkelly = gate_kelly(kelly_fraction(_nmp, _nmk, fractional_kelly, max_stake_fraction,
+                                                    min_edge_to_bet, has_traded, _nask),
+                                     clv_stats, "tennis", m.market_type)
+                if _nkelly is not None:
+                    _position, kelly = "no", _nkelly
+                    _smp, _smk, _sbid, _sask = _nmp, _nmk, _nbid, _nask
+        stake_dollars = size_stake_dollars(staking_mode, kelly, weekly_pool, _smp, _smk, unit_dollars, flat_marginal, flat_full, max_spread=FUTURES_MAX_SPREAD, yes_bid=_sbid, yes_ask=_sask,  sport="tennis")
         out.append(
             TennisMarketOut(
+                position=_position,
                 id=m.id,
                 market_type=m.market_type,
                 source=m.source,
@@ -1009,6 +1034,30 @@ def list_tennis_futures(session: Session = Depends(get_session)):
         model_prob = _match_player_to_sim(m.team, sim_result) if (sim_result and m.team) else None
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "tennis", m.market_type)
+        # ---- NO SIDE (#195) ----------------------------------------------
+        # Only for cells with their own settled evidence (staking.NO_SIDE_CELLS)
+        # and only when the YES side found no edge -- the two are mutually
+        # exclusive by construction, since YES needs model > mid + threshold and
+        # NO needs model < mid - threshold.
+        #
+        # The complement inputs go through the SAME kelly + sizing calls, so
+        # every guard applies untouched. That is deliberate: a parallel NO
+        # pricing path is how the spread guard reached 3 of 13 routers.
+        _position = "yes"
+        _smp, _smk = model_prob, implied
+        _sbid = snap.yes_bid if snap else None
+        _sask = snap.yes_ask if snap else None
+        if kelly is None:
+            _no = no_side_inputs("tennis", m.market_type, model_prob, implied,
+                                 snap.yes_bid if snap else None, snap.yes_ask if snap else None)
+            if _no is not None:
+                _nmp, _nmk, _nbid, _nask = _no
+                _nkelly = gate_kelly(kelly_fraction(_nmp, _nmk, fractional_kelly, max_stake_fraction,
+                                                    min_edge_to_bet, has_traded, _nask),
+                                     clv_stats, "tennis", m.market_type)
+                if _nkelly is not None:
+                    _position, kelly = "no", _nkelly
+                    _smp, _smk, _sbid, _sask = _nmp, _nmk, _nbid, _nask
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None, sport="tennis", team=m.team)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         out.append(

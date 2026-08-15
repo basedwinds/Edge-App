@@ -79,6 +79,10 @@ export interface TennisMarketRow {
   team: string | null; // a player's real full name -- no fixed roster, see backend market_catalog_tennis.py
   line: number | null; // set_winner: set number; game_spread/game_total/set_total/total_sets: the line
   side: string | null; // exact_score: "{player_sets}-{opponent_sets}" e.g. "2-1"; set_total: "set_N"
+  /** "no" = this row's stake buys AGAINST the outcome (#195). Only emitted
+   * for cells in staking.NO_SIDE_CELLS; absent means "yes". model_prob and
+   * edge stay in the YES frame regardless. */
+  position?: "yes" | "no";
   match_label: string | null;
   tennis_match_id: number | null;
   tour: "atp" | "wta" | null;
@@ -173,6 +177,10 @@ export interface Cs2MarketRow {
   source: "kalshi";
   team: string | null; // real team name; null for series_total (game-level) and tournament_winner's group row
   side: "over" | null; // series_total only
+  /** "no" = this row's stake buys AGAINST the outcome (#195). Only emitted
+   * for cells in staking.NO_SIDE_CELLS; absent means "yes". model_prob and
+   * edge stay in the YES frame regardless. */
+  position?: "yes" | "no";
   line: number | null; // map_winner: the map number; series_total: total-maps threshold
   match_label: string | null; // "{team_a} vs {team_b}"
   cs2_match_id: number | null;
@@ -241,6 +249,10 @@ export interface LolMarketRow {
   source: "kalshi";
   team: string | null; // real team name; null for series_total (game-level) and tournament_winner's group row
   side: "over" | null; // series_total only
+  /** "no" = this row's stake buys AGAINST the outcome (#195). Only emitted
+   * for cells in staking.NO_SIDE_CELLS; absent means "yes". model_prob and
+   * edge stay in the YES frame regardless. */
+  position?: "yes" | "no";
   line: number | null; // map_winner: the map number; series_total: total-maps threshold
   match_label: string | null; // "{team_a} vs {team_b}"
   lol_match_id: number | null;
