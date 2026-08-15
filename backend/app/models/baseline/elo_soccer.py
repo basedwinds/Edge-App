@@ -53,6 +53,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from app.models.baseline import soccer_xg
 
 log = logging.getLogger("elo_soccer")
 
@@ -461,5 +462,27 @@ def predict_and_update(state: SoccerRatingState, match: dict) -> MatchGoalDistri
     home_goals, away_goals = match.get("home_goals_ft"), match.get("away_goals_ft")
     if home_goals is None or away_goals is None:
         return None
-    update_ratings(state, home_team, away_team, home_goals, away_goals)
+
+    # xG BLEND (#202). Where Understat xG is available for this fixture, the
+    # attack/defence residual is driven by (1-w)*goals + w*xG rather than goals
+    # alone. FITTED, not chosen: w swept 0.00-1.00 on seasons <=2021 with a clean
+    # interior optimum, then spent once on held-out 2022-2025 --
+    # logloss 0.99235 -> 0.98934, Brier 0.59168 -> 0.58936, better in 4 of 5
+    # leagues. PURE xG is WORSE than production (0.99423 vs 0.99205), which is
+    # why this is a blend and never a swap: xG is the less noisy estimate of a
+    # team's rate, but goals carry real finishing information xG discards.
+    #
+    # `xg_h`/`xg_a` are attached upstream by elo_service_soccer.refresh_ratings.
+    # Absent -> soccer_xg.blended returns the goals unchanged, so the 28 leagues
+    # without xG and any unmatched fixture behave exactly as before.
+    obs_home = soccer_xg.blended(home_goals, match.get("xg_h"))
+    obs_away = soccer_xg.blended(away_goals, match.get("xg_a"))
+    update_ratings(state, home_team, away_team, obs_home, obs_away)
+
+    # THE LEAGUE GOAL BASELINE STAYS ON REAL GOALS. update_ratings accumulates
+    # whatever it was handed into goals_sum, but the model predicts real goals --
+    # letting xG set the LEVEL as well as the residual would shift the scale the
+    # whole grid is built on, and that is not what was validated. Correct it back
+    # to the real scoreline, exactly as the fitting harness did.
+    state.goals_sum += (home_goals + away_goals) - (obs_home + obs_away)
     return dist

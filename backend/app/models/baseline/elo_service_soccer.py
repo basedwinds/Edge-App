@@ -46,6 +46,7 @@ from app.models.baseline.elo_soccer import (
     predict_half,
     predict_match,
 )
+from app.models.baseline import soccer_xg
 
 log = logging.getLogger("elo_service_soccer")
 
@@ -94,6 +95,14 @@ def refresh_ratings():
             "home_team": canonical_team_key(m["home_team"]),
             "away_team": canonical_team_key(m["away_team"]),
         }
+        # xG for the rating blend (#202). Looked up on the RAW football-data
+        # names, not the canonicalised ones, because the alias map was built
+        # against football-data's own spellings. Returns None outside the five
+        # Understat leagues or for any unmatched fixture, and predict_and_update
+        # then keeps pure goals.
+        _xg = soccer_xg.lookup(league, m.get("match_date"), m["home_team"], m["away_team"])
+        if _xg is not None:
+            canonical_match["xg_h"], canonical_match["xg_a"] = _xg
         date = m.get("match_date") or ""
         for side in ("home_team", "away_team"):
             key = (league, canonical_match[side])
