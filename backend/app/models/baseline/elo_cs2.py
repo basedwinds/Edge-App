@@ -197,8 +197,57 @@ class SeriesDistribution:
         return sum(p for (a, b), p in self.dist.items() if (b - a) > -line)
 
 
+# HOW MUCH OF THE RATING GAP TO BELIEVE WHEN PRICING (#196, 2026-08-15).
+#
+# The rating ORDER is good; the mapping from gap to probability is too steep.
+# Measured walk-forward over 6,519 predictions where BOTH sides clear MIN_GAMES
+# (so this is not the thin-rating question, which was asked and UPHELD
+# separately -- see measure_cs2_min_games_confidence.py):
+#
+#       gap        n   claimed   actual     miss   CI excludes claim?
+#      0-49    2610    0.5634   0.5598  -0.0037   no   <- already correct
+#     50-99    1827    0.6404   0.5950  -0.0454   YES
+#   100-149    1019    0.7240   0.6909  -0.0331   YES
+#   150-199     493    0.7863   0.7323  -0.0541   YES
+#   200-299     370    0.8615   0.7811  -0.0804   YES
+#   300-399      84    0.9281   0.8452  -0.0828   YES
+#
+# 60% of gated predictions sit above 50 Elo, so this is not a tail curiosity.
+# The live case that surfaced it: Spirit 2093 vs BIG 1677, a 416-point gap ->
+# 98.0% series, against a market implying ~173 points. Both names resolve
+# correctly and both have ~200 series of history, so it is neither an identity
+# split nor thin data -- I checked both and was wrong about the first.
+#
+# WHY SHRINK THE GAP RATHER THAN TEMPERATURE-SCALE THE PROBABILITY. The 0-49
+# bucket is already well calibrated and must not be disturbed. Scaling the
+# DIFFERENCE is proportional by construction: a 20-point gap loses 4 points and
+# barely moves, a 416-point gap loses 83 and moves a lot -- the correction lands
+# where the error is. A global temperature moves everything, which is exactly why
+# the tennis one was REJECTED (it improved Brier but worsened ECE by wrecking a
+# good middle to repair thin tails).
+#
+# FITTED ON TRAIN BRIER ALONE (earlier 70% by date), then tested on the held-out
+# most recent 30% that was never used to choose it. Out of sample:
+#
+#     brier    0.23279 -> 0.23020   BETTER
+#     ece      0.07644 -> 0.05163   BETTER
+#     logloss  0.66548 -> 0.65471   BETTER
+#
+# meeting calibration_temp.py's rule that a fit ships only if it improves BOTH
+# ECE and Brier out of sample. Every gap bucket improved and none inverted --
+# all remain mildly overconfident, so this is a conservative correction rather
+# than a fitted flip. Train ECE was minimised at 0.68 rather than 0.80; that was
+# NOT adopted, because switching to it after seeing the test set would be
+# selecting on the data reserved to judge the choice.
+#
+# APPLIED AT PREDICTION TIME ONLY. The update loop below is untouched, so every
+# rating keeps its current meaning and the fit does not move under its own feet.
+# See scripts/fit_cs2_elo_gap_shrink.py.
+GAP_SHRINK = 0.80
+
+
 def predict_series(state: Cs2EloState, team_a: str, team_b: str, best_of: int) -> SeriesDistribution:
-    map_p = map_win_prob(state.get(team_a), state.get(team_b))
+    map_p = map_win_prob((state.get(team_a) - state.get(team_b)) * GAP_SHRINK, 0.0)
     dist = series_score_distribution(map_p, best_of)
     return SeriesDistribution(map_p=map_p, best_of=best_of, dist=dist)
 
