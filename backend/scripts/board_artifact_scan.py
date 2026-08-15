@@ -45,7 +45,22 @@ SPORTS = ("cfb", "cod", "cs2", "lol", "mlb", "mma", "nba", "racing",
 # warming. Measured 2026-08-14: cold 6,416 null of 22,645 (28%), warm 4,218 of
 # 22,005 (19%). Sports genuinely without a model sit in the warm baseline, which
 # is why this is a ceiling on the ratio rather than a demand for zero.
+#
+# SUPERSEDED 2026-08-15 -- kept only as the historical basis for the numbers in
+# check_warmth's docstring. The raw null share turned out to conflate three
+# unrelated things and is not a usable signal on its own; see check_warmth.
 MAX_NULL_MODEL_SHARE = 0.24
+
+# A row that SAYS it is pending is not evidence of a cold board -- it is a row
+# doing its job. These markers come from no_baseline_reason.
+WARMING_MARKERS = ("not warm yet",)
+
+# Nulls with NO reason at all are the genuinely diagnostic ones: a sport that
+# silently loses its model produces these, and nothing else does. Measured
+# 2026-08-15 on a healthy board: 812 of 23,254 (3.5%), spread across nfl 626,
+# wnba 87, mlb 61, racing 38. The ceiling is set well above that so ordinary
+# drift does not trip it, and far below the ~29% a genuinely cold board shows.
+MAX_UNEXPLAINED_NULL_SHARE = 0.10
 # Books wider than this on a bet that is actually stakeable are worth an eyeball.
 WIDE_BOOK = 0.10
 # A field whose model probabilities span less than this is not discriminating --
@@ -103,21 +118,81 @@ def load_board() -> list[dict]:
 def check_warmth(board: list[dict]) -> bool:
     """True if the board is warm enough to judge. Aborts the scan otherwise.
 
-    Reports the NULL model_prob share, not the row count -- see the module
-    docstring for why the row count is a trap.
+    THE RAW NULL SHARE CONFLATES THREE UNRELATED THINGS, which is why this used
+    to abort on a perfectly healthy board. Measured 2026-08-15 -- 6,729 nulls of
+    23,254 rows (29%, above the old 24% ceiling), and almost none of it meant
+    what the guard assumed:
+
+      TRANSIENT    1,786  "Season/Conference/Playoff simulation not warm yet"
+                          -- CFB's Monte Carlo futures, rebuilt from scratch on
+                          every restart. A row SAYING it is pending is not
+                          evidence of a cold board; it is a row doing its job.
+      STRUCTURAL  ~4,131  no tracked match history, preseason, non-FBS opponent,
+                          "not a team-competition result" -- these will NEVER
+                          resolve and are CORRECT. They are the bulk of all
+                          nulls and always were.
+      UNEXPLAINED     812  (3.5%) nulls with no reason at all.
+
+    Only the third group can reveal a sport silently losing its model, so that is
+    what aborts. The other two are REPORTED, because a board that is 8% pending
+    is worth knowing about even though it is judgeable.
+
+    WHY PROCEEDING IS SAFE WHEN A SPORT IS PENDING: every other check here is
+    either cross-sport (timestamp collisions, grid ownership, book width) or
+    skips rows without a model price anyway (degenerate probability,
+    near-threshold certainty). A pending sport contributes no rows to them rather
+    than wrong rows.
+
+    THE ORIGINAL CONCERN STILL STANDS and is why this did not simply get its
+    ceiling raised: a cold board reads as catastrophically broken -- staked
+    counts read 326 -> 209 twice on 2026-08-14 for exactly this reason, with the
+    ROW COUNT matching exactly both times. The signal was never the row count. It
+    is still not the raw null count either.
     """
     if not board:
         record("FAIL", "warmth", "board is empty")
         return False
-    null_model = sum(1 for r in board if r.get("model_prob") is None)
-    share = null_model / len(board)
-    if share > MAX_NULL_MODEL_SHARE:
+
+    transient = structural = unexplained = 0
+    pending_by_sport: dict[str, int] = defaultdict(int)
+    unexplained_by_sport: dict[str, int] = defaultdict(int)
+    for r in board:
+        if r.get("model_prob") is not None:
+            continue
+        reason = (r.get("no_baseline_reason") or "").strip()
+        if not reason:
+            unexplained += 1
+            unexplained_by_sport[r.get("_sport", "?")] += 1
+        elif any(m in reason for m in WARMING_MARKERS):
+            transient += 1
+            pending_by_sport[r.get("_sport", "?")] += 1
+        else:
+            structural += 1
+
+    n = len(board)
+    total_nulls = transient + structural + unexplained
+    # Pending rows are neither warm nor cold -- they are not yet a fact about
+    # the board, so they leave BOTH sides of the ratio.
+    judgeable = max(n - transient, 1)
+    unexplained_share = unexplained / judgeable
+
+    record("PASS" if unexplained_share <= MAX_UNEXPLAINED_NULL_SHARE else "FAIL", "warmth",
+           f"{total_nulls}/{n} unpriced = {transient} pending + {structural} structural "
+           f"+ {unexplained} unexplained ({unexplained_share:.1%} of judgeable)")
+
+    if transient:
+        top = sorted(pending_by_sport.items(), key=lambda kv: -kv[1])[:3]
+        record("WARN", "simulations pending",
+               f"{transient} row(s) still building: {top} -- judgeable, but these "
+               f"sports' futures are absent from every check below")
+
+    if unexplained_share > MAX_UNEXPLAINED_NULL_SHARE:
+        top = sorted(unexplained_by_sport.items(), key=lambda kv: -kv[1])[:3]
         record("FAIL", "warmth",
-               f"{null_model}/{len(board)} rows ({share:.0%}) have no model price "
-               f"-- above the {MAX_NULL_MODEL_SHARE:.0%} ceiling, so the server is "
-               f"still warming. SCAN ABORTED: a cold board reads as broken.")
+               f"{unexplained} nulls carry NO reason ({unexplained_share:.1%} of judgeable, "
+               f"ceiling {MAX_UNEXPLAINED_NULL_SHARE:.0%}) -- top {top}. That is the shape of a "
+               f"sport losing its model, not of a cold start. SCAN ABORTED.")
         return False
-    record("PASS", "warmth", f"{null_model}/{len(board)} rows ({share:.0%}) unpriced")
     return True
 
 
