@@ -225,7 +225,13 @@ def _total_model_prob(m: Market, game: MlbGame) -> float | None:
     if m.line is None:
         return None
     weather = _game_weather(game) or {}
-    p_over = game_lines_mlb.prob_over(m.line, game.home_team, weather.get("temp_f"), weather.get("out_wind_mph"))
+    # STARTING PITCHERS (#199). None when either starter is unknown or below
+    # MIN_BF_FOR_KBB, in which case expected_total prices exactly as before.
+    combined_kbb = elo_service_mlb.get_combined_kbb(
+        game.season, game.home_probable_pitcher_id, game.away_probable_pitcher_id,
+    )
+    p_over = game_lines_mlb.prob_over(m.line, game.home_team, weather.get("temp_f"),
+                                      weather.get("out_wind_mph"), combined_kbb)
     return round(p_over if m.side != "under" else 1.0 - p_over, 4)
 
 

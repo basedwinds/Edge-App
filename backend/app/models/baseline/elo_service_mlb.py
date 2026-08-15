@@ -110,6 +110,13 @@ def get_combined_era(season: int, home_pitcher_id=None, away_pitcher_id=None) ->
     return _pitcher_cache.get_combined_era(season, _season_start(season), home_pitcher_id, away_pitcher_id)
 
 
+def get_combined_kbb(season: int, home_pitcher_id=None, away_pitcher_id=None) -> float | None:
+    """Both starters' current-season K-BB%, or None. Used by the game-total
+    model (#199) -- see game_lines_mlb.expected_total. Same shape and same
+    "unknown = no adjustment" contract as get_combined_era above."""
+    return _pitcher_cache.get_combined_kbb(season, _season_start(season), home_pitcher_id, away_pitcher_id)
+
+
 def is_rated(team: str) -> bool:
     """Whether this team string exists in the rating history at all -- see
     elo_service.py::is_rated for why a 1500 fallback is a fabrication at

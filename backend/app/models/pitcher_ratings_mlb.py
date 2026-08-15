@@ -45,6 +45,9 @@ import datetime as dt
 
 from app.clients import statsapi_mlb_client
 
+MIN_BF_FOR_KBB = 150.0  # batters faced before a K-BB% rate is trusted (#199); a
+                        # rate is stabilised by BF, not innings, so this gates
+                        # separately from MIN_IP rather than reusing it
 MIN_IP = 15.0  # below this, a single-season ERA is too noisy to trust (same threshold used in the validation script)
 
 # IP-weighted starter-only ERA across all of 2025 (this app's own cached
@@ -207,6 +210,33 @@ class PitcherRatingCache:
             return None
         return (home["era"] + away["era"]) / 2.0
 
+    def get_combined_kbb(self, season: int, season_start: dt.date, home_pitcher_id, away_pitcher_id) -> float | None:
+        """Average of both starters' CURRENT-SEASON K-BB% = (SO - BB) / BF.
+
+        Used by the game-total model (#199). Separate from get_combined_era
+        rather than folded into it because they gate differently: ERA is gated on
+        MIN_IP, a rate stabilises on BATTERS FACED, and the totals slope was
+        fitted with a batters-faced threshold. Sharing one gate would silently
+        apply a threshold that was validated for a different metric.
+
+        Returns None -- never a guess -- when either starter is missing or below
+        MIN_BF_FOR_KBB. The caller then prices exactly as it did before the
+        pitcher term existed, which is the same "unknown = no adjustment"
+        convention the park and weather terms already use."""
+        self._refresh_if_stale(season, season_start)
+        home = self._stats_by_pitcher_id.get(str(home_pitcher_id)) if home_pitcher_id else None
+        away = self._stats_by_pitcher_id.get(str(away_pitcher_id)) if away_pitcher_id else None
+        rates = []
+        for side in (home, away):
+            if side is None:
+                return None
+            bf = side.get("bf")
+            k, bb = side.get("k"), side.get("bb")
+            if bf is None or k is None or bb is None or bf < MIN_BF_FOR_KBB:
+                return None
+            rates.append((k - bb) / bf)
+        return sum(rates) / len(rates)
+
 
 def _splits_to_stats(splits: list[dict]) -> dict[str, dict]:
     stats: dict[str, dict] = {}
@@ -217,7 +247,21 @@ def _splits_to_stats(splits: list[dict]) -> dict[str, dict]:
         if pid is None or ip is None or era is None:
             continue
         try:
-            stats[str(pid)] = {"era": float(era), "ip": float(ip)}
+            row = {"era": float(era), "ip": float(ip)}
         except ValueError:
             continue  # era "-.--" placeholder for 0 IP
+        # K-BB COMPONENTS (#199). Captured alongside ERA because the totals model
+        # needs K-BB%, which check_mlb_pitcher_metric found more predictive than
+        # ERA or FIP. Stored as raw counts rather than a precomputed rate so the
+        # MIN_BF gate can be applied at read time -- a rate off 20 batters faced
+        # is not the same number as one off 600, and collapsing them here would
+        # throw away the only thing that distinguishes them.
+        for key, src in (("k", "strikeOuts"), ("bb", "baseOnBalls"), ("bf", "battersFaced")):
+            v = stat.get(src)
+            if v is not None:
+                try:
+                    row[key] = float(v)
+                except (TypeError, ValueError):
+                    pass
+        stats[str(pid)] = row
     return stats

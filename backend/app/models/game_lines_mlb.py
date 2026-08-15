@@ -244,7 +244,8 @@ def prob_team_covers(team_is_home: bool, line: float, elo_diff: float) -> float:
     return 1.0 - _norm_cdf(line, team_margin_mu, MARGIN_STD)
 
 
-def expected_total(home_team: str, temp_f: float | None = None, out_wind_mph: float | None = None) -> float:
+def expected_total(home_team: str, temp_f: float | None = None, out_wind_mph: float | None = None,
+                   combined_kbb: float | None = None) -> float:
     """home_team determines the park -- PARK_FACTOR.get(...) defaults to 0.0
     for any team not in the dict (shouldn't happen with the real 30-team
     set, but unknown = no adjustment, not a guess, same convention as
@@ -261,6 +262,8 @@ def expected_total(home_team: str, temp_f: float | None = None, out_wind_mph: fl
         total += TEMP_SLOPE * (temp_f - LEAGUE_AVG_TEMP_F)
     if out_wind_mph is not None:
         total += OUT_WIND_SLOPE * out_wind_mph
+    if combined_kbb is not None:
+        total += PITCHER_KBB_SLOPE * (combined_kbb - LEAGUE_AVG_COMBINED_KBB)
     return total
 
 
@@ -315,6 +318,54 @@ def expected_total(home_team: str, temp_f: float | None = None, out_wind_mph: fl
 TOTAL_NB_DISPERSION = 7.1376       # r, fitted 2023-2025 (n=7,290)
 TEAM_TOTAL_NB_DISPERSION = 3.5593  # r, team-level runs, same seasons (n=14,580)
 
+# STARTING PITCHERS DO MOVE TOTALS (#199, 2026-08-15) -- answering the question
+# this module's own docstring left open. "Candidate 2" above rejected pitchers
+# for totals on combined current-season ERA (r=0.069), and that docstring already
+# flagged the limitation: ERA is the noisiest of the three descriptors, and
+# "the better metrics have not been tested against totals at all". They have now.
+#
+# K-BB% = (SO - BB) / BF, the metric check_mlb_pitcher_metric found most
+# predictive. NO LOOKAHEAD BY CONSTRUCTION: fitted on each pitcher's PRIOR-SEASON
+# line, fully known before the predicted season begins, so no as-of bookkeeping
+# can be got subtly wrong. Fitted 2023-2025 (n=2,840 games where BOTH starters
+# had a usable prior season), validated on 2026 (n=755) never used to fit:
+#
+#     raw slope -8.566 runs per unit K-BB%, 95% CI [-13.251, -3.936]
+#     => a 1-sd better pitching matchup is worth -0.31 runs. Sign negative.
+#
+# THE RAW SLOPE OVERSHOOTS AND IS NOT WHAT SHIPS. On the held-out season the
+# actual spread across pitching terciles was 0.325 runs while the raw slope
+# predicted 0.642 -- 1.98x, mispricing ace matchups in the opposite direction
+# instead of the old one. Shrink chosen by cross-validation INSIDE train (fit
+# 2023-24, validate 2025; the curve bottoms cleanly at 0.4 -- 0.3619 vs 0.4299
+# with no term and 0.3790 at full strength), never by looking at 2026.
+#
+# HELD-OUT RESULT, per-matchup error against actual runs:
+#
+#     tercile        flat      full slope   shrunk x0.4
+#     worst pitching -0.234      +0.142       -0.084
+#     middle         +0.021      +0.103       +0.054
+#     best pitching  +0.091      -0.175       -0.016
+#     mean |err|      0.115       0.140        0.051
+#     spread vs actual   --       1.98x        0.79x
+#
+# THE AGGREGATE PREFERS THE FULL SLOPE AND THE AGGREGATE IS THE WRONG METRIC.
+# Averaged P(over) across lines reads 0.0069 flat / 0.0036 full / 0.0055 shrunk,
+# because errors CANCEL: flat under-prices ace matchups and over-prices bad ones,
+# and the full slope overshoots in both directions. This app has been bitten by
+# exactly that before -- restrictor-plate racing showed a mean gap of +-0.000
+# while carrying ten times the decile error. Individual games get bet, not the
+# average, so the per-matchup column decides and it picks the shrunk slope.
+#
+# COVERAGE IS PARTIAL AND THAT IS DELIBERATE: only ~37-40% of games had both
+# starters clearing the prior-season threshold in the fit. Live, the gate is
+# MIN_BF_FOR_KBB on current-season data; when either starter is unknown or too
+# thin, get_combined_kbb returns None and expected_total prices exactly as it did
+# before this term existed -- the same "unknown = no adjustment" convention as
+# park and weather.
+PITCHER_KBB_SLOPE = -3.4264        # -8.566 raw x 0.4 CV shrink
+LEAGUE_AVG_COMBINED_KBB = 0.1568   # train mean, the pivot so the term is ~0 at a typical matchup
+
 
 def _nb_sf(line: float, mean: float, r: float) -> float:
     """P(X > line) for a negative-binomial count with this mean and dispersion.
@@ -340,8 +391,9 @@ def _nb_sf(line: float, mean: float, r: float) -> float:
     return min(1.0, max(0.0, 1.0 - cdf))
 
 
-def prob_over(line: float, home_team: str, temp_f: float | None = None, out_wind_mph: float | None = None) -> float:
-    return _nb_sf(line, expected_total(home_team, temp_f, out_wind_mph), TOTAL_NB_DISPERSION)
+def prob_over(line: float, home_team: str, temp_f: float | None = None, out_wind_mph: float | None = None,
+              combined_kbb: float | None = None) -> float:
+    return _nb_sf(line, expected_total(home_team, temp_f, out_wind_mph, combined_kbb), TOTAL_NB_DISPERSION)
 
 
 def expected_f5_margin(elo_diff: float) -> float:
