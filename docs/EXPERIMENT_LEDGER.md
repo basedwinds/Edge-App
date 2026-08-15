@@ -71,6 +71,8 @@ edge inverts at the executable price. The ask guard in `kelly_fraction`
 | Date | Hypothesis | Verdict | Decisive number | Script |
 |---|---|---|---|---|
 | 2026-08-12 | CS2 `MIN_GAMES=3` is too low; thin ratings manufacture edge | **UPHELD** | Opposite of the hunch: 3 games claimed .799 delivered .784 (1.05x); **50+** claimed .843 delivered .755 (1.35x). Overconfidence lives at HIGH counts | `measure_cs2_min_games_confidence.py` |
+| 2026-08-15 | Esports ratings are overconfident when teams share NO common opponents | **REJECTED** | No gradient by shared-opponent count on 38,284 matches. Overstatement — CS2 **1.01x** at 0 shared vs 0.92–0.98x elsewhere (0-shared is its BEST bucket); VALORANT 0.91/0.89/0.90/0.92x; LOL 0.92/0.96/0.98/0.95x. Model stays QUIET where the graph is thin: only 35 of 3,047 disconnected CS2 matches reach 70% confidence vs 543 of 3,226 at 6+ shared | `check_esports_connectivity.py` |
+| 2026-08-15 | Esports under-confidence at the top end (from the calibration report) | **CONFIRMED, cause NOT connectivity** | Every bucket in all three titles is 0.89–0.98x — favourites win MORE than claimed, uniformly across connectivity. Same too-steep-logistic shape as tennis (#192), now on 38,284 matches rather than n=38 | `check_esports_connectivity.py` |
 | 2026-08 | LoL patch-version adjustment | **REJECTED** | Descriptive + interventional pair both null | — |
 | 2026-08 | Valorant k-core tier restriction | **REJECTED** | — | — |
 | 2026-08 | CS2 probability recalibration | **REJECTED** | — | — |
