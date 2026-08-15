@@ -205,6 +205,17 @@ LEAGUE_AVG_TEMP_F = 72.6  # real mean game-time temp, same 2021-2025/21-outdoor-
 
 OUT_WIND_SLOPE = 0.0406  # runs per "out wind" mph, through-origin fit vs PARK_FACTOR+TEMP residual, n=8,503
 
+# CHALLENGED AND UPHELD 2026-08-15 (#200). Real season means are 8.958 (2026)
+# and 8.9715 (2023-25 pooled), so this looks ~0.09 runs high -- but refitting it
+# on recent seasons measurably HURTS. Walk-forward over 2016-2026 (2020 dropped,
+# 60-game covid season), predicting each season from prior ones only:
+#     trailing 3yr  mean |err| 0.2627 runs
+#     trailing 5yr             0.2880
+#     all prior                0.2983
+#     THIS CONSTANT            0.1992   (vs 2021+ actuals)
+# Season means swing from 8.5706 (2022) to 9.6694 (2019) -- a 1.1-run range, so a
+# 0.09 offset is far inside the noise and a recency-chasing estimator tracks that
+# noise. Do not "freshen" this without re-running that comparison.
 LEAGUE_AVG_TOTAL = 9.0486
 NAIVE_TOTAL_STD = 4.5357  # kept for reference/backtest ablation; PARK_FACTOR-adjusted std (below) is what's actually used
 TOTAL_STD = 4.4891  # residual std AFTER applying PARK_FACTOR -- real, if modest, tightening vs naive
