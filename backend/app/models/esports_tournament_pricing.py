@@ -232,7 +232,8 @@ def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_O
                              trials: int = DEFAULT_TRIALS, event_state_for=None,
                              implied_by_market: dict[int, float | None] | None = None,
                              refusals: dict[str, str] | None = None,
-                             unfielded: dict[int, str] | None = None) -> dict[int, float]:
+                             unfielded: dict[int, str] | None = None,
+                             progress_aware: set[str] | None = None) -> dict[int, float]:
     """Returns {market_id: model_prob} for the tournament_winner markets it can
     price. `elo_service` is a title's elo_service_* module (needs
     get_team_rating + get_series_distribution). Markets whose team is unrated,
@@ -325,6 +326,15 @@ def price_tournament_winners(markets, elo_service, best_of: int = DEFAULT_BEST_O
             sim = simulate_with_group_stage(field, standings, slots, win_prob_fn, trials=trials)
             if sim is not None:
                 log.info("tournament %r priced from real group standings (%d slots)", _label, slots)
+                # RECORDED, because the caller has to know. A group priced this
+                # way has seen the results so far -- who is through, who is
+                # already out. A group that falls through to the flat bracket
+                # below has NOT: it re-simulates the whole event from ratings
+                # every time, so a team eliminated yesterday keeps its full
+                # pre-tournament win probability. Only the first kind is safe to
+                # STAKE; see each router's `_progress_aware` gate.
+                if progress_aware is not None:
+                    progress_aware.add(_label)
         if sim is None:
             sim = simulate_tournament_winner(field, win_prob_fn, trials=trials)
         if sim is None:

@@ -219,11 +219,13 @@ def list_valorant_futures(session: Session = Depends(get_session)):
     _implied_by_market = {_m.id: _implied_prob(snapshots_by_market.get(_m.id)) for _m in markets}
     _field_refusals: dict[str, str] = {}
     _unfielded: dict[int, str] = {}
+    _progress_aware: set[str] = set()
     priced = price_tournament_winners(markets, elo_service_valorant,
                                       event_state_for=_event_state_for,
                                       implied_by_market=_implied_by_market,
                                       refusals=_field_refusals,
-                                      unfielded=_unfielded)
+                                      unfielded=_unfielded,
+                                      progress_aware=_progress_aware)
     # STAKED, not tracking-only, as of 2026-08-02. These were hardcoded to
     # kelly_fraction=None on the reasoning that the bracket is an approximation.
     # That reasoning was inverted: the paper logger only records rows the app
@@ -256,6 +258,32 @@ def list_valorant_futures(session: Session = Depends(get_session)):
         # future appeared to vanish rather than read as finished.
         _settled = (m.group_label or "") in _decided
         if _settled:
+            _kelly = None
+            _stake = None
+        # ---- STAKE ONLY WHAT THE SIM COULD SEE (#207) ----
+        #
+        # A tournament group is priced one of two ways. WITH real group
+        # standings and the real playoff slot count, the model knows who is
+        # through and who is already out. WITHOUT them it falls back to a flat
+        # rating-seeded bracket that re-simulates the whole event from scratch
+        # on every pass -- so a team knocked out yesterday keeps its full
+        # pre-tournament win probability, and the market moving it to a few
+        # cents reads to this app as a large EDGE rather than as a dead leg.
+        #
+        # Measured 2026-08-15: only VALORANT has a reachable source (vlr.gg
+        # publishes group standings and the bracket's slot count -- confirmed
+        # live, 12-team fields into an 8-slot double-elim playoff). CS2, LoL and
+        # CoD have none: HLTV is Cloudflare-gated, Liquipedia 403s and the rows
+        # it does yield do not cover the events we price, gol.gg trails real
+        # time by ~6 days. So on those titles EVERY tournament group is blind.
+        #
+        # PRICED AND SHOWN, NOT STAKED -- the same treatment map_winner gets.
+        # The number stays visible so the approximation can still be tracked
+        # against the market; it just stops sizing money. This narrows, but does
+        # not reverse, the 2026-08-02 decision to stake these for forward CLV:
+        # the arm that can actually see the tournament still accrues it.
+        _blind = (m.group_label or "") not in _progress_aware
+        if _blind:
             _kelly = None
             _stake = None
         out.append(
