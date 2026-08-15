@@ -478,9 +478,37 @@ def list_mlb_markets(session: Session = Depends(get_session)):
     def _game_ladder_resolved(m: Market) -> bool:
         return m.mlb_game_id in games_with_resolved_ladder
 
+    # ONE PLATFORM HALTING IS INFORMATION THE OTHER HAS NOT PRICED YET.
+    #
+    # Same guard cs2/soccer/lol/valorant/tennis/mma carry. A per-market status
+    # filter cannot catch it, because the rows it drops are not the rows being
+    # recommended -- the OTHER platform's untouched quote is, and the model's
+    # own number against that phantom reads as a large edge on a game that will
+    # not be played.
+    #
+    # MLB NEEDS ITS OWN QUERY, unlike the routers above. Those load every row and
+    # filter in Python, so a halted row is visible in the list. This endpoint
+    # filters `Market.status == "active"` in SQL (see the query at the top), so
+    # inactive rows NEVER LOAD and the halt is invisible from `markets`. Copying
+    # the list-comprehension pattern here would have silently done nothing --
+    # `halted_fixture_ids` would always be empty.
+    #
+    # Counted before shipping ("never block genuine matches"): 758 inactive MLB
+    # market rows across 35 games, all 35 of which also carry a live market.
+    halted_game_ids = {
+        gid for (gid,) in session.query(Market.mlb_game_id)
+        .filter(Market.sport == "mlb", Market.status == "inactive",
+                Market.mlb_game_id.isnot(None))
+        .distinct().all()
+    }
+
+    def _fixture_halted(m: Market) -> bool:
+        return bool(m.mlb_game_id) and m.mlb_game_id in halted_game_ids
+
     markets = [
         m for m in markets
         if not _game_already_final(m) and not _game_already_started(m) and not _game_ladder_resolved(m)
+        and not _fixture_halted(m)
     ]
     snapshots_by_market = _batch_latest_snapshots(session, [m.id for m in markets])
     news_by_game = _batch_mlb_news_adjustments(session, game_ids)

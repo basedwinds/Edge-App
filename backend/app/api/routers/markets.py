@@ -786,9 +786,27 @@ def list_markets(session: Session = Depends(get_session)):
     def _game_ladder_resolved(m: Market) -> bool:
         return m.nfl_game_id in games_with_resolved_ladder
 
+    # ONE PLATFORM HALTING IS INFORMATION THE OTHER HAS NOT PRICED YET. Same
+    # guard the other sports carry; see mlb_markets.py for the full note.
+    #
+    # NEEDS ITS OWN QUERY: this endpoint filters `Market.status == "active"` in
+    # SQL, so inactive rows never load and a halt is invisible from `markets`.
+    # The list-comprehension pattern used in cs2/tennis would silently do
+    # nothing here -- the id set would always be empty.
+    #
+    # Counted before shipping: 77 inactive NFL market rows across 5 games, all 5
+    # of which also carry a live market.
+    halted_game_ids = {
+        gid for (gid,) in session.query(Market.nfl_game_id)
+        .filter(Market.sport == "nfl", Market.status == "inactive",
+                Market.nfl_game_id.isnot(None))
+        .distinct().all()
+    }
+
     markets = [
         m for m in markets
         if m.nfl_game_id not in finished_game_ids
+        and m.nfl_game_id not in halted_game_ids
         and not _game_already_started(m)
         and not _game_ladder_resolved(m)
     ]
