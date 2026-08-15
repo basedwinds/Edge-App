@@ -266,6 +266,41 @@ def check_degenerate(board: list[dict]) -> None:
     else:
         record("PASS", "degenerate probability", "none")
 
+    # NEAR-THRESHOLD MODEL CERTAINTY (#195, 2026-08-15).
+    #
+    # `implausible_certainty` refuses a staked row when the market/model odds
+    # ratio reaches 10x. That is a hard line, and a hard line has an outside.
+    # Watched live: cs2 Spirit vs BIG read market 0.175 / model 0.0172 = 10.2x
+    # and was BLOCKED, then the price drifted to 0.165 = 9.6x and the same bet
+    # came back onto the board at $10 -- an unchanged, still-implausible model
+    # claim, admitted by a 1-cent move in a price it does not depend on.
+    #
+    # Reported, never filtered. Lowering the constant is a decision with its own
+    # evidence (it was set against 3,912 settled bets) and is not this script's
+    # to make. What the script CAN do is stop that class of row from depending on
+    # someone happening to read the board that hour.
+    near = []
+    for r in board:
+        mp, mk = r.get("model_prob"), r.get("implied_prob")
+        if mp is None or mk is None or r.get("suggested_stake_dollars") is None:
+            continue
+        if not (0.0 < mp < 1.0 and 0.0 < mk < 1.0):
+            continue
+        ratio = (mk / mp) if mk <= 0.5 else ((1.0 - mk) / (1.0 - mp))
+        if 6.0 <= ratio < 10.0:
+            near.append((ratio, r))
+    if near:
+        near.sort(key=lambda x: -x[0])
+        top = "; ".join(
+            f"{r['_sport']}/{r.get('market_type')} {str(r.get('team'))[:14]} "
+            f"mkt {r['implied_prob']:.3f} model {r['model_prob']:.4f} = {ra:.1f}x"
+            for ra, r in near[:3]
+        )
+        record("WARN", "near-threshold certainty",
+               f"{len(near)} STAKED row(s) at 6-10x, just under implausible_certainty -- {top}")
+    else:
+        record("PASS", "near-threshold certainty", "no staked row between 6x and 10x")
+
     # flat fields -- group by event where an event key exists
     groups = defaultdict(list)
     for r in board:
