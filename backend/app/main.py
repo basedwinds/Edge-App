@@ -203,6 +203,10 @@ def create_app() -> FastAPI:
             # None until the first pass finishes after a restart.
             # Read by scripts/board_artifact_scan.py::check_cache_freshness.
             "cache_warm_pass_seconds": scheduler_module.LAST_CACHE_WARM_PASS_SECONDS,
+            # Jobs APScheduler DROPPED rather than ran. It discards a misfire
+            # silently, which is exactly how a starved cache warmer went
+            # unnoticed while the board kept showing "Incomplete board".
+            "missed_scheduler_runs": dict(scheduler_module.MISSED_RUNS),
         }
 
     @app.post("/markets/refresh")

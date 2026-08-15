@@ -28,9 +28,59 @@ from app.models.snapshot_maintenance import prune_market_snapshots
 from app.models.market_cleanup import close_stale_game_markets, reconcile_vanished_market_status
 from app.models.tennis_surface_backfill import run_tennis_surface_backfill
 
+from apscheduler.events import EVENT_JOB_MISSED
+from apscheduler.executors.pool import ThreadPoolExecutor
+
 log = logging.getLogger("scheduler")
 
-scheduler = BackgroundScheduler()
+# TWO EXECUTORS, and the second one is the whole point.
+#
+# BackgroundScheduler() with defaults gives ONE ThreadPoolExecutor of
+# max_workers=10 and misfire_grace_time=1s. This app schedules 27 jobs, of which
+# ~13 are minutes-long sport pollers. Sampled live 2026-08-15 with py-spy, all
+# TEN slots were occupied by pollers simultaneously:
+#
+#   run_full_refresh (nfl)   run_full_refresh_nba   run_full_refresh_mlb
+#   run_full_refresh_tennis  run_full_refresh_mma   run_full_refresh_soccer
+#   run_full_refresh_valorant  run_full_refresh_cs2  run_full_refresh_lol
+#   poller_lock.wrapper
+#
+# When cache_warm's turn came round with the pool full, APScheduler discarded
+# the run as a MISFIRE -- the default grace is one second -- and said nothing.
+# Observed directly: over 8 minutes past its due time, no pass had run and
+# LAST_CACHE_WARM_PASS_SECONDS was still None.
+#
+# That is the dominant cause of the "Incomplete board" banner, and it is a
+# bigger one than the pass-duration arithmetic in response_cache.py. Both are
+# real: the pass (290s) genuinely does not fit the TTL (180s). But a pass that
+# is merely too slow still refreshes every entry once per pass, whereas a pass
+# that never RUNS refreshes nothing at all, for as long as the pollers stay
+# busy. The serve-time start gate + STALE_SERVE_SECONDS handle the first; this
+# handles the second.
+#
+# The warmer gets its own single-thread lane so poller saturation can never
+# starve it again, and a generous misfire grace so a late fire still runs
+# instead of being dropped. max_instances stays at the default 1, so passes
+# still never overlap.
+scheduler = BackgroundScheduler(
+    executors={
+        "default": ThreadPoolExecutor(max_workers=10),   # unchanged, explicit
+        "warm": ThreadPoolExecutor(max_workers=1),
+    },
+)
+
+# Missed runs, per job id. APScheduler drops a misfire SILENTLY, which is how a
+# starved warmer went unnoticed; counting them makes it observable on /health.
+MISSED_RUNS: dict[str, int] = {}
+
+
+def _on_missed(event) -> None:
+    MISSED_RUNS[event.job_id] = MISSED_RUNS.get(event.job_id, 0) + 1
+    log.warning("scheduler: job %s MISSED its run (executor saturated or misfire "
+                "grace exceeded) -- %d total since start", event.job_id, MISSED_RUNS[event.job_id])
+
+
+scheduler.add_listener(_on_missed, EVENT_JOB_MISSED)
 
 
 def run_stuck_bet_check():
@@ -621,6 +671,13 @@ def start():
         id="cache_warm",
         next_run_time=base_tick + timedelta(seconds=11 * JOB_STAGGER_SECONDS),
         replace_existing=True,
+        # Its OWN executor -- see the scheduler construction above. On the
+        # shared pool this job was silently starved by the 13 sport pollers.
+        executor="warm",
+        # The default grace is ONE SECOND, which is what turned a busy moment
+        # into a dropped pass. 600s means a late fire still runs; coalesce
+        # (default True) keeps a backlog from becoming a burst of passes.
+        misfire_grace_time=600,
     )
     # Auto paper-trading logger (see paper_logger.py) -- snapshots the current
     # recommendations as paper bets so forward CLV accrues, AND fires the Discord

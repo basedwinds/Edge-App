@@ -572,11 +572,24 @@ def check_cache_freshness() -> None:
     except Exception as exc:
         record("WARN", "cache freshness", f"/health unreachable ({type(exc).__name__})")
         return
+    missed = (h.get("missed_scheduler_runs") or {}) if isinstance(h, dict) else {}
+    if missed.get("cache_warm"):
+        record("FAIL", "cache warm starved",
+               f"APScheduler DROPPED {missed['cache_warm']} cache_warm run(s) -- the "
+               f"warmer is being starved by the poller pool, so entries expire with "
+               f"nothing refreshing them. All missed: {missed}")
+    elif missed:
+        record("WARN", "cache warm starved",
+               f"other jobs missed runs (warmer is fine): {missed}")
+    else:
+        record("PASS", "cache warm starved", "no dropped scheduler runs")
+
     pass_s = h.get("cache_warm_pass_seconds") if isinstance(h, dict) else None
     if pass_s is None:
         record("WARN", "cache freshness",
-               "/health does not report cache_warm_pass_seconds -- cannot verify the "
-               "pass still fits inside TTL + STALE_SERVE_SECONDS")
+               "no warm pass has COMPLETED yet -- expected for ~10min after a restart "
+               "(job fires at start+5m40s, pass ~290s). Re-run later; if it stays null, "
+               "the job is not firing at all.")
         return
     from app.api.response_cache import CACHE_TTL_SECONDS, STALE_SERVE_SECONDS
     budget = CACHE_TTL_SECONDS + STALE_SERVE_SECONDS
