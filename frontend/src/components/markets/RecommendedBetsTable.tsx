@@ -334,24 +334,45 @@ const columns = [
   // (with the 6h move inline, when it's moved enough to matter) sits above
   // the model's own estimate, edge badge underneath. Sorts by edge (the
   // single most useful "biggest disagreement first" ordering).
-  columnHelper.accessor("edge", {
-    header: () => <span title="Market price (6h move, if any) → this app's own model estimate, then the edge between them">Market → Model</span>,
+  // SHOWN FROM THE SIDE YOU ARE ACTUALLY BUYING.
+  //
+  // estProb/edge are stored in the YES frame on EVERY row, deliberately, so the
+  // numbers mean one thing everywhere (see RecommendedBetRow.position). That is
+  // right for the data and wrong for the display: a NO bet on a 92%-priced
+  // "Over 2.5" rendered as "92% → 70%, -22pp", which reads as a bet the model
+  // hates. It is the opposite -- buying NO at 8% against a model that says 30%,
+  // a +22pp edge. User asked "why is a negative edge bet on my board", which is
+  // exactly the confusion this caused.
+  //
+  // So NO rows are flipped to their own frame here, matching the "NO —" prefix
+  // the label already carries. Everything else about the row is untouched.
+  columnHelper.accessor((r) => (r.position === "no" ? -(r.edge ?? 0) : (r.edge ?? 0)), {
+    id: "edge",
+    header: () => <span title="Market price (6h move, if any) → this app's own model estimate, then the edge between them. NO bets are shown from the NO side.">Market → Model</span>,
     cell: ({ row }) => {
       const r = row.original;
-      const movePp = r.lineMovePp !== null ? r.lineMovePp * 100 : null;
+      const isNo = r.position === "no";
+      // The complement of every displayed number, and the price MOVE flips sign
+      // too -- a YES price rising is a NO price falling.
+      const shownImplied = isNo && r.impliedProb !== null ? 1 - r.impliedProb : r.impliedProb;
+      const shownEst = isNo && r.estProb !== null ? 1 - r.estProb : r.estProb;
+      const shownEdge = isNo && r.edge !== null ? -r.edge : r.edge;
+      const rawMove = r.lineMovePp !== null ? r.lineMovePp * 100 : null;
+      const movePp = rawMove !== null && isNo ? -rawMove : rawMove;
       return (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-1 text-xs tabular-nums font-mono whitespace-nowrap">
-            <span className="text-[var(--color-text-dim)]">{formatPct(r.impliedProb)}</span>
+            {isNo && <span className="text-[var(--color-text-muted)]" title="priced from the NO side">NO</span>}
+            <span className="text-[var(--color-text-dim)]">{formatPct(shownImplied)}</span>
             {movePp !== null && Math.abs(movePp) >= 0.5 && (
               <span className={movePp > 0 ? "text-[var(--color-good)]" : "text-[var(--color-critical)]"}>
                 {movePp > 0 ? "▲" : "▼"}{Math.abs(movePp).toFixed(1)}
               </span>
             )}
             <span className="text-[var(--color-text-muted)]">→</span>
-            <span className="text-[var(--color-text-dim)]">{formatPct(r.estProb)}</span>
+            <span className="text-[var(--color-text-dim)]">{formatPct(shownEst)}</span>
           </div>
-          <EdgeBadge edge={r.edge} />
+          <EdgeBadge edge={shownEdge} />
         </div>
       );
     },
@@ -559,7 +580,7 @@ export function RecommendedBetsTable({
           {table.getRowModel().rows.length === 0 && (
             <tr>
               <td colSpan={columns.length + 1} className="px-4 py-10 text-center text-[var(--color-text-dim)]">
-                No bets currently clear the staking threshold (edge below 3pp, or nothing priced yet).
+                No bets currently clear the staking threshold (edge below 20pp, or nothing priced yet).
               </td>
             </tr>
           )}
