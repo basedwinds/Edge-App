@@ -17,6 +17,7 @@ contract and pays $1 if correct (profit 1-market_price) or $0 if wrong
 staked. Standard Kelly: f* = p - (1-p)/b, simplified below to avoid a
 division-by-zero at market_price=1.
 """
+import unicodedata
 FRACTIONAL_KELLY = 0.25
 MAX_STAKE_FRACTION = 0.05
 # Raised from 0.01 -> 0.03 2026-07-16: at 1pp, 722/2192 futures rows cleared
@@ -993,13 +994,42 @@ def apply_duplicate_listing_cap(rows: list, fixture_attr: str | None = None,
         # Found 2026-08-11 while extending this cap to racing, BEFORE wiring it.
         return getattr(r, entity_attr, None)
 
+    def _entity_key(r):
+        """The entity with INVISIBLE characters removed.
+
+        FOUND LIVE 2026-08-17, reported by the user as "why is a negative edge
+        bet on my board". Polymarket lists a LoL team as
+        '⁠Movistar KOI Fenix' -- a leading U+2060 WORD JOINER, which renders
+        as nothing -- while Kalshi lists the same team clean. Both rows pointed at
+        the SAME lol_match_id (765), both were NO bets on the same outcome, and
+        both were staked $10. Two identical propositions, double exposure. Exactly
+        the failure this cap exists to prevent, walked straight past because the
+        key compared RAW strings.
+
+        Note the matcher was never fooled: normalize_team_name does NFKD +
+        ascii-ignore, which drops U+2060, so the fixture join was correct all
+        along. Only this key saw two different teams.
+
+        STRIPS UNICODE CATEGORY Cf ONLY (format characters: word joiner, the
+        zero-width space/joiner/non-joiner, BOM, the bidi marks). These carry no
+        linguistic content whatsoever, so two names differing only by them are the
+        same name -- no judgement call, and nothing legitimate can collapse.
+        Deliberately NOT full normalize_team_name: lowercasing and stripping
+        punctuation is a bigger hammer that risks merging genuinely distinct
+        rosters, and this cap already zeroes real money when it fires.
+        """
+        e = _entity(r)
+        if not isinstance(e, str):
+            return e
+        return "".join(c for c in e if unicodedata.category(c) != "Cf")
+
     def _key(r):
         # fixture_attr scopes the identity to ONE real-world event. Futures need
         # no such scope (a team has one season), but a tennis player appears in
         # many matches, so without it two different matches for the same player
         # would collapse into one and a legitimate second bet would be dropped.
         fixture = getattr(r, fixture_attr, None) if fixture_attr else None
-        return (fixture, _entity(r), r.market_type, getattr(r, "line", None),
+        return (fixture, _entity_key(r), r.market_type, getattr(r, "line", None),
                 getattr(r, "side", None))
 
     best: dict[tuple, object] = {}
