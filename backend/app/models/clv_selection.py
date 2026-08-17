@@ -222,11 +222,52 @@ def is_bucket_enabled(
     return not would_suppress(stats, sport, market_type, min_sample, min_clv_pp)
 
 
+# GAME TOTALS ARE TRACKED, NOT STAKED (#209, 2026-08-17).
+#
+# The model's scoring distribution leans high, and the staking gate then selects
+# the extreme of that lean, which is where it is worst. Both halves measured:
+#
+#   POPULATION (unselected -- all 249 live MLB `over` legs on the board):
+#       model above market on 174 of them (70%), mean model 52.9% vs market
+#       50.5%. A real but MILD +2.4pp lean.
+#   OUTCOME (86 settled total/team_total bets):
+#       actual 37.2%, market said 41.1% (+3.9pp error), model said 58.2%
+#       (+21.0pp error). `total` specifically is 1 WIN FROM 13.
+#
+# The direction in the settled sample is NOT evidence by itself -- the app only
+# stakes positive-edge rows, so model > market there is true by construction. The
+# evidence is (a) the 70% lean in the UNSELECTED population and (b) the model
+# landing five times further from the truth than the market on the same bets.
+# Selection explains the sign; it does not explain the magnitude.
+#
+# WHY NOT JUST FIX THE MEAN: it has been challenged twice and upheld --
+# LEAGUE_AVG_TOTAL was re-derived and matched (#200), and the team-offence term
+# was rejected with a CI spanning zero (#201). #194 fixed the distribution SHAPE
+# (Normal -> negative binomial) and this survived it: the live board still leans
+# +2.4pp post-fix. The residual looks like the same upper-tail mass problem #133
+# quantified in soccer (+1.20pp too much at the 4.5 line) and could not ship a
+# fix for, because the train objective there was flat to 0.00002.
+#
+# SCOPE IS DELIBERATELY NARROW. `team_total` is NOT suppressed: it carries the
+# same upward lean (72 of 73 staked bets were overs) yet returns +5.5% over 73
+# bets, so the lean alone is not the failure -- only the game-total combination
+# of lean AND gate selection is. Suppressing a market type that is making money
+# because it shares a symptom would be the thin-tracker mistake.
+#
+# REVERSIBLE, and the condition is explicit: lift this when the upper-tail mass
+# problem behind #133 is actually fixed, or when `total` accrues a settled
+# sample that contradicts 1-from-13.
+TRACKING_ONLY_MARKET_TYPES = frozenset({"total"})
+
+
 def gate_kelly(kelly, clv_stats: dict, sport: str, market_type: str):
     """Zero out a computed kelly fraction if its (sport, market_type) bucket is
-    CLV-suppressed. One-liner used at each router's kelly call site so the gate
-    rolls out uniformly. Currently a no-op for every bucket -- see
-    SUPPRESSION_ENABLED."""
+    CLV-suppressed, or if the market type is tracking-only. One-liner used at
+    each router's kelly call site so the gate rolls out uniformly -- 24 call
+    sites, which is why the rule lives HERE rather than in any single router.
+    The CLV half is still a no-op for every bucket; see SUPPRESSION_ENABLED."""
+    if kelly is not None and market_type in TRACKING_ONLY_MARKET_TYPES:
+        return None
     if kelly is not None and not is_bucket_enabled(clv_stats, sport, market_type):
         return None
     return kelly
