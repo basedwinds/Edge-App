@@ -380,6 +380,27 @@ def list_cfb_markets(session: Session = Depends(get_session)):
                                            yes_bid=snap.yes_bid if snap else None,
                                            yes_ask=snap.yes_ask if snap else None,
                                            sport="cfb", team=m.team)
+        # ---- CFB IS TRACKED, NOT STAKED (#208) ----
+        #
+        # The 20pp edge gate raised on 2026-08-17 was validated on 520 settled
+        # bets spanning tennis, mlb, cs2, lol, valorant, wnba, soccer, mma and
+        # racing. CFB contributed ZERO of them -- it has never settled a single
+        # tracked bet.
+        #
+        # That matters because CFB would otherwise DOMINATE the gated board: at
+        # >=20pp the live board is 130 rows and 70 of them are CFB. Applying a
+        # threshold measured without CFB and then handing CFB half the resulting
+        # board is an out-of-domain extrapolation, and it lands on exactly the
+        # sport already identified as the entire residue of the "wide books
+        # manufacture edge" finding (#185) -- preseason lines, model_approximate,
+        # the widest books on the board.
+        #
+        # Same posture as map_winner and the blind esports tournaments: priced
+        # and shown so it accrues forward evidence, never sized. LIFT THIS once
+        # CFB has settled bets of its own to validate against -- the season
+        # starts in late August, so that is weeks not months away.
+        kelly = None
+        stake_dollars = None
         # SAME GATE THE FUTURES BLOCK ALREADY APPLIES, and it belonged here just
         # as much. A team whose rating was built almost entirely outside the FBS
         # pool is measured on a different scale from the opponent it is priced
@@ -569,6 +590,27 @@ def list_cfb_futures(session: Session = Depends(get_session)):
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full,
                                            unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None, sport="cfb", team=m.team)
+        # ---- CFB IS TRACKED, NOT STAKED (#208) ----
+        #
+        # The 20pp edge gate raised on 2026-08-17 was validated on 520 settled
+        # bets spanning tennis, mlb, cs2, lol, valorant, wnba, soccer, mma and
+        # racing. CFB contributed ZERO of them -- it has never settled a single
+        # tracked bet.
+        #
+        # That matters because CFB would otherwise DOMINATE the gated board: at
+        # >=20pp the live board is 130 rows and 70 of them are CFB. Applying a
+        # threshold measured without CFB and then handing CFB half the resulting
+        # board is an out-of-domain extrapolation, and it lands on exactly the
+        # sport already identified as the entire residue of the "wide books
+        # manufacture edge" finding (#185) -- preseason lines, model_approximate,
+        # the widest books on the board.
+        #
+        # Same posture as map_winner and the blind esports tournaments: priced
+        # and shown so it accrues forward evidence, never sized. LIFT THIS once
+        # CFB has settled bets of its own to validate against -- the season
+        # starts in late August, so that is weeks not months away.
+        kelly = None
+        stake_dollars = None
         # A team whose rating was built almost entirely outside the FBS pool is
         # priced on a scale the rest of this market is not on. Shown with its
         # model number so it can be tracked, never staked -- same posture as the

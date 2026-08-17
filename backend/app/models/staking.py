@@ -29,7 +29,45 @@ MAX_STAKE_FRACTION = 0.05
 # frontend/src/api/markets.ts::buildRecommendedBets for the actual fix. 3pp
 # is a modest bump to also trim genuinely-marginal disagreements, not a
 # fix for the volume problem by itself.
-MIN_EDGE_TO_BET = 0.03
+MIN_EDGE_TO_BET = 0.20
+# RAISED 0.03 -> 0.20 on 2026-08-17, and the reason is that 0.03 was inert.
+#
+# 520 settled tracked bets say the model's edge SCALE is inflated about 7x: it
+# claims +24.1pp on average and delivers +3.5pp. A 3pp gate against a 7x-inflated
+# number is really a ~0.4pp gate, which is no gate at all -- 92% of the live board
+# cleared it, and raising it to 10pp changed literally nothing (431 rows both ways).
+#
+# DELIVERED EDGE RISES MONOTONICALLY WITH CLAIMED EDGE, which is the opposite of
+# what I expected (I assumed the biggest claimed edges were the artifacts):
+#
+#     model claims        n    delivers    ROI
+#      +4..+13pp         52     -2.4pp    -11.0%
+#     +13..+15pp         52     -0.5pp    -12.0%
+#     +15..+21pp        104     ~0.0pp     +7%
+#     +24..+33pp        104     +3.9pp    +11%
+#     +33..+39pp         52     +9.5pp    +29.3%
+#     +39..+72pp         52    +18.4pp    +54.0%
+#
+# CHOSEN ON TRAIN, SPENT ONCE ON TEST. Threshold picked using only bets settled
+# before 2026-08-11, then evaluated on the later window it had never seen:
+#
+#     gate        TRAIN ROI    TEST ROI
+#     none          +22.4%       -6.1%
+#     >=20pp        +32.0%       +8.6%
+#     >=25pp        +39.9%       +9.7%
+#     >=35pp        +51.7%      +20.3%
+#
+# Monotone in BOTH windows. The monotonicity across an independent sample is the
+# robust part; the exact number is not, which is why this sits at the conservative
+# end (20pp) rather than at the train optimum (35pp, but only n=29 in test).
+#
+# NOT a temperature calibration. Globally shrinking model_prob toward the market
+# was already REJECTED on ECE in #192 -- this changes WHICH bets are taken, not
+# what the model believes.
+#
+# COST: the live board goes from 466 staked rows to about 60. That is the point.
+# The 208 bets in the bottom four claimed-edge deciles delivered nothing while
+# paying spread on every one.
 
 # Added 2026-07-16: user is running NFL as ONE of ~8-9 sports on a single
 # 200-unit cross-sport bankroll (tennis/motorsport/MMA/esports/NBA/MLB/
