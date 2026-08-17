@@ -653,9 +653,69 @@ def _within_period(bet: PlacedBet, cutoff) -> bool:
 
 
 def _bet_stamp(bet: PlacedBet):
-    """The instant a bet BELONGS to -- settlement for a graded bet, placement for
-    one still open. Shared by both ends of the window so they cannot disagree."""
-    return bet.settled_at if bet.status not in ("pending",) and bet.settled_at else bet.placed_at
+    """The instant a bet BELONGS to. Shared by both ends of the window so they
+    cannot disagree.
+
+    WAS settlement-for-a-graded-bet, justified by "which is also how the equity
+    curve already buckets (it keys on settlement day)". That justification died
+    when the curve moved to the event day (see _outcome_day) -- and settlement
+    was the weaker of the two anyway, because it is OUR clock, not the world's.
+
+    The failure it caused, user-reported 2026-08-17: the app was off ~35 hours,
+    settlement ran on return, and the tracker's "Today" showed -11.4u from 25
+    bets of which NONE was placed or played that day. The losses were real; they
+    belonged to Aug 15-16. A tracker whose "today" changes when the server
+    restarts is reporting on the server.
+
+    EVENT TIME FIRST, then placement, then settlement -- each step further from
+    the real world, so each only a fallback. Matches _outcome_day exactly, which
+    is the point: the window that SELECTS bets and the curve that PLOTS them now
+    answer the same question."""
+    ost = getattr(bet, "original_start_time", None)
+    if ost:
+        try:
+            stamp = datetime.datetime.fromisoformat(str(ost).replace("Z", "+00:00"))
+            return (stamp.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+                    if stamp.tzinfo is not None else stamp)
+        except ValueError:
+            pass
+    if bet.placed_at:
+        return bet.placed_at
+    return bet.settled_at
+
+
+def _outcome_day(r) -> str | None:
+    """The day a bet's RESULT belongs to, for the daily equity curve.
+
+    WAS `(settled_at or placed_at)`, and settled_at is the wrong clock: it
+    records when THIS APP got around to grading the bet, not when anything
+    happened in the world. User-reported 2026-08-17 -- the app was off for ~35
+    hours, settlement ran on return, and 25 bets landed on ONE day:
+
+        by settled_at   Aug 17  n=25  -11.4u   <- none placed or played that day
+        by event date   Aug 15  -27.7u, Aug 16 +1.0u, Aug 17 nothing
+
+    Every one of those bets was placed Aug 15-16 and every event ran Aug 15-16.
+    The losses are real; the DAY was an artifact of our own downtime. A daily
+    curve that moves when the server restarts is measuring the server.
+
+    ORDER: the event's own start time first (495 of 520 settled bets carry it),
+    then placed_at (all 520 do), and settled_at only as a last resort. Each step
+    is further from the real world, so each is only a fallback.
+
+    TOTALS ARE UNCHANGED BY THIS -- it redistributes P&L across days, it never
+    creates or removes any. Verified as a control when shipped.
+    """
+    ost = getattr(r, "original_start_time", None)
+    if ost:
+        try:
+            return datetime.datetime.fromisoformat(
+                str(ost).replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            pass
+    d = r.placed_at or r.settled_at
+    return d.date().isoformat() if d else None
+
 
 
 @router.get("/portfolio", response_model=PortfolioOut)
@@ -777,8 +837,9 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
                 for agg in buckets:
                     agg["net"] += prof
                 if not is_futures:  # only game bets feed the daily equity curve
-                    day = (r.settled_at or r.placed_at).date().isoformat()
-                    daily[day] = daily.get(day, 0.0) + prof
+                    day = _outcome_day(r)
+                    if day:
+                        daily[day] = daily.get(day, 0.0) + prof
             if r.stake_dollars and r.stake_units:
                 size = round(r.stake_dollars / r.stake_units, 2)
                 for agg in buckets:
@@ -787,8 +848,9 @@ def get_portfolio(period: str = "all", since: str | None = None, until: str | No
                 for agg in buckets:
                     agg["net_units"] += prof_u
                 if not is_futures and r.stake_units is not None:
-                    day = (r.settled_at or r.placed_at).date().isoformat()
-                    daily_units[day] = daily_units.get(day, 0.0) + prof_u
+                    day = _outcome_day(r)
+                    if day:
+                        daily_units[day] = daily_units.get(day, 0.0) + prof_u
         # CLV (real close only) -- game bets only; futures are not_applicable
         if not is_futures:
             clv = compute_bet_clv(session, r)
