@@ -141,6 +141,18 @@ MONEYLINE_SERIES = {
     # sui.1 returned ZERO events over a full month window -- the same ESPN half
     # of the test it failed on 2026-08-08. A market we can price but never settle
     # is worse than no market.
+    # PERU and PARAGUAY, 2026-08-18 -- a SIDE EFFECT of completing CONMEBOL.
+    # Both were rated only so Libertadores/Sudamericana ties involving their
+    # clubs could price; having built the pools and the ESPN settlement slugs
+    # (per.1, par.1), their own league markets cost nothing further.
+    # KXPERLIGA1GAME 27 open markets (volume 7,681), KXAPFDDHGAME 18.
+    #
+    # Chile and Bolivia are NOT here: their pools exist for the same CONMEBOL
+    # reason, but no Kalshi league series was found for either at this check.
+    # They stay rating-only rather than being wired hopefully -- an entry that
+    # never resolves is a silent per-pass fetch that always returns nothing.
+    "PER1": "KXPERLIGA1GAME",
+    "PAR1": "KXAPFDDHGAME",
     "COL1": "KXDIMAYORGAME",
     "ECU1": "KXECULPGAME",
     "URU1": "KXURYPDGAME",

@@ -170,6 +170,16 @@ LEAGUE_CODES = {
     # 100 events / 99 completed for 2025, conmebol.sudamericana 100/100.
     # conmebol.recopa returns zero and bra.copa_do_brasil 400s, so neither the
     # Recopa nor the Copa do Brasil is wired.
+    # CONMEBOL member leagues, 2026-08-18. Added to COMPLETE the Libertadores
+    # and Sudamericana pricing shipped the same day: 7 of the 16 live ties were
+    # blocked solely because these four countries had no rating pool. All four
+    # return 100 events for both 2026 and 2024 (100 is ESPN's cap), so they
+    # supply the history the ratings need AND the settlement feed, from one
+    # source. Same two-part admission test as every other slug in this map.
+    "CHI1": "chi.1",       # Chilean Primera Division
+    "PAR1": "par.1",       # Paraguayan Primera Division
+    "BOL1": "bol.1",       # Bolivian Liga Profesional
+    "PER1": "per.1",       # Peruvian Liga 1
     "LIBERTADORES": "conmebol.libertadores",
     "SUDAMERICANA": "conmebol.sudamericana",
     "UCL": "uefa.champions",

@@ -11,44 +11,49 @@ project keeps rediscovering, most recently the CFB margin constants fitted on
 the NFL's Elo scale. So this carries its own mu, its own reference league and
 its own fitted offsets, exactly as leagues_cup_match.py does for MLS/Liga MX.
 
-THE FIT (scripts/fit_conmebol_league_strength.py, 2026-08-18).
-516 CROSS-COUNTRY matches across 5 seasons of Libertadores + Sudamericana, from
-ESPN's own conmebol.libertadores / conmebol.sudamericana scoreboards, fetched a
-month at a time because ESPN caps a scoreboard response at 100 events and a
-season-wide window silently truncates. Same-country ties are excluded from the
-fit: they teach nothing about the gap between leagues.
+THE FIT (scripts/fit_conmebol_league_strength.py, re-run 2026-08-18 on TEN
+leagues after Chile, Paraguay, Bolivia and Peru were added).
+1,158 CROSS-COUNTRY matches across 5 seasons of Libertadores + Sudamericana,
+from ESPN's conmebol.libertadores / conmebol.sudamericana scoreboards, fetched a
+month at a time because ESPN caps a response at 100 events and a season-wide
+window silently truncates. Same-country ties are excluded: they teach nothing
+about the gap between leagues.
 
-    BRA1  +0.000  (reference, pinned)      ECU1  -0.310
-    ARG1  -0.121                           URU1  -0.422
-    COL1  -0.310                           VEN1  -0.773
+    BRA1  +0.000  (reference)   ECU1  -0.267   PAR1  -0.347
+    ARG1  -0.115                COL1  -0.319   URU1  -0.380
+    CHI1  -0.367                PER1  -0.514   BOL1  -0.647   VEN1  -0.702
 
-    mu = 1.0002,  home_advantage_log = +0.3727  (see home_advantage() below --
-    the global +0.2000 was measurably too small for this competition, and the
-    offsets barely moved when it was freed, which is what you want: the home
-    term absorbed the residual instead of distorting the league scale)
+    mu = 1.0078,  home_advantage_log = +0.4310  (see home_advantage() below)
 
-THE RECOVERED ORDERING WAS NEVER SHOWN TO THE FIT. Brazil > Argentina >>
-Colombia/Ecuador > Uruguay > Venezuela is the consensus South American club
-hierarchy, and it fell out of goal data alone. That is the same reassurance the
-UEFA fit had when it reproduced England > Spain/France/Germany/Italy >>
-Portugal/Netherlands.
+THE RECOVERED ORDERING WAS NEVER SHOWN TO THE FIT, and it survived doubling the
+league count: Brazil > Argentina >> Ecuador/Colombia/Paraguay/Chile > Uruguay >
+Peru > Bolivia > Venezuela is the consensus South American hierarchy.
 
-HELD OUT BY SEASON, AND HONESTLY 4 OF 5, NOT 5 OF 5:
+HELD OUT BY SEASON -- 5 OF 5, which is a CHANGE and worth recording:
 
     held-out    n    no offsets   fitted     gain
-        2022   87       2.5787    2.1364   +0.4423
-        2023  124       2.5588    2.2060   +0.3528
-        2024  101       2.7098    2.2542   +0.4557
-        2025  109       2.5530    2.6910   -0.1380   <-- does NOT transfer
-        2026   95       2.2476    2.0495   +0.1981
+        2022  211       2.7796    2.3160   +0.4636
+        2023  248       2.5255    2.2293   +0.2962
+        2024  239       2.5440    2.2418   +0.3022
+        2025  243       2.5597    2.4234   +0.1362
+        2026  217       2.2385    2.2062   +0.0323
 
-Pooled over all 516 held-out matches the offsets still win clearly, mean Poisson
-deviance 2.5332 -> 2.2773. The 2025 season going the wrong way is recorded
-rather than smoothed over: on a sign test alone 4 of 5 is P=0.19, so the case
-rests on the pooled improvement and the recovered ordering, not on the count.
+    pooled 2.5290 -> 2.2841 over 1,158 held-out matches
 
-Freeing home advantage on top of that takes the pooled held-out figure to
-2.2615 (again 4 of 5 seasons). That is a SMALL gain and is reported as small.
+THE SIX-LEAGUE FIT FAILED ON 2025 (-0.1380) and this docstring said so, adding
+that "on a sign test alone 4 of 5 is P=0.19". Doubling the sample resolved it:
+2025 now transfers at +0.1362. The failure was small-sample noise, not a regime
+break -- which is exactly why it was recorded rather than explained away.
+
+HOW MUCH THE ORIGINAL SIX MOVED when the four were added, since a large shift
+would have meant the first fit was leaning on a narrow sample:
+
+    ARG1 -0.122 -> -0.115     COL1 -0.311 -> -0.319     ECU1 -0.311 -> -0.267
+    URU1 -0.426 -> -0.380     VEN1 -0.784 -> -0.702
+
+All modest and all in one direction (compressed toward zero), which is what you
+expect once genuinely weaker leagues (BOL1, PER1) join and absorb the bottom of
+the scale instead of VEN1 having to stretch for it.
 
 WHAT THIS DELIBERATELY WILL NOT PRICE.
 

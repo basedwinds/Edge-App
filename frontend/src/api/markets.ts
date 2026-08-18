@@ -611,6 +611,8 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   // Saudi rows rendered as the raw code. Same drift this comment block keeps
   // warning about; found by diffing the backend map against this one.
   "KSA1": "Saudi Pro League",
+  "CHI1": "Primera Division (Chile)", "PAR1": "Primera Division (Paraguay)",
+  "BOL1": "Liga Profesional (Bolivia)", "PER1": "Liga 1 (Peru)",
   "COL1": "Primera A (Colombia)", "ECU1": "LigaPro (Ecuador)",
   "URU1": "Primera Division (Uruguay)", "VEN1": "Liga FUTVE (Venezuela)",
   "USL1": "USL Championship", "NWSL": "NWSL",

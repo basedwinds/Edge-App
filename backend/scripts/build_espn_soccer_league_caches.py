@@ -65,6 +65,23 @@ ESPN_ONLY_LEAGUES = {
     "AUS1": "aus.1",       # A-League
     "IRL1": "irl.1",       # League of Ireland Premier Division
     "NWSL": "usa.nwsl",    # NWSL
+    # ---- CONMEBOL completion, 2026-08-18 -----------------------------------
+    # These four are added to finish a competition already shipped, not to widen
+    # coverage for its own sake. conmebol_match.py prices 117 of 208 live rows
+    # (56%) and the gap is almost entirely these countries: of the 16 live
+    # Libertadores/Sudamericana ties, SEVEN are blocked solely because Chile,
+    # Paraguay, Bolivia or Peru have no rating pool. With them, 16 of 16 price.
+    #
+    # Found by probing ESPN for every unrated league with live inventory rather
+    # than trusting the "no rating pool" note I had written on them -- that note
+    # treated a missing pool as a permanent blocker when the pool was buildable
+    # from the feed this script already uses. All four return 100 events for
+    # both 2026 and 2024, and 100 is ESPN's per-response CAP, so the windowed
+    # fetch below is doing real work rather than being defensive.
+    "CHI1": "chi.1",       # Chilean Primera Division
+    "PAR1": "par.1",       # Paraguayan Primera Division
+    "BOL1": "bol.1",       # Bolivian Liga Profesional
+    "PER1": "per.1",       # Peruvian Liga 1
 }
 
 START_YEAR = 2019
@@ -139,11 +156,47 @@ def derive_season_shape(dates: list[str]) -> tuple[int, bool]:
     return start_month, True
 
 
+# THE TROUGH RULE HAS A KNOWN FAILURE MODE, and this is where it is corrected.
+#
+# derive_season_shape picks the single quietest month. That breaks for a league
+# whose real off-season is SPLIT ACROSS THE YEAR BOUNDARY while a mid-season
+# break is concentrated in one month -- the deepest single month is then the
+# mid-season break, and the season gets labelled to start in the middle of
+# itself. The docstring above already records Austria as one such league.
+#
+# CHILE (2026-08-18) is the second, found on its first crawl. Its histogram:
+#
+#     1:80  2:209 3:189 4:203 5:198  6:39  7:144 8:234 9:165 10:188 11:137 12:79
+#                                     ^^^ isolated winter break, deepest month
+#     ^^ the real off-season is Dec(79)+Jan(80) -- TWO months, neither deepest
+#
+# The trough rule chose a July start. Measured against the alternatives by
+# per-season flatness (coefficient of variation, lower is better):
+#
+#     calendar, Feb boundary   cv=0.107   [267, 303, 256, 224, 240, 227]
+#     calendar, Jan boundary   cv=0.179   [225, 354, 240, 240, 240, 223]
+#     Aug-May,  Jul boundary   cv=0.221   [147, 321, 314, 238, 241, 220, 243]
+#
+# Calendar wins decisively, and it matches the real competition, which runs
+# February to December. This is an OVERRIDE rather than a heuristic change on
+# purpose: a "longest run of quiet months" rule fixes Chile but mislabels
+# Austria (whose Dec-Feb winter break is LONGER than its June off-season), so
+# changing the rule would trade one wrong league for another across the
+# eighteen that currently derive correctly. Overriding one measured league is
+# the smaller, checkable change.
+SEASON_SHAPE_OVERRIDES = {
+    "CHI1": (2, False),   # calendar year, February boundary -- see above
+}
+
+
 def make_labeller(start_month: int, split: bool):
     def label(match_date: str) -> str:
         year, month = int(match_date[:4]), int(match_date[5:7])
         if not split:
-            return str(year)
+            # start_month lets a CALENDAR league still put its January tail with
+            # the previous season -- Chile plays Feb-Dec, so a January fixture
+            # belongs to the season that just ended, not the one about to start.
+            return str(year if month >= start_month else year - 1)
         season_start = year if month >= start_month else year - 1
         return f"{season_start}-{str(season_start + 1)[-2:]}"
     return label
@@ -163,8 +216,13 @@ def main() -> None:
             print("  NO completed matches returned -- skipped, nothing cached")
             continue
         start_month, split = derive_season_shape([m["match_date"] for m in provisional])
-        shape = f"Aug-May style, season starts month {start_month}" if split else "calendar year"
-        print(f"  season shape DERIVED: {shape}")
+        if code in SEASON_SHAPE_OVERRIDES:
+            start_month, split = SEASON_SHAPE_OVERRIDES[code]
+            print(f"  season shape OVERRIDDEN (see SEASON_SHAPE_OVERRIDES): "
+                  f"start month {start_month}, split={split}")
+        else:
+            shape = f"Aug-May style, season starts month {start_month}" if split else "calendar year"
+            print(f"  season shape DERIVED: {shape}")
         matches = espn.parse_final_events_for(raw, code, make_labeller(start_month, split))
         seen, deduped = set(), []
         for m in matches:

@@ -680,11 +680,58 @@ def check_competition_priced_at_all() -> None:
         t[0] += 1
         if r.get("model_prob") is not None:
             t[1] += 1
-    dead = [f"{lg} ({n} rows, 0 priced)" for lg, (n, p) in sorted(tally.items()) if n >= 20 and p == 0]
-    if dead:
+    # ZERO PRICED HAS TWO CAUSES AND THEY NEED DIFFERENT ANSWERS.
+    #
+    #   (a) the gate is unwired -- the MODEL prices these fixtures fine when
+    #       called directly, but _either_team_unrated rejects them first. That
+    #       is the CONMEBOL bug: 208 rows dead on the board while the model
+    #       priced 9 of the 16 fixtures.
+    #   (b) genuine coverage limit -- the model ALSO returns None, because the
+    #       clubs are not rated. UCL in August is exactly this: the qualifying
+    #       rounds are Kairat, Levski Sofia and Slovan Bratislava, from leagues
+    #       with no fitted UEFA offset. Nothing is broken.
+    #
+    # A check that cannot separate them cries wolf every August and gets
+    # ignored, so it asks the MODEL directly and only fails on (a).
+    from app.db.database import SessionLocal
+    from app.db.models import Market, SoccerMatch
+    from app.api.routers import soccer_markets as _sm
+
+    PREDICTORS = {
+        **{lg: _sm._uefa_prediction for lg in UEFA_LEAGUES},
+        **{lg: _sm._conmebol_prediction for lg in CONMEBOL_LEAGUES},
+        **{lg: _sm._leagues_cup_prediction for lg in LEAGUES_CUP_LEAGUES},
+        **{lg: _sm._national_prediction for lg in NATIONAL_LEAGUES},
+        **{lg: _sm._cup_prediction for lg in CUP_TIERS},
+    }
+    unwired, coverage = [], []
+    session = SessionLocal()
+    try:
+        for lg, (n, p) in sorted(tally.items()):
+            if n < 20 or p:
+                continue
+            predict = PREDICTORS.get(lg)
+            fixtures = (session.query(SoccerMatch)
+                        .join(Market, Market.soccer_match_id == SoccerMatch.id)
+                        .filter(Market.status == "active", SoccerMatch.league == lg)
+                        .distinct().all())
+            modelled = sum(1 for f in fixtures if predict and predict(f) is not None)
+            if modelled:
+                unwired.append(f"{lg} ({n} rows, 0 priced, but the model prices "
+                               f"{modelled}/{len(fixtures)} fixtures)")
+            else:
+                coverage.append(f"{lg} ({n} rows, model prices 0/{len(fixtures)} -- unrated clubs)")
+    finally:
+        session.close()
+
+    if unwired:
         record("FAIL", "competition priced at all",
-               f"{len(dead)} competition(s) ingest real inventory and price NONE of it -- "
-               f"check _either_team_unrated has a branch: {dead}")
+               f"{len(unwired)} competition(s) where the MODEL works but the board shows nothing -- "
+               f"_either_team_unrated is missing a branch: {unwired}")
+    elif coverage:
+        record("PASS", "competition priced at all",
+               f"every competition the model can price does price; zero-priced ones are genuine "
+               f"coverage limits, not gate bugs: {coverage}")
     elif tally:
         live = ", ".join(f"{lg} {p}/{n}" for lg, (n, p) in sorted(tally.items()) if n)
         record("PASS", "competition priced at all", f"every ingested competition prices some rows ({live})")

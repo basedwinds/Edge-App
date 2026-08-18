@@ -127,7 +127,14 @@ from app.ingestion.market_matcher_soccer import canonical_team_key
 
 REFERENCE = "BRA1"          # deepest South American pool -> the natural anchor
 STEP, ITERS = 0.5, 4000
-SA = ["BRA1", "ARG1", "COL1", "ECU1", "URU1", "VEN1"]
+# TEN leagues from 2026-08-18, not the original six. Chile, Paraguay, Bolivia
+# and Peru were added because they were the entire reason CONMEBOL priced only
+# 117 of 208 rows: seven of the sixteen live ties had one side in a country with
+# no rating pool. Their offsets are fitted here on the same footing as the rest
+# -- NOT assumed to sit at some average, which is exactly what predict_conmebol_
+# match refuses to do at pricing time.
+SA = ["BRA1", "ARG1", "COL1", "ECU1", "URU1", "VEN1",
+      "CHI1", "PAR1", "BOL1", "PER1"]
 
 raw = json.load(open(r"C:\Users\awaws\AppData\Local\Temp\claude\C--Users-awaws-Downloads-files\78c551e1-57ff-47f1-960c-bc9c5e2ddaab\scratchpad\conmebol.json"))
 S.refresh_ratings()

@@ -1242,6 +1242,8 @@ _SOCCER_LEAGUE_NAME = {
     # Exactly the drift the 2026-08-09 note above warns about, caught only by
     # re-running the diff.
     "KSA1": "Saudi Pro League",
+    "CHI1": "Primera Division (Chile)", "PAR1": "Primera Division (Paraguay)",
+    "BOL1": "Liga Profesional (Bolivia)", "PER1": "Liga 1 (Peru)",
     "COL1": "Primera A (Colombia)", "ECU1": "LigaPro (Ecuador)",
     "URU1": "Primera Division (Uruguay)", "VEN1": "Liga FUTVE (Venezuela)",
     "USL1": "USL Championship", "NWSL": "NWSL",
