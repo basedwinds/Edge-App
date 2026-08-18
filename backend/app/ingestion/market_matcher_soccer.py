@@ -39,6 +39,19 @@ _log = _logging.getLogger(__name__)
 # confirming both sides' real naming) -- La Liga/Serie A/Bundesliga/Ligue 1/
 # MLS entries added as real mismatches are found live, not guessed upfront.
 TEAM_ALIASES: dict[str, str] = {
+    # BY HAND because the fixture-anchored builder provably CANNOT reach it,
+    # 2026-08-18. Polymarket lists "FC Bayern Munchen"; ESPN and football-data
+    # say "Bayern Munich". Stage 2's token rule needs one name's tokens to
+    # PREFIX the other's, and neither direction holds: no ESPN token starts
+    # with "fc", and "munchen" does not start with "munich". It is a
+    # German-vs-English spelling of the same word, which no amount of fixture
+    # evidence turns into a prefix -- so it is exactly the "judgement the
+    # builder cannot reach" case this hand map exists for.
+    #
+    # Safe globally: "fc bayern munchen" names no club in any other pool.
+    # Without it the Bayern fixtures stay unpriced AND keep minting a duplicate
+    # SoccerMatch every cycle, since the join runs through this same table.
+    "fc bayern munchen": "bayern munich",
     "man united": "manchester united",
     "man utd": "manchester united",
     "man city": "manchester city",
@@ -694,6 +707,61 @@ TEAM_ALIASES.update(_FROM_FILE)
 LEAGUE_ALIASES: dict[tuple[str, str], str] = dict(_SCOPED_FROM_FILE)
 
 
+def _load_espn_aliases_scoped() -> dict[tuple[str, str], str]:
+    """data/soccer_espn_aliases.json as SCOPED aliases.
+
+    THAT FILE ALREADY EXISTED AND canonical_team_key NEVER READ IT. It holds
+    ~600 formal-name -> football-data-name entries, each carrying the league it
+    was verified in and a vote count, derived from date-aligned fixtures by
+    scripts/build_soccer_espn_aliases.py. elo_service_soccer used it only as a
+    late fallback inside _league_of_team, so a formal name arriving from a
+    MARKET feed still resolved nowhere.
+
+    That is what left Polymarket's soccer rows unpriced (2026-08-18): it sends
+    formal names -- "VfB Stuttgart", "1. FC Union Berlin", "Eintracht
+    Frankfurt", "Borussia Monchengladbach" -- where the pools are keyed on
+    football-data's short ones. Same defect ALSO created duplicate fixtures,
+    because find_or_create_upcoming_match joins candidates through this very
+    function.
+
+    SCOPED, not global, and that matters here: these are exactly the names that
+    collide across divisions ("Wimbledon", "Utrecht"), and the file records the
+    league each was verified in, so the scope is evidence rather than a guess.
+
+    The Kalshi-built file WINS on conflict -- it is derived against the live
+    market names this app actually has to resolve, and it is the more recent
+    evidence. This only fills gaps.
+    """
+    path = _Path(__file__).resolve().parents[3] / "data" / "soccer_espn_aliases.json"
+    try:
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _log.error("soccer espn aliases unreadable at %s (%s) -- formal club "
+                   "names from Polymarket will price as unrated", path, exc)
+        return {}
+    out: dict[tuple[str, str], str] = {}
+    for espn_name, entry in (raw or {}).items():
+        league = (entry or {}).get("league") or ""
+        target_raw = (entry or {}).get("team") or ""
+        if not league or not target_raw:
+            continue
+        key = normalize_team_name(espn_name) or ""
+        # The TARGET goes through the global table, so an ESPN alias pointing at
+        # a football-data name that itself has a hand-written alias lands on the
+        # real pool key rather than one hop short.
+        target = TEAM_ALIASES.get(normalize_team_name(target_raw) or "",
+                                  normalize_team_name(target_raw) or "")
+        if not key or not target or key == target:
+            continue
+        if (league, key) in LEAGUE_ALIASES:
+            continue  # the Kalshi-built file wins, see above
+        out[(league, key)] = target
+    return out
+
+
+LEAGUE_ALIASES.update(_load_espn_aliases_scoped())
+
+
 def canonical_team_key(name: str, league: str | None = None) -> str:
     """Alias-normalized canonical key for a team name -- used both here (to
     match a live listing against an existing SoccerMatch row) AND by
@@ -715,13 +783,13 @@ def canonical_team_key(name: str, league: str | None = None) -> str:
     return TEAM_ALIASES.get(normalized, normalized)
 
 
-def team_names_match(name_a: str, name_b: str) -> bool:
+def team_names_match(name_a: str, name_b: str, league: str | None = None) -> bool:
     """Alias-normalized token-subset match -- same subset shape as
     market_matcher_tennis.py::full_names_match, but through the alias table
     first so e.g. "Man United" (football-data.co.uk) and "Manchester United"
     (a live Kalshi/Polymarket listing) resolve to the identical canonical
     string before comparing tokens at all."""
-    canon_a, canon_b = canonical_team_key(name_a), canonical_team_key(name_b)
+    canon_a, canon_b = canonical_team_key(name_a, league), canonical_team_key(name_b, league)
     if not canon_a or not canon_b:
         return False
     if canon_a == canon_b:
@@ -730,12 +798,15 @@ def team_names_match(name_a: str, name_b: str) -> bool:
     return tokens_a.issubset(tokens_b) or tokens_b.issubset(tokens_a)
 
 
-def _match_pair(match: dict, home_name: str, away_name: str) -> bool:
-    return team_names_match(home_name, match["home_team"]) and team_names_match(away_name, match["away_team"])
+def _match_pair(match: dict, home_name: str, away_name: str,
+                league: str | None = None) -> bool:
+    return (team_names_match(home_name, match["home_team"], league)
+            and team_names_match(away_name, match["away_team"], league))
 
 
 def match_upcoming_soccer_match(
     home_team_name: str, away_team_name: str, upcoming_matches: list[dict],
+    league: str | None = None,
 ) -> dict | None:
     """upcoming_matches: SoccerMatch-shaped dicts (real name fields, not yet
     played) -- see app/ingestion/market_catalog_soccer.py for how these get
@@ -745,8 +816,13 @@ def match_upcoming_soccer_match(
     gets the real home-advantage rating bump."""
     if not home_team_name or not away_team_name:
         return None
+    # LEAGUE, when the caller knows it, lets a scoped alias resolve a formal
+    # club name onto the pool key (LEAGUE_ALIASES). Callers pass a candidate
+    # list already restricted to one league, so both sides are canonicalised
+    # under the SAME scope -- which is what makes this safe to do inside an
+    # identity test. Omitting it behaves exactly as before.
     for match in upcoming_matches:
-        if _match_pair(match, home_team_name, away_team_name):
+        if _match_pair(match, home_team_name, away_team_name, league):
             return match
     return None
 

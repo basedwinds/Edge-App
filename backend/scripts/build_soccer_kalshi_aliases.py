@@ -282,9 +282,66 @@ def main() -> None:
             kalshi_fx[(slug, d, a, b)] = (slug, d, a, b)
     print(f"{len(kalshi_fx)} distinct Kalshi fixtures")
 
+    # ---- gather POLYMARKET fixtures, 2026-08-18 --------------------------
+    # SAME PIPE, SECOND FEED. Both stages below only need
+    # (espn_slug, date, name_a, name_b), so Polymarket drops straight in and
+    # inherits stage 1's anchored inference, stage 2's pair bootstrap, the
+    # per-league restriction and the global-safety check -- nothing bespoke.
+    #
+    # WHY IT IS NEEDED. Polymarket sends FORMAL club names ("FC Bayern
+    # Munchen", "BV Borussia 09 Dortmund", "Olympique Lyonnais", "Stade
+    # Brestois 29") where the pools are keyed on football-data's short ones.
+    # Measured on the live board 2026-08-18: 14 Polymarket-only fixtures priced
+    # ZERO, 854 rows, and TWELVE of them were DUPLICATES of a Kalshi fixture --
+    # because find_or_create_upcoming_match joins candidates through
+    # canonical_team_key too, so a name that will not resolve also will not
+    # JOIN. One defect, both symptoms.
+    #
+    # data/soccer_espn_aliases.json covers the subset Polymarket spells the way
+    # ESPN does (loaded as scoped aliases in market_matcher_soccer). This covers
+    # the rest, which are the ones with corporate affixes (FC/SV/OSC/BV/09/29)
+    # or genuine renames (Olympique Lyonnais -> Lyon, Stade Brestois 29 ->
+    # Brest). Those are NOT stripped by rule -- a blanket affix rule is the
+    # class of change this project has rejected before, and the fixture join
+    # settles them without guessing.
+    #
+    # It reads the LIVE Polymarket board, so it only learns names currently
+    # listed. That is the same limitation stage 1 has always had for Kalshi.
+    poly_n = 0
+    try:
+        from app.clients import polymarket_soccer_client  # noqa: E402
+        from app.clients import espn_soccer_client as _espn  # noqa: E402
+        seen_poly = set()
+        for row in polymarket_soccer_client.get_moneyline_markets():
+            div = row.get("division")
+            slug = _espn.LEAGUE_CODES.get(div or "")
+            md = row.get("match_date")
+            a_name, b_name = row.get("home_team"), row.get("away_team")
+            if not slug or not md or not a_name or not b_name:
+                continue
+            try:
+                d = datetime.date.fromisoformat(str(md)[:10])
+            except ValueError:
+                continue
+            k = (slug, d, a_name, b_name)
+            if k in seen_poly:
+                continue
+            seen_poly.add(k)
+            kalshi_fx.setdefault(k, k)   # Kalshi's own entry wins on collision
+            poly_n += 1
+        print(f"{poly_n} distinct Polymarket fixtures added")
+    except Exception as exc:
+        # NOT fatal: a Polymarket outage must not stop the Kalshi map being
+        # rebuilt. It IS loud, because the silent version of this is a rebuild
+        # that quietly drops every Polymarket alias it learned last time.
+        print(f"POLYMARKET FETCH FAILED ({exc}) -- Kalshi-only aliases this run")
+
     # ---- gather ESPN fixtures for the same windows -----------------------
     espn_fx: dict[str, list] = collections.defaultdict(list)
-    for slug in set(CUPS.values()):
+    # Slugs come from the FIXTURES, not from CUPS -- Polymarket adds leagues
+    # (F1, P1, E1) that have no Kalshi cup series, and keying off CUPS here
+    # would fetch no ESPN window for them and silently teach nothing.
+    for slug in sorted({s for (s, _d, _a, _b) in kalshi_fx}):
         dates = [d for (s, d, _a, _b) in kalshi_fx if s == slug]
         if not dates:
             continue

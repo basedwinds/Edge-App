@@ -19,6 +19,7 @@ import datetime
 import json
 import logging
 
+from sqlalchemy import or_ as _or
 from sqlalchemy.orm import Session
 
 from app.clients.polymarket_client import quote_fields
@@ -30,8 +31,23 @@ log = logging.getLogger("market_catalog_soccer")
 
 
 def _load_upcoming_matches(session: Session, league: str) -> list[dict]:
+    # EXCLUDE FIXTURES ALREADY MERGED AWAY (2026-08-18).
+    #
+    # scripts/dedupe_soccer_fixtures.py repoints a duplicate's bets and markets
+    # onto the surviving row and tags the loser's source_match_id ":dup-of-N".
+    # It does NOT delete it, deliberately -- deleting would orphan anything that
+    # still referenced it. But the tagged row stayed a CANDIDATE here, so it
+    # matched its own names on the very next poll and started collecting fresh
+    # markets and bets again. That is why 49 bets were still sitting on
+    # dup-tagged rows after previous merges: the merge worked and then silently
+    # un-did itself.
+    #
+    # A tagged row is never the right answer to "which fixture is this?", so it
+    # is filtered here rather than at each of the several call sites.
     rows = session.query(SoccerMatch).filter(
         SoccerMatch.league == league, SoccerMatch.result_ft.is_(None),
+        _or(SoccerMatch.source_match_id.is_(None),
+            SoccerMatch.source_match_id.notlike("%:dup-of-%")),
     ).all()
     return [{"id": r.id, "home_team": r.home_team, "away_team": r.away_team,
              "match_date": r.match_date, "estimated_start_time": r.estimated_start_time}
@@ -72,7 +88,7 @@ def find_or_create_upcoming_match(
     if not home_team_name or not away_team_name:
         return None
     upcoming = _load_upcoming_matches(session, league)
-    found = match_upcoming_soccer_match(home_team_name, away_team_name, upcoming)
+    found = match_upcoming_soccer_match(home_team_name, away_team_name, upcoming, league)
     if found is not None:
         existing = session.get(SoccerMatch, found["id"])
         # BACKFILL A KICKOFF THE ROW NEVER GOT.
@@ -122,13 +138,23 @@ def find_or_create_upcoming_match(
     # fixtures and corrupts both their bets.
     ours = _kickoff_day(match_date, None)
     if ours is not None:
-        hk, ak = canonical_team_key(home_team_name), canonical_team_key(away_team_name)
+        # SCOPED to this league. _load_upcoming_matches already restricted the
+        # candidates to it, so every name on both sides of this comparison is
+        # canonicalised under the same scope -- the identity test cannot be
+        # skewed by giving one side a more specific alias than the other.
+        #
+        # This is what makes the duplicate STOP BEING CREATED rather than merely
+        # being priced later: Polymarket's "FC Bayern München" now canonicalises
+        # to the same key as Kalshi's "Bayern Munich", so the fixture joins.
+        hk = canonical_team_key(home_team_name, league)
+        ak = canonical_team_key(away_team_name, league)
         cands = []
         for row in upcoming:
             theirs = _kickoff_day(row.get("match_date"), row.get("estimated_start_time"))
             if theirs is None or abs((theirs - ours).days) > 1:
                 continue
-            rh, ra = canonical_team_key(row["home_team"]), canonical_team_key(row["away_team"])
+            rh = canonical_team_key(row["home_team"], league)
+            ra = canonical_team_key(row["away_team"], league)
             if hk in (rh, ra) or ak in (rh, ra):
                 cands.append(row)
         if len(cands) == 1:
