@@ -2686,6 +2686,9 @@ export interface OpenBetPayload {
   team: string | null;
   side: string | null;
   line: number | null;
+  /** "yes" | "no". A NO bet wins when the named side does NOT happen, so
+   *  `team`/`side` must never be rendered bare on a NO row. */
+  position: string;
   stake_pool: string;
   model_prob_at_placement: number | null;
   stake_dollars: number;
@@ -2792,6 +2795,9 @@ export interface SettledBetPayload {
   team: string | null;
   side: string | null;
   line: number | null;
+  /** "yes" | "no". A NO bet wins when the named side does NOT happen, so
+   *  `team`/`side` must never be rendered bare on a NO row. */
+  position: string;
   stake_pool: string;
   stake_dollars: number;
   stake_units: number | null;

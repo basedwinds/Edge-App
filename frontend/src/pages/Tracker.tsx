@@ -123,9 +123,16 @@ function EquityCurve({ points, mode }: { points: PortfolioPointPayload[]; mode: 
  * raw market_type strings until 2026-08-04. */
 function betPickLabel(b: {
   market_type: string; team: string | null; side: string | null; line: number | null; sport: string;
+  position?: string | null;
 }): string {
   const pick: PickLike = {
+    // position was NOT threaded through until 2026-08-18, so describePick's
+    // NO branch never fired here and a NO stake on STATE rendered as plain
+    // "STATE" -- on a WON row that reads as "STATE won", which is the exact
+    // opposite of what happened (user-reported, bet #37395). The settlement
+    // was correct; only this label was.
     marketType: b.market_type, team: b.team, side: b.side, line: b.line, sport: b.sport,
+    position: b.position === "no" ? "no" : "yes",
   };
   return `${marketTypeLabel(b.market_type, b.sport)} · ${describePick(pick)}`;
 }
@@ -521,7 +528,7 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
   if (open.length === 0 && settled.length === 0) return null;
   type FRow = {
     id: number; market_id: number; sport: string; league: string | null; source: string; label: string; market_type: string;
-    team: string | null; side: string | null; line: number | null;
+    team: string | null; side: string | null; line: number | null; position: string;
     entry: number | null; model_prob: number | null; stake: number; status: string; profit: number | null;
     // Where an OPEN position stands now vs the entry above. Only open rows
     // carry these: a settled one has a result, which is the better answer.
@@ -533,7 +540,7 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
     const r = futuresResolution(b.sport, b.market_type);
     return {
       id: b.id, market_id: b.market_id, sport: b.sport, league: b.league, source: b.source, label: b.label, market_type: b.market_type,
-      team: b.team, side: b.side, line: b.line, entry: b.market_prob_at_placement, model_prob: b.model_prob_at_placement, stake: b.stake_dollars,
+      team: b.team, side: b.side, line: b.line, position: b.position ?? "yes", entry: b.market_prob_at_placement, model_prob: b.model_prob_at_placement, stake: b.stake_dollars,
       status, profit, resolves: r.label, resolveKey: r.sortKey,
       marketNow: (b as OpenBetPayload).market_prob_now ?? null,
       modelNow: (b as OpenBetPayload).model_prob_now ?? null,
@@ -586,6 +593,9 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
               <tr key={`${r.status}-${r.id}`} className="hover:bg-[var(--color-surface)] align-top">
                 <td className="px-3 py-2">
                   <div className="text-[var(--color-text)]">
+                    {/* A NO position wins when this side does NOT happen -- naming
+                        it bare reads as backing it (see betPickLabel). */}
+                    {r.position === "no" && <span className="text-[var(--color-text-dim)]">NO — </span>}
                     {r.team ?? r.side ?? "—"}
                     {futuresThreshold({ market_type: r.market_type, side: r.side, line: r.line }) && (
                       <span className="text-[var(--color-text-dim)]"> · {futuresThreshold({ market_type: r.market_type, side: r.side, line: r.line })}</span>

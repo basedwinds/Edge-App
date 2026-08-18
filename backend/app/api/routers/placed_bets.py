@@ -390,6 +390,8 @@ class OpenBetOut(BaseModel):
     team: str | None
     side: str | None
     line: float | None
+    position: str = "yes"   # yes | no -- a NO bet wins when the named side does NOT
+                            # happen, so the tracker must never render `team` bare
     stake_pool: str             # "weekly" | "futures" -- lets the tracker split game vs futures
     stake_dollars: float
     stake_units: float | None
@@ -435,6 +437,8 @@ class SettledBetOut(BaseModel):
     team: str | None
     side: str | None
     line: float | None
+    position: str = "yes"   # yes | no -- a NO bet wins when the named side does NOT
+                            # happen, so the tracker must never render `team` bare
     stake_pool: str
     stake_dollars: float
     stake_units: float | None
@@ -1048,6 +1052,7 @@ def get_open_bets(session: Session = Depends(get_session)):
             market_status=market_status_by_id.get(r.market_id),
             id=r.id, market_id=r.market_id, sport=r.sport, league=r.league, source=r.source, market_type=r.market_type,
             label=r.label, team=r.team, side=r.side, line=r.line,
+            position=(r.position or "yes"),
             stake_pool=r.stake_pool,
             stake_dollars=r.stake_dollars, stake_units=r.stake_units,
             market_prob_at_placement=r.market_prob_at_placement,
@@ -1116,6 +1121,7 @@ def get_settled_bets(session: Session = Depends(get_session)):
         out.append(SettledBetOut(
             id=r.id, market_id=r.market_id, sport=r.sport, league=r.league, source=r.source, market_type=r.market_type,
             label=r.label, team=r.team, side=r.side, line=r.line,
+            position=(r.position or "yes"),
             stake_pool=r.stake_pool, stake_dollars=r.stake_dollars, stake_units=r.stake_units,
             market_prob_at_placement=r.market_prob_at_placement,
             model_prob_at_placement=r.model_prob_at_placement,
