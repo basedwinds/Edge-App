@@ -151,6 +151,23 @@ MONEYLINE_SERIES = {
     # reason, but no Kalshi league series was found for either at this check.
     # They stay rating-only rather than being wired hopefully -- an entry that
     # never resolves is a silent per-pass fetch that always returns nothing.
+    # SECOND TIERS + MALAYSIA, 2026-08-18. All five re-probed live at wiring
+    # time rather than trusted from the audit note, which is how the BRA2
+    # numbers turned out to be BIGGER than recorded:
+    #   KXBRASILEIROBGAME 60 open (volume 48,389)  <- the reason for this batch
+    #   KXARGNACBGAME     60 open (volume    403)
+    #   KXENGNLGAME       36 open (volume     39)
+    #   KXEERSTEDIVGAME   30 open (volume    301)
+    #   KXMYSLGAME        18 open (volume      7)
+    # The four thin ones are wired on the DFB Pokal precedent -- they price and
+    # the staking gates refuse them -- and because a rated second tier also
+    # makes domestic-cup ties involving those clubs priceable, which is worth
+    # more than their own book.
+    "BRA2": "KXBRASILEIROBGAME",
+    "ARG2": "KXARGNACBGAME",
+    "E4":   "KXENGNLGAME",
+    "N2":   "KXEERSTEDIVGAME",
+    "MYS1": "KXMYSLGAME",
     "PER1": "KXPERLIGA1GAME",
     "PAR1": "KXAPFDDHGAME",
     "COL1": "KXDIMAYORGAME",
@@ -228,6 +245,12 @@ SPREAD_SERIES = {
     # fetch, and NOT ingesting it means noticing in October that nothing was
     # collected.
     "JPN1": "KXJLEAGUESPREAD",
+    # 2026-08-18. ONLY these two second tiers have a spread book; KXENGNLSPREAD,
+    # KXEERSTEDIVSPREAD and KXMYSLSPREAD each returned ZERO open markets, so
+    # they are deliberately absent rather than guessed at -- a series that never
+    # resolves is a silent per-pass fetch that always comes back empty.
+    "BRA2": "KXBRASILEIROBSPREAD",   # 40 open, volume 12,182
+    "ARG2": "KXARGNACBSPREAD",       # 4 open, untraded
     "COL1": "KXDIMAYORSPREAD",
     "VEN1": "KXVENFUTVESPREAD",
     "USL1": "KXUSLSPREAD",
@@ -324,6 +347,8 @@ TOTAL_SERIES = {
     "KSA1": "KXSAUDIPLTOTAL",
     # 2026-08-18, same three leagues and same reasoning as SPREAD_SERIES above.
     "JPN1": "KXJLEAGUETOTAL",   # see the JPN1 note in SPREAD_SERIES
+    "BRA2": "KXBRASILEIROBTOTAL",    # 60 open, volume 21,771
+    "ARG2": "KXARGNACBTOTAL",        # 6 open, untraded; see the SPREAD note
     "COL1": "KXDIMAYORTOTAL",
     "VEN1": "KXVENFUTVETOTAL",
     "USL1": "KXUSLTOTAL",
@@ -350,6 +375,7 @@ BTTS_SERIES = {
     # 2026-08-18. These three DO have live BTTS inventory, unlike the five
     # European series above which were wired ahead of their seasons.
     "JPN1": "KXJLEAGUEBTTS",    # see the JPN1 note in SPREAD_SERIES
+    "BRA2": "KXBRASILEIROBBTTS",     # 10 open, volume 3,576. ARG2 has no BTTS book.
     "COL1": "KXDIMAYORBTTS",
     "VEN1": "KXVENFUTVEBTTS",
     "USL1": "KXUSLBTTS",

@@ -1247,6 +1247,8 @@ _SOCCER_LEAGUE_NAME = {
     "COL1": "Primera A (Colombia)", "ECU1": "LigaPro (Ecuador)",
     "URU1": "Primera Division (Uruguay)", "VEN1": "Liga FUTVE (Venezuela)",
     "USL1": "USL Championship", "NWSL": "NWSL",
+    "BRA2": "Serie B (Brazil)", "ARG2": "Primera Nacional (Argentina)",
+    "E4": "National League", "N2": "Eerste Divisie", "MYS1": "Malaysia Super League",
 }
 
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",

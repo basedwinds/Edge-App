@@ -616,6 +616,8 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "COL1": "Primera A (Colombia)", "ECU1": "LigaPro (Ecuador)",
   "URU1": "Primera Division (Uruguay)", "VEN1": "Liga FUTVE (Venezuela)",
   "USL1": "USL Championship", "NWSL": "NWSL",
+  "BRA2": "Serie B (Brazil)", "ARG2": "Primera Nacional (Argentina)",
+  "E4": "National League", "N2": "Eerste Divisie", "MYS1": "Malaysia Super League",
 };
 
 // Fallback series names for racing. Only used when the backend hasn't supplied

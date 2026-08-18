@@ -180,6 +180,27 @@ LEAGUE_CODES = {
     "PAR1": "par.1",       # Paraguayan Primera Division
     "BOL1": "bol.1",       # Bolivian Liga Profesional
     "PER1": "per.1",       # Peruvian Liga 1
+    # SECOND TIERS + MALAYSIA, 2026-08-18. Same two-part admission test: each
+    # slug returned live events AND multi-season history, so one feed supplies
+    # both the ratings and the settlement.
+    #
+    # Wired for BRA2 above all -- 170 open Kalshi markets across four series
+    # (GAME/SPREAD/TOTAL/BTTS), the largest single coverage gap in the New
+    # Markets audit. The other four are thin books, wired on the DFB Pokal
+    # precedent: an untraded market prices and is then refused by the staking
+    # gates, whereas leaving it out means discovering in October that nothing
+    # was ever collected.
+    #
+    # A SECOND TIER ALSO WIDENS THE CUPS, which is why these are worth more than
+    # their own inventory: domestic cups pair top-flight clubs with lower-tier
+    # ones, and an unrated opponent makes the whole tie unpriceable. bra.2 feeds
+    # the Copa do Brasil, arg.2 the Copa Argentina, eng.5 the FA Cup and EFL Cup
+    # rounds where National League sides appear, ned.2 the KNVB Beker.
+    "BRA2": "bra.2",
+    "ARG2": "arg.2",
+    "E4":   "eng.5",       # 5th tier: E0-E3 are already tiers 1-4
+    "N2":   "ned.2",
+    "MYS1": "mys.1",
     "LIBERTADORES": "conmebol.libertadores",
     "SUDAMERICANA": "conmebol.sudamericana",
     "UCL": "uefa.champions",

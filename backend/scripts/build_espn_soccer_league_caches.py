@@ -82,6 +82,25 @@ ESPN_ONLY_LEAGUES = {
     "PAR1": "par.1",       # Paraguayan Primera Division
     "BOL1": "bol.1",       # Bolivian Liga Profesional
     "PER1": "per.1",       # Peruvian Liga 1
+    # ---- Second tiers + one new country, 2026-08-18 -------------------------
+    # From the same 37-league ESPN probe that produced the CONMEBOL four. Each
+    # carries BOTH current events and multi-season history, so one slug gives
+    # ratings and settlement.
+    #
+    # BRA2 is the reason this batch exists: 160 open Kalshi markets with 30,917
+    # traded contracts, the largest single coverage gap found in the whole
+    # New Markets audit, and it already lists GAME + SPREAD + TOTAL.
+    #
+    # SECOND-ORDER VALUE, the same argument that justified D2/E2/SP2: domestic
+    # cups pair top-flight clubs with lower-tier ones, so a rated second tier
+    # raises CUP coverage too. bra.2 feeds the Copa do Brasil, arg.2 the Copa
+    # Argentina, eng.5 the FA Cup and EFL Cup rounds where National League sides
+    # appear, ned.2 the KNVB Beker.
+    "BRA2": "bra.2",       # Brazilian Serie B
+    "ARG2": "arg.2",       # Argentine Primera Nacional
+    "E4":   "eng.5",       # English National League (5th tier; E0-E3 are 1-4)
+    "N2":   "ned.2",       # Dutch Eerste Divisie
+    "MYS1": "mys.1",       # Malaysian Super League
 }
 
 START_YEAR = 2019
@@ -186,6 +205,28 @@ def derive_season_shape(dates: list[str]) -> tuple[int, bool]:
 # the smaller, checkable change.
 SEASON_SHAPE_OVERRIDES = {
     "CHI1": (2, False),   # calendar year, February boundary -- see above
+    # MALAYSIA, 2026-08-18. NOT the same failure as Chile: the deriver is not
+    # confused here, the league genuinely CHANGED FORMAT mid-history and no
+    # single boundary is right for all of it.
+    #
+    #   2019-2022  Feb/Mar -> Sep/Oct   (a calendar-year season)
+    #   2024-      Aug     -> May       (a European-style split season)
+    #
+    # The derived December boundary is the dangerous one, and it is dangerous
+    # for the CURRENT format specifically: the live season ran Aug 2025 -> May
+    # 2026 continuously (Aug 23, Sep 12, Oct 12, Nov 12, Dec 19, Jan 21, Feb 13,
+    # Mar 13, Apr 13, May 18 matches), so a 1-December boundary splits it in
+    # half and fires SEASON_REGRESSION -- a third of every club's rating pulled
+    # back to league average -- in the middle of play, every single year.
+    #
+    # July is the boundary the modern format wants: May, June and July 2025 were
+    # all EMPTY, so the break is real and unambiguous. The price is that the
+    # 2019-2022 seasons get split instead, costing about four spurious
+    # regressions back then. That trade is clearly worth taking: ~338 of the 956
+    # cached matches fall after the format change, which is far more than enough
+    # for current ratings to have converged past a 2021 artefact, whereas a
+    # mid-season regression corrupts the ratings the app prices with TODAY.
+    "MYS1": (7, True),
 }
 
 
@@ -203,10 +244,20 @@ def make_labeller(start_month: int, split: bool):
 
 
 def main() -> None:
+    # --only CODE[,CODE...] crawls just those leagues. Added 2026-08-18 because
+    # a full pass is ~25 minutes and adding one league should not mean
+    # re-fetching nineteen that already work -- which also means a re-crawl
+    # after a season-shape fix is cheap enough to actually do.
+    only = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--only" and i + 1 < len(sys.argv):
+            only = {c.strip().upper() for c in sys.argv[i + 1].split(",") if c.strip()}
     today = dt.date.today()
     start = dt.date(START_YEAR, 1, 1)
     grand_total = 0
     for code, slug in ESPN_ONLY_LEAGUES.items():
+        if only and code not in only:
+            continue
         path = cache_path(code)
         print(f"\n=== {code} ({slug}) ===", flush=True)
         raw = espn.fetch_season_range_for(slug, start, today)
@@ -239,7 +290,11 @@ def main() -> None:
               f"{deduped[0]['match_date']} -> {deduped[-1]['match_date']}")
         print(f"  seasons: {', '.join(f'{s}:{n}' for s, n in sorted(by_season.items()))}")
         grand_total += len(deduped)
-    print(f"\nTOTAL cached: {grand_total} matches across {len(ESPN_ONLY_LEAGUES)} leagues")
+    # Count what this RUN cached, not the size of the registry -- with --only
+    # those differ, and the registry number reads like a full crawl happened.
+    scope = f"{len(only)} of {len(ESPN_ONLY_LEAGUES)}" if only else str(len(ESPN_ONLY_LEAGUES))
+    print("")
+    print(f"TOTAL cached: {grand_total} matches across {scope} leagues")
 
 
 if __name__ == "__main__":
