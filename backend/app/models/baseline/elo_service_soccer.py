@@ -38,6 +38,19 @@ from pathlib import Path as _Path
 from app.ingestion import soccer_data
 from app.ingestion.cache_memo import memoize_on_files as _memoize_on_files
 from app.ingestion.market_matcher_soccer import canonical_team_key
+
+# LEAGUE IS PASSED TO canonical_team_key WHEREVER IT IS KNOWN (2026-08-18).
+# canonical_team_key consults market_matcher_soccer.LEAGUE_ALIASES first when
+# given a league -- aliases the builder proved inside one league but refused to
+# write globally because the same name is a different club elsewhere ("Utrecht"
+# is Jong FC Utrecht in N2 and FC Utrecht in N1).
+#
+# It is passed to the four RATING lookups below and deliberately NOT to:
+#   * the training-data load, whose names are already the pool's own spelling --
+#     scoping there would rewrite the pool keys the aliases point AT;
+#   * _league_of_team, which is answering "which league is this club in" and so
+#     has no league to scope by.
+# Both omissions are load-bearing, not oversights.
 from app.models.baseline.elo_soccer import (
     MatchGoalDistribution,
     SoccerRatingState,
@@ -140,7 +153,7 @@ MAX_RATING_STALENESS_DAYS = 730
 
 
 def last_played(league: str, team: str) -> str | None:
-    return (_cache.get("last_played") or {}).get((league, canonical_team_key(team)))
+    return (_cache.get("last_played") or {}).get((league, canonical_team_key(team, league)))
 
 
 # parents[4] is the repo root: .../backend/app/models/baseline/ -> 4 up. Getting
@@ -276,7 +289,7 @@ def get_team_match_count(league: str, team: str) -> int:
     state = _cache["states_by_league"].get(league)
     if state is None:
         return 0
-    return state.get_count(canonical_team_key(team))
+    return state.get_count(canonical_team_key(team, league))
 
 
 def _either_unrated(league: str, home_team: str, away_team: str) -> bool:
@@ -301,7 +314,8 @@ def get_match_distribution(league: str, home_team: str, away_team: str) -> Match
     state = _cache["states_by_league"].get(league)
     if state is None:
         return None
-    return predict_match(state, canonical_team_key(home_team), canonical_team_key(away_team))
+    return predict_match(state, canonical_team_key(home_team, league),
+                         canonical_team_key(away_team, league))
 
 
 def get_half_distribution(league: str, home_team: str, away_team: str, half: int) -> MatchGoalDistribution | None:
@@ -315,7 +329,8 @@ def get_half_distribution(league: str, home_team: str, away_team: str, half: int
     state = _cache["states_by_league"].get(league)
     if state is None:
         return None
-    return predict_half(state, canonical_team_key(home_team), canonical_team_key(away_team), half)
+    return predict_half(state, canonical_team_key(home_team, league),
+                        canonical_team_key(away_team, league), half)
 
 
 def get_rating_state(league: str) -> SoccerRatingState | None:

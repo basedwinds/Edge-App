@@ -152,6 +152,26 @@ CUPS = {
     # and "Racing Club" (Montevideo vs Avellaneda) from this very competition.
     "KXCONMEBOLLIBGAME": "conmebol.libertadores",
     "KXCONMEBOLSUDGAME": "conmebol.sudamericana",
+    # SECOND TIERS + MALAYSIA, 2026-08-18. Every one of these is a RESERVE-SIDE
+    # hazard, which is the SP2 caution above repeating in four new places and
+    # the reason none of these were typed in by hand.
+    #
+    # ned.2 is the worst of them: the Eerste Divisie fields Jong Ajax, Jong PSV,
+    # Jong AZ and Jong Utrecht -- genuine reserve teams in a real division, each
+    # token-compatible with a first team playing in N1. Kalshi's first listed
+    # market is literally "Jong Eindhoven vs Oss". Mapping any of those to the
+    # senior club would stake money on the wrong side in the wrong division.
+    #
+    # arg.2 and bra.2 carry the second-tier version of the collision that
+    # already bit CONMEBOL: short-form South American names against full ESPN
+    # ones. eng.5 adds fifth-tier clubs whose names overlap former league
+    # members. The fixture join is what tells them apart; the global-safety
+    # check at write time is what stops any of it leaking into another pool.
+    "KXBRASILEIROBGAME": "bra.2",
+    "KXARGNACBGAME": "arg.2",
+    "KXENGNLGAME": "eng.5",
+    "KXEERSTEDIVGAME": "ned.2",
+    "KXMYSLGAME": "mys.1",
 }
 PAIR = re.compile(r"^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner\?|:|$)")
 TICKER_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})")
@@ -364,13 +384,20 @@ def main() -> None:
 
     aliases, unresolved = {}, []
     claims: dict[str, str] = {}
+    scoped_note: list = []
     for name, targets in sorted(inferred.items()):
         if len(targets) != 1:
             unresolved.append((name, f"infers to {sorted(targets)}"))
             continue
         target, league = next(iter(targets))
-        if target in claims:
-            unresolved.append((name, f"{target} already claimed by {claims[target]}"))
+        # Claimed PER LEAGUE, not globally, since scoped aliases were added
+        # below: two different leagues legitimately map different Kalshi names
+        # onto different clubs, and a global key made the second one look like a
+        # duplicate. Within one league a repeat target is still a real conflict
+        # and is still refused.
+        if (league, target) in claims:
+            unresolved.append((name, f"{target} already claimed by "
+                                     f"{claims[(league, target)]} in {league}"))
             continue
         # GLOBAL-SAFETY CHECK. TEAM_ALIASES is league-BLIND -- one dict for the
         # whole app -- but every alias here is league-SCOPED. Writing a
@@ -390,17 +417,33 @@ def main() -> None:
         foreign = sorted(lg for lg, members in rated_in.items()
                          if lg != league and key in members)
         if foreign:
-            unresolved.append((name, f"UNSAFE GLOBALLY -- '{key}' is already a "
-                                     f"club in {foreign}; a league-blind alias "
-                                     f"would rewrite it too"))
+            # NOT DROPPED ANY MORE (2026-08-18). Refusing kept the app correct
+            # and left the club unpriced -- 29 refusals on the run that added
+            # the second tiers, which was most of why those leagues priced at
+            # 17-72%. The alias is still WRONG globally and RIGHT inside its own
+            # league, so it is written with a `scope` and consulted only when
+            # the caller knows the league (market_matcher_soccer.LEAGUE_ALIASES).
+            #
+            # The evidence is unchanged: the target was proved by a real
+            # date-aligned fixture IN THAT LEAGUE. What changes is only how
+            # widely it is allowed to apply.
+            claims[(league, target)] = name
+            aliases[name] = {"team": target, "league": league, "scope": league}
+            scoped_note.append((name, target, league, foreign))
             continue
-        claims[target] = name
+        claims[(league, target)] = name
         aliases[name] = {"team": target, "league": league}
 
     print(f"{'Kalshi name':28s} -> {'football-data key':26s} {'lg':4s}")
     for name, v in sorted(aliases.items()):
         print(f"{name[:28]:28s} -> {v['team'][:26]:26s} {v['league']:4s}")
-    print(f"\n{len(aliases)} aliases, {len(unresolved)} unresolved")
+    n_scoped = len(scoped_note)
+    print("")
+    print(f"{len(aliases)} aliases ({n_scoped} LEAGUE-SCOPED), "
+          f"{len(unresolved)} unresolved")
+    for nm, tg, lgc, fg in sorted(scoped_note):
+        print(f"   SCOPED[{lgc:5s}] {nm[:24]:24s} -> {tg[:26]:26s} "
+              f"(global would have hit {fg})")
     for name, why in unresolved:
         print(f"   UNRESOLVED {name[:30]:30s} {why}")
 

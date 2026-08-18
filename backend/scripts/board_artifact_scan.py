@@ -619,7 +619,7 @@ def check_soccer_league_registration() -> None:
     # and Barcelona SC of Ecuador onto one key and the board still went from 9%
     # to 87% priced, because within-league lookups canonicalise both sides the
     # same way. Only the cross-league (UEFA/cup) resolver would have seen it.
-    from app.ingestion.market_matcher_soccer import _FROM_FILE
+    from app.ingestion.market_matcher_soccer import _FROM_FILE, LEAGUE_ALIASES
     from app.models.baseline import elo_service_soccer as _elo
     _elo.refresh_ratings()
     pools = {lg: set(st.attack_log) for lg, st in _elo._cache["states_by_league"].items()}
@@ -629,13 +629,33 @@ def check_soccer_league_registration() -> None:
                         if key in members and key != target)
         if owning:
             hijacks.append(f"{key!r} (also a club in {owning})")
-    if hijacks:
+    # SCOPED aliases are checked SEPARATELY and on a DIFFERENT invariant.
+    # _FROM_FILE now holds only the GLOBAL entries -- when scoped aliases were
+    # added (2026-08-18) this loop silently stopped seeing 28 of 120 file
+    # entries, and a check that quietly narrows its own scope is worse than no
+    # check. Scoped entries CANNOT satisfy the collision rule above (colliding
+    # is precisely why they are scoped), so the thing to verify is that each one
+    # points at a club that really exists IN THE POOL IT IS SCOPED TO. A scope
+    # naming a dead league, or a target absent from that league, is an alias
+    # that will never fire -- the silent no-op this whole family of bugs keeps
+    # producing.
+    dangling = []
+    for (scope, key), target in LEAGUE_ALIASES.items():
+        members = pools.get(scope)
+        if members is None:
+            dangling.append(f"{key!r} scoped to {scope!r}, which has no rating pool")
+        elif target not in members:
+            dangling.append(f"{key!r} -> {target!r} absent from {scope}")
+    if hijacks or dangling:
         record("FAIL", "soccer alias safety",
-               f"{len(hijacks)} league-scoped alias(es) would rewrite a club that "
-               f"exists elsewhere: {hijacks[:5]}")
+               f"{len(hijacks)} global alias(es) would rewrite a club that exists "
+               f"elsewhere: {hijacks[:4]}; {len(dangling)} scoped alias(es) point "
+               f"nowhere: {dangling[:4]}")
     else:
         record("PASS", "soccer alias safety",
-               f"none of {len(_FROM_FILE)} file aliases collide with a club in another pool")
+               f"{len(_FROM_FILE)} global aliases collide with no club in another "
+               f"pool, and all {len(LEAGUE_ALIASES)} scoped aliases resolve inside "
+               f"their own league")
 
 
 def check_competition_priced_at_all() -> None:

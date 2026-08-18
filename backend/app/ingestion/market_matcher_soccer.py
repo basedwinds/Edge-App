@@ -634,22 +634,67 @@ def _load_kalshi_aliases() -> dict[str, str]:
                    "Kalshi spelling differs will price as unrated", path, exc)
         return {}
     out: dict[str, str] = {}
+    scoped: dict[tuple[str, str], str] = {}
     for kalshi_name, entry in raw.items():
         key = normalize_team_name(kalshi_name) or ""
         target = normalize_team_name(entry.get("team") or "") or ""
-        # A key that already normalizes onto its target teaches nothing, and an
-        # entry that would shadow a hand-written one is skipped, not merged.
-        if not key or not target or key == target or key in TEAM_ALIASES:
+        # A SCOPED entry is one the builder proved correct inside ONE league but
+        # refused to write globally, because the same key already names a
+        # different club in another pool. See LEAGUE_ALIASES below.
+        scope = (entry.get("scope") or "").strip()
+        # A key that already normalizes onto its target teaches nothing.
+        if not key or not target or key == target:
             continue
-        out[key] = target
-    return out
+        # HAND-WRITTEN WINS over a GLOBAL file entry -- a few hand entries encode
+        # judgement the builder cannot reach. It does NOT win over a SCOPED one:
+        # a scoped alias is strictly more specific, carries fixture evidence for
+        # that league, and canonical_team_key only consults it when the caller
+        # named that league.
+        #
+        # REAL CASE (2026-08-18): the hand map sends "Houston" -> houston dynamo
+        # fc (MLS) and "Chicago" -> chicago fire fc (MLS). The file proves
+        # "Houston" is the Houston DASH in NWSL and "Chicago" is Nueva Chicago in
+        # ARG2. Letting the global entry win there did not mis-price anything --
+        # an MLS key is absent from the NWSL pool, so the row failed safe as
+        # unrated -- but it silently cost two fixtures their model number.
+        if not scope and key in TEAM_ALIASES:
+            continue
+        if scope:
+            scoped[(scope, key)] = target
+        else:
+            out[key] = target
+    return out, scoped
 
 
-_FROM_FILE = _load_kalshi_aliases()
+_FROM_FILE, _SCOPED_FROM_FILE = _load_kalshi_aliases()
 TEAM_ALIASES.update(_FROM_FILE)
 
+# LEAGUE-SCOPED ALIASES, keyed (league, normalized-name) -> pool key.
+#
+# WHY THIS EXISTS AS A SECOND TABLE. TEAM_ALIASES is league-BLIND -- one dict
+# for the whole app -- so an alias written into it rewrites that name in EVERY
+# pool. That is right for a name that means one club worldwide and catastrophic
+# for one that does not, which is why the builder's global-safety check refuses
+# those outright. Refusing kept the app correct but left the club unpriced: on
+# 2026-08-18 that was 29 refusals, and they were most of the reason five newly
+# added leagues priced at 17-72% instead of ~100%.
+#
+# THE CASE THAT SETTLES THE DESIGN is Eerste Divisie "Utrecht". The Dutch second
+# tier fields JONG FC UTRECHT, the reserve side; N1 fields FC Utrecht. A global
+# alias would have pointed every "Utrecht" in the app at whichever one the
+# builder happened to resolve -- including the Eredivisie club, and including
+# any European tie it plays in. Scoped to N2, "Utrecht" means the reserve side
+# and only there, which is exactly what the fixture evidence says. Volendam,
+# Waalwijk, Dordrecht, Den Bosch and Roda are the same shape (clubs that move
+# between N1 and N2), as are a dozen English names split across E0-E4.
+#
+# The scope is only ever consulted when the CALLER knows the league, so a
+# league-blind call site behaves exactly as it did before this table existed --
+# no silent change to any of the ~30 existing callers.
+LEAGUE_ALIASES: dict[tuple[str, str], str] = dict(_SCOPED_FROM_FILE)
 
-def canonical_team_key(name: str) -> str:
+
+def canonical_team_key(name: str, league: str | None = None) -> str:
     """Alias-normalized canonical key for a team name -- used both here (to
     match a live listing against an existing SoccerMatch row) AND by
     elo_service_soccer.py (to look up/train a team's rating), so the SAME
@@ -663,6 +708,10 @@ def canonical_team_key(name: str) -> str:
     silently looked like a 0-history team (falling into the NO_HISTORY_REASON
     gate) even though real training data existed for it."""
     normalized = normalize_team_name(name) or ""
+    if league:
+        scoped = LEAGUE_ALIASES.get((league, normalized))
+        if scoped:
+            return scoped
     return TEAM_ALIASES.get(normalized, normalized)
 
 
