@@ -604,6 +604,7 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
   "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
   "LEAGUES_CUP": "Leagues Cup",
+  "LIBERTADORES": "Copa Libertadores", "SUDAMERICANA": "Copa Sudamericana",
   "INTL": "Internationals",
   // 2026-08-18. KSA1 had been missing since it was wired on 2026-08-14 --
   // Saudi rows rendered as the raw code. Same drift this comment block keeps

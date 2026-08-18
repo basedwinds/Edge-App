@@ -814,6 +814,7 @@ def run_full_refresh_soccer():
     # likely thing in this function to throw. A new, optional market family must
     # never be able to take settlement down with it.
     for name, fn in (("cup", refresh_kalshi_cup_markets), ("uefa", refresh_kalshi_uefa_markets),
+                     ("conmebol", refresh_kalshi_conmebol_markets),
                      ("leagues cup", refresh_kalshi_leagues_cup_markets),
                      ("national", refresh_kalshi_national_markets)):
         _t0 = time.monotonic()
@@ -863,6 +864,8 @@ def refresh_kalshi_cup_markets():
          market_catalog_soccer.upsert_kalshi_cup_advance_market, "cup_advance"),
         (kalshi_soccer_client.get_cup_total_markets(),
          market_catalog_soccer.upsert_kalshi_cup_total_market, "cup_total"),
+        (kalshi_soccer_client.get_cup_spread_markets(),
+         market_catalog_soccer.upsert_kalshi_cup_spread_market, "cup_spread"),
     ]
 
     counts: dict[str, int] = {}
@@ -912,6 +915,8 @@ def refresh_kalshi_uefa_markets():
          market_catalog_soccer.upsert_kalshi_uefa_moneyline_market, "uefa_moneyline"),
         (kalshi_soccer_client.get_uefa_total_markets(),
          market_catalog_soccer.upsert_kalshi_uefa_total_market, "uefa_total"),
+        (kalshi_soccer_client.get_uefa_spread_markets(),
+         market_catalog_soccer.upsert_kalshi_uefa_spread_market, "uefa_spread"),
     ]
     counts: dict[str, int] = {}
     with db_write_lock():
@@ -938,6 +943,55 @@ def refresh_kalshi_uefa_markets():
         finally:
             session.close()
     log.info("kalshi uefa markets refreshed: %s", counts)
+    return counts
+
+
+def refresh_kalshi_conmebol_markets():
+    """Copa Libertadores + Copa Sudamericana.
+
+    A separate entrypoint from the UEFA one on purpose, matching how the models
+    are separated: conmebol_match.py has its own fitted offsets and its own
+    baseline mu (BRA1-pinned), so these rows must never route through the UEFA
+    handler.
+
+    ADVANCE is not fetched, same rule and same reason as UEFA: CONMEBOL knockout
+    rounds are two legs plus penalties, so KXCONMEBOLLIBADVANCE depends on an
+    aggregate this app cannot compute from one match. 14 open advance markets
+    stay uningested until the two-legged model lands.
+    """
+    batches = [
+        (kalshi_soccer_client.get_conmebol_moneyline_markets(),
+         market_catalog_soccer.upsert_kalshi_conmebol_moneyline_market, "conmebol_moneyline"),
+        (kalshi_soccer_client.get_conmebol_total_markets(),
+         market_catalog_soccer.upsert_kalshi_conmebol_total_market, "conmebol_total"),
+        (kalshi_soccer_client.get_conmebol_spread_markets(),
+         market_catalog_soccer.upsert_kalshi_conmebol_spread_market, "conmebol_spread"),
+    ]
+    counts: dict[str, int] = {}
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            match_id_by_tie: dict[tuple, int | None] = {}
+            for rows, upsert, label in batches:
+                n = 0
+                for row in rows:
+                    league = market_catalog_soccer.conmebol_league_code(row["competition"])
+                    date = (row.get("estimated_start_time") or "")[:10] or None
+                    key = (league, canonical_team_key(row["home_team"]),
+                           canonical_team_key(row["away_team"]), date or "")
+                    if key not in match_id_by_tie:
+                        match = market_catalog_soccer.find_or_create_upcoming_match(
+                            session, league, row["home_team"], row["away_team"], date,
+                            start_time=row.get("estimated_start_time"))
+                        session.flush()
+                        match_id_by_tie[key] = match.id if match is not None else None
+                    upsert(session, row, match_id_by_tie[key])
+                    n += 1
+                counts[label] = n
+            session.commit()
+        finally:
+            session.close()
+    log.info("kalshi conmebol markets refreshed: %s", counts)
     return counts
 
 

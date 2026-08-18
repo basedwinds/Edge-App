@@ -143,6 +143,15 @@ CUPS = {
     "KXUSLGAME": "usa.usl.1",
     "KXNWSLGAME": "usa.nwsl",
     "KXSLGREECEGAME": "gre.1",
+    # CONMEBOL, 2026-08-18. These slugs have NO rating pool of their own -- a
+    # Libertadores tie is two clubs from two different domestic pools -- so the
+    # per-league restriction added above does not apply and resolution falls back
+    # to the global map, exactly as it does for the domestic cups. The
+    # global-safety check at write time is what protects these: it already
+    # refused "Fortaleza" (Fortaleza CEIF of Colombia vs Fortaleza EC of Brazil)
+    # and "Racing Club" (Montevideo vs Avellaneda) from this very competition.
+    "KXCONMEBOLLIBGAME": "conmebol.libertadores",
+    "KXCONMEBOLSUDGAME": "conmebol.sudamericana",
 }
 PAIR = re.compile(r"^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner\?|:|$)")
 TICKER_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})")

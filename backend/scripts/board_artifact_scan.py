@@ -638,6 +638,60 @@ def check_soccer_league_registration() -> None:
                f"none of {len(_FROM_FILE)} file aliases collide with a club in another pool")
 
 
+def check_competition_priced_at_all() -> None:
+    """A competition we INGEST but price ZERO of is a bug, not a coverage limit.
+
+    WHY THIS EXISTS. soccer_markets._either_team_unrated has a per-league rating
+    COUNT check at the bottom, and a competition league code (UCL, LEAGUES_CUP,
+    LIBERTADORES...) has no rating pool of its own -- so that count reads zero
+    for both clubs and rejects every row BEFORE the model runs. Each
+    cross-league family therefore needs its own branch. The file has now hit
+    this four times:
+
+        UEFA          -- branch added when the family was built
+        cups          -- branch added when the family was built
+        Leagues Cup   -- "THIRD instance of the same trap", caught pre-ship,
+                         all 420 rows would have been rejected
+        CONMEBOL      -- 2026-08-18, and this one SHIPPED for one pass: 208 rows
+                         all reading "no tracked match history" while the model
+                         priced 9 of the 16 fixtures perfectly when called direct
+
+    The tell is identical every time and is exactly what this checks: rows exist,
+    none price. A partial rate is fine and expected (unrated Chilean and
+    Paraguayan clubs SHOULD return None); a rate of exactly zero on a competition
+    with real inventory is the signature of a gate that never lets the model run.
+
+    Threshold is 20 rows so a single stray fixture cannot trip it."""
+    try:
+        rows = fetch("/soccer/markets")
+    except Exception as exc:
+        record("WARN", "competition priced at all", f"/soccer/markets unreachable ({type(exc).__name__})")
+        return
+    from app.api.routers.soccer_markets import (
+        UEFA_LEAGUES, CONMEBOL_LEAGUES, LEAGUES_CUP_LEAGUES, NATIONAL_LEAGUES, CUP_TIERS,
+    )
+    competitions = set(UEFA_LEAGUES) | set(CONMEBOL_LEAGUES) | set(LEAGUES_CUP_LEAGUES)         | set(NATIONAL_LEAGUES) | set(CUP_TIERS)
+    tally: dict[str, list[int]] = {}
+    for r in rows:
+        lg = (r or {}).get("league")
+        if lg not in competitions:
+            continue
+        t = tally.setdefault(lg, [0, 0])
+        t[0] += 1
+        if r.get("model_prob") is not None:
+            t[1] += 1
+    dead = [f"{lg} ({n} rows, 0 priced)" for lg, (n, p) in sorted(tally.items()) if n >= 20 and p == 0]
+    if dead:
+        record("FAIL", "competition priced at all",
+               f"{len(dead)} competition(s) ingest real inventory and price NONE of it -- "
+               f"check _either_team_unrated has a branch: {dead}")
+    elif tally:
+        live = ", ".join(f"{lg} {p}/{n}" for lg, (n, p) in sorted(tally.items()) if n)
+        record("PASS", "competition priced at all", f"every ingested competition prices some rows ({live})")
+    else:
+        record("WARN", "competition priced at all", "no competition rows on the board right now")
+
+
 def check_cache_freshness() -> None:
     """Is the warm pass still keeping up with TTL + STALE_SERVE_SECONDS?
 
@@ -698,6 +752,7 @@ def main() -> int:
         check_default_ratings(board)
         check_start_gate_coverage()
         check_soccer_league_registration()
+        check_competition_priced_at_all()
         check_cache_freshness()
 
     print(f"\nBOARD ARTIFACT SCAN  {datetime.datetime.utcnow():%Y-%m-%d %H:%M}Z")

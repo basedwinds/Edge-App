@@ -161,6 +161,13 @@ LEAGUE_CODES = {
     "EFL_CUP": "eng.league_cup",
     "UEFA_SUPER_CUP": "uefa.super_cup",
     "FRA_SUPER_CUP": "fra.super_cup",
+    # CONMEBOL, 2026-08-18. Verified live before wiring, and these are also the
+    # feeds the strength offsets were fitted on: conmebol.libertadores returned
+    # 100 events / 99 completed for 2025, conmebol.sudamericana 100/100.
+    # conmebol.recopa returns zero and bra.copa_do_brasil 400s, so neither the
+    # Recopa nor the Copa do Brasil is wired.
+    "LIBERTADORES": "conmebol.libertadores",
+    "SUDAMERICANA": "conmebol.sudamericana",
     "UCL": "uefa.champions",
     "UEL": "uefa.europa",
     "UECL": "uefa.europa.conf",

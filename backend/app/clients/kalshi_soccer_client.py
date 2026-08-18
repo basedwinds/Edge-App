@@ -1374,6 +1374,7 @@ CUP_COMPETITIONS = {
         "top": "D1", "second": "D2",
         "moneyline": "KXDFBPOKALGAME",
         "advance": "KXDFBPOKALADVANCE",
+        "spread": "KXDFBPOKALSPREAD",   # 120 open 2026-08-18
         # WAS None with the note "no live total series for the Pokal as of
         # 2026-08-08". That went STALE and nothing re-checked it: probed
         # 2026-08-18 and KXDFBPOKALTOTAL has 180 open markets, every one quoted.
@@ -1556,18 +1557,28 @@ def get_cup_total_markets() -> list[dict]:
 # distribution would be worse than not pricing it. GAME and TOTAL settle on one
 # match's regulation result and are fine.
 #
-# SPREAD is also skipped for now: its yes_sub_title uses a different shape from
-# the league spread parser ("Goal Diff Reg Time: <team> ...") and there are only
-# 16 live rows, so it is not worth a bespoke parser until the league phase.
+# SPREAD IS NOW INGESTED, and the note that deferred it was wrong on its own
+# premise. It claimed the yes_sub_title used "a different shape from the league
+# spread parser ('Goal Diff Reg Time: <team> ...')". Re-probed 2026-08-18:
+# KXUCLSPREAD reads "Celtic wins by more than 2.5 goals" -- BYTE-IDENTICAL in
+# shape to KXEPLSPREAD. No bespoke parser was ever needed; the same
+# "<team> wins by more than X goals" regex the leagues use handles it, with the
+# existing _REG_TIME_PREFIX strip covering the Pokal, which does prefix it.
+# The "only 16 live rows" half was true when written and is not now: 29 UCL,
+# 48 UEL, 96 UECL, 120 DFB Pokal open markets at the same probe.
 UEFA_COMPETITIONS = {
-    "ucl": {"name": "Champions League", "moneyline": "KXUCLGAME", "total": "KXUCLTOTAL"},
-    "uel": {"name": "Europa League", "moneyline": "KXUELGAME", "total": "KXUELTOTAL"},
-    "uecl": {"name": "Conference League", "moneyline": "KXUECLGAME", "total": "KXUECLTOTAL"},
+    "ucl": {"name": "Champions League", "moneyline": "KXUCLGAME", "total": "KXUCLTOTAL",
+            "spread": "KXUCLSPREAD"},
+    "uel": {"name": "Europa League", "moneyline": "KXUELGAME", "total": "KXUELTOTAL",
+            "spread": "KXUELSPREAD"},
+    "uecl": {"name": "Conference League", "moneyline": "KXUECLGAME", "total": "KXUECLTOTAL",
+             "spread": "KXUECLSPREAD"},
     # UEFA Super Cup -- one match a year, UCL winner vs UEL winner, so it is
     # cross-COUNTRY by construction and the fitted league offsets are exactly
     # the right tool. Live 2026-08-12: PSG (F1) vs Aston Villa (E0), both rated.
     # No total series is listed for it.
-    "usc": {"name": "UEFA Super Cup", "moneyline": "KXUEFASCGAME", "total": None},
+    "usc": {"name": "UEFA Super Cup", "moneyline": "KXUEFASCGAME", "total": None,
+            "spread": None},   # KXUEFASCSPREAD exists but had 0 open at the 2026-08-18 probe
 }
 
 
@@ -1818,6 +1829,172 @@ def get_national_btts_markets() -> list[dict]:
     return rows
 
 
+def get_uefa_spread_markets() -> list[dict]:
+    """Goal handicap on the single match, regulation time.
+
+    SETTLES ON ONE LEG, which is why this is safe where "to advance" is not: a
+    two-legged tie's ADVANCE market depends on an aggregate score across two
+    matches, but its SPREAD is a property of the match in front of you. Same
+    reasoning that already lets uefa_moneyline_3way and uefa_total through."""
+    rows = []
+    for comp, cfg in UEFA_COMPETITIONS.items():
+        series = cfg.get("spread")
+        if not series:
+            continue
+        for ev in get_open_events(series):
+            teams = _cup_pair(ev.get("title", ""))
+            if teams is None:
+                continue
+            home, away = teams
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                parsed = _parse_spread_sub(m.get("yes_sub_title"), home, away)
+                if parsed is None:
+                    continue
+                side, team, line = parsed
+                rows.append(_uefa_row(comp, cfg, ev, m, home, away,
+                                      line=line, side=side, team=team))
+    return rows
+
+
+def get_cup_spread_markets() -> list[dict]:
+    """Domestic-cup goal handicap, regulation time. Same single-leg argument as
+    the UEFA one above."""
+    rows = []
+    for cup, cfg in CUP_COMPETITIONS.items():
+        series = cfg.get("spread")
+        if not series:
+            continue
+        for ev in get_open_events(series):
+            teams = _cup_pair(ev.get("title", ""))
+            if teams is None:
+                continue
+            home, away = teams
+            try:
+                markets = get_markets_for_event(ev["event_ticker"])
+            except Exception:
+                continue
+            for m in markets:
+                parsed = _parse_spread_sub(m.get("yes_sub_title"), home, away)
+                if parsed is None:
+                    continue
+                side, team, line = parsed
+                rows.append(_cup_row(cup, cfg, ev, m, home, away,
+                                     line=line, side=side, team=team))
+    return rows
+
+
+# ---- CONMEBOL (2026-08-18) -------------------------------------------------
+# Copa Libertadores and Copa Sudamericana. Kept SEPARATE from UEFA_COMPETITIONS
+# for the same reason the Leagues Cup is: the shape is identical (cross-country,
+# one match, moneyline + total + spread) but models/conmebol_match.py carries its
+# OWN fitted offsets and its own baseline mu, pinned on BRA1. Routing these rows
+# through the UEFA handler would price a Brazilian club with European offsets.
+#
+# ADVANCE IS DELIBERATELY NOT INGESTED, same rule as UEFA: CONMEBOL knockout
+# rounds are two legs plus penalties, so KXCONMEBOLLIBADVANCE depends on an
+# aggregate across two matches. There are 14 open advance markets and they stay
+# uningested until the two-legged model exists.
+#
+# BTTS and the 1H family are also skipped -- the app takes those for leagues but
+# has no cross-league BTTS path, and inventing one for the smallest slice here
+# would be building ahead of the evidence.
+CONMEBOL_COMPETITIONS = {
+    "libertadores": {
+        "name": "Copa Libertadores",
+        "moneyline": "KXCONMEBOLLIBGAME",
+        "total": "KXCONMEBOLLIBTOTAL",
+        "spread": "KXCONMEBOLLIBSPREAD",
+    },
+    "sudamericana": {
+        "name": "Copa Sudamericana",
+        "moneyline": "KXCONMEBOLSUDGAME",
+        "total": "KXCONMEBOLSUDTOTAL",
+        "spread": "KXCONMEBOLSUDSPREAD",
+    },
+}
+
+
+def _conmebol_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **extra) -> dict:
+    row = {
+        "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
+        "competition": comp, "competition_name": cfg["name"],
+        "home_team": home, "away_team": away,
+        "ticker": m["ticker"], "estimated_start_time": _kickoff_from_occurrence(m.get("occurrence_datetime")),
+        "yes_bid": _to_float(m.get("yes_bid_dollars")), "yes_ask": _to_float(m.get("yes_ask_dollars")),
+        "last_price": _to_float(m.get("last_price_dollars")), "volume": _to_float(m.get("volume_fp")),
+        "status": m.get("status"),
+    }
+    row.update(extra)
+    return row
+
+
+def _conmebol_events(series: str):
+    for ev in get_open_events(series):
+        teams = _cup_pair(ev.get("title", ""))
+        if teams is None:
+            continue
+        try:
+            markets = get_markets_for_event(ev["event_ticker"])
+        except Exception:
+            continue
+        yield ev, teams[0], teams[1], markets
+
+
+def get_conmebol_moneyline_markets() -> list[dict]:
+    """Regulation-time 3-way. Labels carry the "Reg Time: " prefix."""
+    rows = []
+    for comp, cfg in CONMEBOL_COMPETITIONS.items():
+        for ev, home, away, markets in _conmebol_events(cfg["moneyline"]):
+            for m in markets:
+                label = _REG_TIME_PREFIX.sub("", (m.get("yes_sub_title") or "").strip())
+                if label.lower() == "tie":
+                    side, team = "draw", None
+                elif label == home:
+                    side, team = "home", home
+                elif label == away:
+                    side, team = "away", away
+                else:
+                    continue   # never guess which club an unrecognised label means
+                rows.append(_conmebol_row(comp, cfg, ev, m, home, away, side=side, team=team))
+    return rows
+
+
+def get_conmebol_total_markets() -> list[dict]:
+    rows = []
+    for comp, cfg in CONMEBOL_COMPETITIONS.items():
+        for ev, home, away, markets in _conmebol_events(cfg["total"]):
+            for m in markets:
+                mt = re.search(r"([\d.]+)", m.get("yes_sub_title") or m.get("title") or "")
+                if not mt:
+                    continue
+                try:
+                    line = float(mt.group(1))
+                except ValueError:
+                    continue
+                rows.append(_conmebol_row(comp, cfg, ev, m, home, away, line=line, side="over"))
+    return rows
+
+
+def get_conmebol_spread_markets() -> list[dict]:
+    """Goal handicap on the single leg -- see get_uefa_spread_markets for why a
+    spread is safe on a two-legged tie where an ADVANCE market is not."""
+    rows = []
+    for comp, cfg in CONMEBOL_COMPETITIONS.items():
+        for ev, home, away, markets in _conmebol_events(cfg["spread"]):
+            for m in markets:
+                parsed = _parse_spread_sub(m.get("yes_sub_title"), home, away)
+                if parsed is None:
+                    continue
+                side, team, line = parsed
+                rows.append(_conmebol_row(comp, cfg, ev, m, home, away,
+                                          line=line, side=side, team=team))
+    return rows
+
+
 def _uefa_row(comp: str, cfg: dict, ev: dict, m: dict, home: str, away: str, **extra) -> dict:
     row = {
         "event_ticker": ev["event_ticker"], "event_title": ev.get("title", ""),
@@ -1883,3 +2060,29 @@ def get_uefa_total_markets() -> list[dict]:
                     continue
                 rows.append(_uefa_row(comp, cfg, ev, m, home, away, line=line, side="over"))
     return rows
+
+
+# The one parser both cross-league spread readers share. Kept as a module-level
+# helper rather than duplicated so a Kalshi wording change is a one-line fix in
+# one place -- the shape is identical for UEFA, the domestic cups and the
+# leagues, and the only difference is the Pokal's "Reg Time: " prefix.
+_CROSS_SPREAD_SUB_RE = re.compile(r"^(.*?)\s+wins by more than\s+([\d.]+)\s+goals?", re.IGNORECASE)
+
+
+def _parse_spread_sub(sub: str, home: str, away: str):
+    """(side, team, line) for a "<team> wins by more than X goals" label, or
+    None when the label names neither side -- never a guess."""
+    mt = _CROSS_SPREAD_SUB_RE.match(_REG_TIME_PREFIX.sub("", (sub or "").strip()))
+    if not mt:
+        return None
+    label = mt.group(1).strip()
+    if label == home:
+        side, team = "home", home
+    elif label == away:
+        side, team = "away", away
+    else:
+        return None
+    try:
+        return side, team, float(mt.group(2))
+    except ValueError:
+        return None

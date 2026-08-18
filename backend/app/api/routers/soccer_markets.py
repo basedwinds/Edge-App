@@ -56,6 +56,7 @@ from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_m
 from app.models.baseline.soccer_pool_resolver import resolve_to_pool
 from app.models.baseline import elo_service_soccer
 from app.models.cup_match import predict_cup_tie
+from app.models.conmebol_match import predict_conmebol_match
 from app.models.uefa_match import predict_uefa_match
 from app.models.leagues_cup_match import predict_leagues_cup_match
 from app.models.national_match import predict_national_match
@@ -88,9 +89,10 @@ GAME_MARKET_TYPES = {
     "first_half_winner", "first_half_spread", "first_half_total", "first_half_team_total", "first_half_btts",
     "second_half_winner", "second_half_spread", "second_half_total", "second_half_team_total", "second_half_btts",
     # Domestic cups (2026-08-08) -- game-level, not futures.
-    "cup_moneyline_3way", "cup_advance", "cup_total",
+    "cup_moneyline_3way", "cup_advance", "cup_total", "cup_spread",
     # UEFA club competitions (2026-08-08) -- cross-country, offsets-based.
-    "uefa_moneyline_3way", "uefa_total",
+    "uefa_moneyline_3way", "uefa_total", "uefa_spread",
+    "conmebol_moneyline_3way", "conmebol_total", "conmebol_spread",
     "leagues_cup_moneyline_3way", "leagues_cup_total",
     "leagues_cup_spread", "leagues_cup_btts",
     "national_moneyline_3way", "national_total",
@@ -322,7 +324,7 @@ def _half_btts_model_prob(market: Market, match: SoccerMatch | None, half: int) 
 CUP_TIERS = {"COPPA_ITALIA": ("I1", "I2"), "DFB_POKAL": ("D1", "D2"),
              "EFL_CUP": ("E0", "E1"),
              "FRA_SUPER_CUP": ("F1", "F2")}
-CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total"}
+CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total", "cup_spread"}
 
 # TRACKING-ONLY: priced and shown, never staked.
 #
@@ -364,7 +366,58 @@ def _cup_prediction(match: SoccerMatch | None):
 # there is no top/second tier -- each club's league is resolved individually and
 # the fitted strength offsets do the conversion (models/uefa_match.py).
 UEFA_LEAGUES = {"UCL", "UEL", "UECL", "UEFA_SUPER_CUP"}
-UEFA_MARKET_TYPES = {"uefa_moneyline_3way", "uefa_total"}
+UEFA_MARKET_TYPES = {"uefa_moneyline_3way", "uefa_total", "uefa_spread"}
+
+# --- CONMEBOL (2026-08-18) -------------------------------------------------
+# Its own competition codes and its own predictor. NOT folded into the UEFA
+# handlers: conmebol_match.py carries offsets fitted on South American results
+# against a BRA1-pinned baseline, and the UEFA path would apply European
+# offsets to a Brazilian club.
+CONMEBOL_LEAGUES = {"LIBERTADORES", "SUDAMERICANA"}
+CONMEBOL_MARKET_TYPES = {"conmebol_moneyline_3way", "conmebol_total", "conmebol_spread"}
+
+
+def _conmebol_prediction(match: SoccerMatch | None):
+    if match is None or (match.league or "") not in CONMEBOL_LEAGUES:
+        return None
+    states = elo_service_soccer._cache.get("states_by_league") or {}
+    resolved = []
+    for name in (match.home_team, match.away_team):
+        league = elo_service_soccer.resolve_league(name)
+        if league is None:
+            return None    # Chile/Paraguay/Bolivia/Peru have no pool -- correct refusal
+        resolved.append((canonical_team_key(name), league))
+    (hk, hl), (ak, al) = resolved
+    # predict_conmebol_match refuses a league with no fitted offset rather than
+    # pricing it off an assumed average.
+    return predict_conmebol_match(hk, hl, ak, al, states)
+
+
+def _conmebol_moneyline_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _conmebol_prediction(match)
+    if pred is None:
+        return None
+    return {"home": pred.prob_home_win, "draw": pred.prob_draw,
+            "away": pred.prob_away_win}.get(market.side, lambda: None)()
+
+
+def _conmebol_total_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    pred = _conmebol_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    return pred.prob_total_over(market.line)
+
+
+def _conmebol_spread_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    """Complement, not mirror, on the away side -- same note as the UEFA one."""
+    pred = _conmebol_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    if market.side == "home":
+        return pred.distribution.prob_home_spread_cover(-market.line)
+    if market.side == "away":
+        return 1.0 - pred.distribution.prob_home_spread_cover(market.line)
+    return None
 
 # HOW WRONG A STORED KICKOFF MAY BE, by fixture source (2026-08-13).
 #
@@ -441,6 +494,24 @@ def _uefa_total_model_prob(market: Market, match: SoccerMatch | None) -> float |
     if pred is None or market.line is None:
         return None
     return pred.prob_total_over(market.line)
+
+
+def _uefa_spread_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    """P(<team> wins by MORE than line), on the single leg.
+
+    THE AWAY CASE IS A COMPLEMENT, NOT A MIRROR, and the symmetric-looking
+    version is wrong -- see _leagues_cup_spread_model_prob, which carries the
+    same two expressions and the same warning. Kalshi's line is a positive
+    "wins by more than X"; prob_home_spread_cover's convention is a negative
+    line for the favoured side."""
+    pred = _uefa_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    if market.side == "home":
+        return pred.distribution.prob_home_spread_cover(-market.line)
+    if market.side == "away":
+        return 1.0 - pred.distribution.prob_home_spread_cover(market.line)
+    return None
 
 
 # --- LEAGUES CUP (2026-08-08) ----------------------------------------------
@@ -657,6 +728,22 @@ def _cup_total_model_prob(market: Market, match: SoccerMatch | None) -> float | 
     return pred.prob_total_over(market.line)  # regulation grid, never extra time
 
 
+def _cup_spread_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    """P(<team> wins by MORE than line) in REGULATION.
+
+    Reads `pred.regulation`, not an extra-time grid: CupTiePrediction exposes
+    both, and a cup spread settles on 90 minutes exactly like cup_total does.
+    Same complement-not-mirror rule as the UEFA and Leagues Cup versions."""
+    pred = _cup_prediction(match)
+    if pred is None or market.line is None:
+        return None
+    if market.side == "home":
+        return pred.regulation.prob_home_spread_cover(-market.line)
+    if market.side == "away":
+        return 1.0 - pred.regulation.prob_home_spread_cover(market.line)
+    return None
+
+
 def cup_model_note(match: SoccerMatch | None) -> str | None:
     """The cross-tier caution (see cup_match.CAUTION_NOTE). Returns None for a
     same-tier tie, which needs no conversion and no warning."""
@@ -667,6 +754,10 @@ def cup_model_note(match: SoccerMatch | None) -> str | None:
 _MODEL_PROB_DISPATCH = {
     "uefa_moneyline_3way": lambda m, match, news: _uefa_moneyline_model_prob(m, match),
     "uefa_total": lambda m, match, news: _uefa_total_model_prob(m, match),
+    "uefa_spread": lambda m, match, news: _uefa_spread_model_prob(m, match),
+    "conmebol_moneyline_3way": lambda m, match, news: _conmebol_moneyline_model_prob(m, match),
+    "conmebol_total": lambda m, match, news: _conmebol_total_model_prob(m, match),
+    "conmebol_spread": lambda m, match, news: _conmebol_spread_model_prob(m, match),
     "leagues_cup_moneyline_3way": lambda m, match, news: _leagues_cup_moneyline_model_prob(m, match),
     "leagues_cup_total": lambda m, match, news: _leagues_cup_total_model_prob(m, match),
     "leagues_cup_spread": lambda m, match, news: _leagues_cup_spread_model_prob(m, match),
@@ -678,6 +769,7 @@ _MODEL_PROB_DISPATCH = {
     "cup_moneyline_3way": lambda m, match, news: _cup_moneyline_model_prob(m, match),
     "cup_advance": lambda m, match, news: _cup_advance_model_prob(m, match),
     "cup_total": lambda m, match, news: _cup_total_model_prob(m, match),
+    "cup_spread": lambda m, match, news: _cup_spread_model_prob(m, match),
     "game_spread": lambda m, match, news: _game_spread_model_prob(m, match),
     "game_total": lambda m, match, news: _game_total_model_prob(m, match),
     "btts": lambda m, match, news: _btts_model_prob(m, match),
@@ -926,6 +1018,22 @@ def list_soccer_markets(session: Session = Depends(get_session)):
             # _model_prob runs. Resolve each club's real league instead.
             return any(elo_service_soccer.resolve_league(n) is None
                        for n in (match.home_team, match.away_team))
+        if match.league in CONMEBOL_LEAGUES:
+            # FOURTH instance of the same trap, and this one DID ship for one
+            # pass before being caught: "LIBERTADORES"/"SUDAMERICANA" are
+            # COMPETITIONS, not rating pools, so the per-league count at the
+            # bottom read zero for both clubs and rejected all 208 rows with
+            # "no tracked match history" -- while the model itself priced 9 of
+            # the 16 fixtures perfectly when called directly. That gap between
+            # "the gate says unrated" and "the model says fine" is the tell, and
+            # it is the third time this file has produced it.
+            #
+            # Deferring to the model (rather than re-deriving a condition) is
+            # what keeps the gate and the price in agreement -- the same choice
+            # the NATIONAL branch below makes, and for the same reason. A gate
+            # that disagrees with the model in either direction is a bug: looser
+            # moves the refusal one step later, tighter hides prices we have.
+            return _conmebol_prediction(match) is None
         if match.league in NATIONAL_LEAGUES:
             # INTL genuinely IS a rating pool, so the count check at the bottom
             # would work -- but it would pass a cross-confederation fixture that
@@ -1111,6 +1219,7 @@ _SOCCER_LEAGUE_NAME = {
     "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
     "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
     "LEAGUES_CUP": "Leagues Cup",
+    "LIBERTADORES": "Copa Libertadores", "SUDAMERICANA": "Copa Sudamericana",
     "INTL": "Internationals",
     # 2026-08-18. KSA1 was ALREADY MISSING before this batch -- it was wired
     # into the series maps on 2026-08-14 and never given a name here or in the

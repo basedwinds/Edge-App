@@ -913,10 +913,75 @@ def upsert_kalshi_uefa_moneyline_market(session: Session, row: dict, soccer_matc
     return market
 
 
+def upsert_kalshi_uefa_spread_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    """Goal handicap on ONE leg of a UEFA tie. Stored exactly like the Leagues
+    Cup spread -- team + line + side -- because the pricing question is
+    identical once each club's own league has been resolved."""
+    market = _cup_market(session, row, "uefa_spread", soccer_match_id)
+    market.team = row.get("team")
+    market.line = row.get("line")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_cup_spread_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    """Domestic-cup goal handicap, regulation time."""
+    market = _cup_market(session, row, "cup_spread", soccer_match_id)
+    market.team = row.get("team")
+    market.line = row.get("line")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
 def upsert_kalshi_uefa_total_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
     market = _cup_market(session, row, "uefa_total", soccer_match_id)
     market.line = row.get("line")
     market.side = "over"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+# --- CONMEBOL (2026-08-18) -------------------------------------------------
+# Same storage shape as UEFA: the COMPETITION is the league code, so a
+# Libertadores tie can never leak into BRA1's or ARG1's round-robin. Each club's
+# real league is resolved at pricing time and converted with the fitted CONMEBOL
+# offsets (models/conmebol_match.py) -- a DIFFERENT offset set and a different
+# baseline mu from the UEFA one.
+CONMEBOL_LEAGUE_CODES = {"libertadores": "LIBERTADORES", "sudamericana": "SUDAMERICANA"}
+
+
+def conmebol_league_code(competition: str) -> str:
+    return CONMEBOL_LEAGUE_CODES.get(competition, competition.upper())
+
+
+def upsert_kalshi_conmebol_moneyline_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "conmebol_moneyline_3way", soccer_match_id)
+    market.team = row.get("team")
+    market.side = row["side"]
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_conmebol_total_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "conmebol_total", soccer_match_id)
+    market.line = row.get("line")
+    market.side = "over"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_conmebol_spread_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "conmebol_spread", soccer_match_id)
+    market.team = row.get("team")
+    market.line = row.get("line")
+    market.side = row["side"]
     _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
                      yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
     return market

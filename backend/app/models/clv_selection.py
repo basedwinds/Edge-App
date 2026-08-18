@@ -257,6 +257,19 @@ def is_bucket_enabled(
 # REVERSIBLE, and the condition is explicit: lift this when the upper-tail mass
 # problem behind #133 is actually fixed, or when `total` accrues a settled
 # sample that contradicts 1-from-13.
+# CONMEBOL is NOT here, and the reasoning is worth keeping because the first
+# answer was wrong. Its opening pass produced one staked bet -- Mirassol away at
+# LDU Quito, model 37.9% vs market 13.5% -- and the obvious story was altitude
+# (Quito 2,850m), which would have justified suppressing the whole competition.
+# MEASURED INSTEAD: the top home residuals are SEA-LEVEL clubs (Racing Club
+# +0.82, Fortaleza +0.81, Internacional +0.73 goals/game) and Tolima at 1,285m
+# is NEGATIVE. Not altitude -- a competition-wide home term that was simply too
+# small. Fitting it (+0.2000 -> +0.3727) drops that bet's edge from +24.4pp to
+# ~19.7pp, below the 20pp gate, WITHOUT blocking anything.
+#
+# The lesson: a plausible story that would justify a broad suppression deserves
+# to be measured first. Suppressing here would have hidden a real one-parameter
+# fix behind an abstention.
 TRACKING_ONLY_MARKET_TYPES = frozenset({"total"})
 
 
