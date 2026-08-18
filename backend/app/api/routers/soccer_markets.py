@@ -1112,6 +1112,15 @@ _SOCCER_LEAGUE_NAME = {
     "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
     "LEAGUES_CUP": "Leagues Cup",
     "INTL": "Internationals",
+    # 2026-08-18. KSA1 was ALREADY MISSING before this batch -- it was wired
+    # into the series maps on 2026-08-14 and never given a name here or in the
+    # frontend, so Saudi rows have been rendering as the raw code "KSA1" since.
+    # Exactly the drift the 2026-08-09 note above warns about, caught only by
+    # re-running the diff.
+    "KSA1": "Saudi Pro League",
+    "COL1": "Primera A (Colombia)", "ECU1": "LigaPro (Ecuador)",
+    "URU1": "Primera Division (Uruguay)", "VEN1": "Liga FUTVE (Venezuela)",
+    "USL1": "USL Championship", "NWSL": "NWSL",
 }
 
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",

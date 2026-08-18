@@ -52,6 +52,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.base import get_json  # noqa: E402
 from app.ingestion.market_matcher_soccer import canonical_team_key  # noqa: E402
+from app.clients import espn_soccer_client  # noqa: E402
+from app.ingestion import market_matcher_soccer  # noqa: E402
 from app.models.baseline import elo_service_soccer  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -117,6 +119,30 @@ CUPS = {
     "KXELITESERIENGAME": "nor.1",
     "KXDENSUPERLIGAGAME": "den.1",
     "KXCHNSLGAME": "chn.1",
+    # 2026-08-18, with the seven leagues wired into kalshi_soccer_client. These
+    # need the join MORE than any league before them: on first ingest only 52 of
+    # 146 team-slots resolved (36%), because Kalshi lists South American and US
+    # clubs by their SHORT form while the pools are keyed on ESPN's full names --
+    # "Tolima" for Deportes Tolima, "Junior" for Junior FC, "Ind. Medellin",
+    # "Uni Catolica", "Est. Merida", "Dep Maldonado".
+    #
+    # AND THIS IS WHERE THE FIXTURE JOIN EARNS ITS KEEP, not merely tidies up.
+    # Three of the unresolved names are live cross-country COLLISIONS that a
+    # string rule would get catastrophically wrong:
+    #     ECU1 "Barcelona"    -> resolves to SP1  (Barcelona SC, not FC Barcelona)
+    #     URU1 "Racing Club"  -> resolves to ARG1 (Montevideo, not Avellaneda)
+    #     COL1 "Fortaleza"    -> resolves to BRA1 (Fortaleza CEIF, not Fortaleza EC)
+    # None of the three mis-priced anything, because pricing keys off the
+    # FIXTURE's league (get_match_distribution(match.league, ...)) so a foreign
+    # pool is never consulted -- but each would be a wrong-club map if anyone
+    # typed these in by hand or matched on similarity. Let a real fixture decide.
+    "KXDIMAYORGAME": "col.1",
+    "KXECULPGAME": "ecu.1",
+    "KXURYPDGAME": "uru.1",
+    "KXVENFUTVEGAME": "ven.1",
+    "KXUSLGAME": "usa.usl.1",
+    "KXNWSLGAME": "usa.nwsl",
+    "KXSLGREECEGAME": "gre.1",
 }
 PAIR = re.compile(r"^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner\?|:|$)")
 TICKER_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})")
@@ -138,28 +164,78 @@ def ticker_date(ticker: str):
 
 
 def main() -> None:
+    # REBUILD THE POOLS WITHOUT THIS FILE'S OWN ALIASES FIRST.
+    #
+    # market_matcher_soccer now LOADS data/soccer_kalshi_aliases.json into
+    # TEAM_ALIASES at import, so refreshing ratings here would key every pool
+    # through the previous run's output -- and then the safety check below would
+    # be asking whether last run's answer agrees with itself. Strip them, so the
+    # pool keys are the RAW ones the data actually carries.
+    for _k in list(market_matcher_soccer._FROM_FILE):
+        market_matcher_soccer.TEAM_ALIASES.pop(_k, None)
     elo_service_soccer.refresh_ratings()
     states = elo_service_soccer._cache["states_by_league"]
+    # GLOBAL name -> league, and a per-league membership set.
+    #
+    # THE setdefault BELOW IS LEAGUE-BLIND ON PURPOSE, and it is why the
+    # per-league set exists. A club name that appears in two pools is claimed
+    # here by whichever league dict-iteration reached first, which is arbitrary.
+    # Measured 2026-08-18 on the first run including the South American leagues,
+    # that produced two WRONG maps and one ambiguous one:
+    #   "Liverpool M"            -> liverpool  claimed E0   (it is Liverpool MONTEVIDEO, URU1)
+    #   "Academia Anzoategui FC" -> portuguesa claimed BRA1 (Portuguesa FC is VEN1)
+    #   "Gijon"                  -> sp gijon   claimed SP1  (also in SP2)
+    # Neither wrong one could have mis-priced a domestic row -- pricing keys off
+    # the FIXTURE's league via get_match_distribution(match.league, ...), so a
+    # foreign pool is never consulted -- but the MAP would have been wrong, and
+    # this file is read by the cross-league resolver where the league is exactly
+    # what is in question.
+    #
+    # So resolution is now restricted to the league the ESPN SLUG belongs to,
+    # whenever that slug has a pool of its own. Cups keep the global fallback:
+    # ita.coppa_italia has no pool because its clubs come from I1 and I2.
     rated: dict[str, str] = {}
+    rated_in: dict[str, set] = {lg: set(st.attack_log) for lg, st in states.items()}
     for lg, st in states.items():
         for team in st.attack_log:
             rated.setdefault(team, lg)
+    slug_league = {slug: lg for lg, slug in espn_soccer_client.LEAGUE_CODES.items()
+                   if lg in rated_in}
     espn_alias = json.loads(ESPN_ALIASES.read_text(encoding="utf-8")) if ESPN_ALIASES.exists() else {}
     if not espn_alias:
         print("NO ESPN ALIASES -- run build_soccer_espn_aliases.py first"); sys.exit(1)
 
-    def resolve_espn(name: str):
+    def _ok(key: str, slug: str | None) -> bool:
+        """Is this canonical key rated, within the slug's own league if it has
+        one? `slug=None` keeps the old global behaviour for callers that have no
+        competition in hand."""
+        lg = slug_league.get(slug or "")
+        if lg is not None:
+            return key in rated_in[lg]
+        return key in rated
+
+    def _league_for(key: str, slug: str | None) -> str:
+        """Which league to RECORD for a resolved club.
+        The slug's own league when it has a pool, because that is the league the
+        fixture was actually played in. Falling back to rated[key] -- the
+        league-blind global map -- is what wrote "Liverpool M -> liverpool, E0"
+        on the first run: resolution had already been narrowed correctly, and
+        then the write step threw that away and re-derived the league from a
+        dict whose iteration order decided the answer."""
+        return slug_league.get(slug or "") or rated[key]
+
+    def resolve_espn(name: str, slug: str | None = None):
         entry = espn_alias.get(name)
         if entry:
             k = canonical_team_key(entry["team"])
-            if k in rated:
+            if _ok(k, slug):
                 return k
         k = canonical_team_key(name)
-        return k if k in rated else None
+        return k if _ok(k, slug) else None
 
-    def resolve_kalshi(name: str):
+    def resolve_kalshi(name: str, slug: str | None = None):
         k = canonical_team_key(name)
-        return k if k in rated else None
+        return k if _ok(k, slug) else None
 
     # ---- gather Kalshi fixtures ------------------------------------------
     kalshi_fx: dict[tuple, tuple] = {}
@@ -201,7 +277,7 @@ def main() -> None:
     inferred: dict[str, set] = collections.defaultdict(set)
     orphans: list[tuple] = []   # fixtures where NEITHER side resolves -- stage 2
     for slug, d, a, b in kalshi_fx.values():
-        ka, kb = resolve_kalshi(a), resolve_kalshi(b)
+        ka, kb = resolve_kalshi(a, slug), resolve_kalshi(b, slug)
         if ka is None and kb is None:
             orphans.append((slug, d, a, b))
             continue
@@ -212,7 +288,7 @@ def main() -> None:
         for ed, en1, en2 in espn_fx.get(slug, []):
             if abs((ed - d).days) > 1:
                 continue
-            r1, r2 = resolve_espn(en1), resolve_espn(en2)
+            r1, r2 = resolve_espn(en1, slug), resolve_espn(en2, slug)
             if r1 == anchor:
                 hits.append((en2, r2))
             elif r2 == anchor:
@@ -222,7 +298,7 @@ def main() -> None:
         _espn_name, target = hits[0]
         if target is None:
             continue  # opponent isn't rated either; nothing to map to
-        inferred[unknown_name].add(target)
+        inferred[unknown_name].add((target, _league_for(target, slug)))
 
     # ---- STAGE 2: PAIR BOOTSTRAP -----------------------------------------
     # Stage 1 needs one KNOWN side to anchor on. That is fine for a cup, where
@@ -269,11 +345,11 @@ def main() -> None:
         if len(hits) != 1:
             continue
         x, y = hits[0]
-        rx, ry = resolve_espn(x), resolve_espn(y)
+        rx, ry = resolve_espn(x, slug), resolve_espn(y, slug)
         if rx is None or ry is None:
             continue  # can't map onto a rating we don't have
-        inferred[a].add(rx)
-        inferred[b].add(ry)
+        inferred[a].add((rx, _league_for(rx, slug)))
+        inferred[b].add((ry, _league_for(ry, slug)))
         boot += 1
     print(f"stage 2 bootstrapped {boot} of {len(orphans)} both-sides-unknown fixtures\n")
 
@@ -283,12 +359,34 @@ def main() -> None:
         if len(targets) != 1:
             unresolved.append((name, f"infers to {sorted(targets)}"))
             continue
-        target = next(iter(targets))
+        target, league = next(iter(targets))
         if target in claims:
             unresolved.append((name, f"{target} already claimed by {claims[target]}"))
             continue
+        # GLOBAL-SAFETY CHECK. TEAM_ALIASES is league-BLIND -- one dict for the
+        # whole app -- but every alias here is league-SCOPED. Writing a
+        # league-scoped alias into a global table is only sound when the Kalshi
+        # name means nothing anywhere else.
+        #
+        # It does not always. On the 2026-08-18 run this rule caught
+        # "Barcelona" -> barcelona sc (ECU1): applied globally it also rewrote
+        # LA LIGA's Barcelona, whose raw pool key is "barcelona", merging FC
+        # Barcelona and Barcelona SC of Ecuador onto ONE rating key across two
+        # pools. Nothing looked broken -- within-league pricing canonicalises
+        # both sides identically, so the board went from 9% to 87% priced and
+        # said nothing -- but the cross-league resolver that UEFA and the cups
+        # use would then have had two candidate pools for a club that plays in
+        # the Champions League every year.
+        key = canonical_team_key(name)
+        foreign = sorted(lg for lg, members in rated_in.items()
+                         if lg != league and key in members)
+        if foreign:
+            unresolved.append((name, f"UNSAFE GLOBALLY -- '{key}' is already a "
+                                     f"club in {foreign}; a league-blind alias "
+                                     f"would rewrite it too"))
+            continue
         claims[target] = name
-        aliases[name] = {"team": target, "league": rated[target]}
+        aliases[name] = {"team": target, "league": league}
 
     print(f"{'Kalshi name':28s} -> {'football-data key':26s} {'lg':4s}")
     for name, v in sorted(aliases.items()):

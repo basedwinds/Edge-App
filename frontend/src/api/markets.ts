@@ -605,6 +605,13 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
   "LEAGUES_CUP": "Leagues Cup",
   "INTL": "Internationals",
+  // 2026-08-18. KSA1 had been missing since it was wired on 2026-08-14 --
+  // Saudi rows rendered as the raw code. Same drift this comment block keeps
+  // warning about; found by diffing the backend map against this one.
+  "KSA1": "Saudi Pro League",
+  "COL1": "Primera A (Colombia)", "ECU1": "LigaPro (Ecuador)",
+  "URU1": "Primera Division (Uruguay)", "VEN1": "Liga FUTVE (Venezuela)",
+  "USL1": "USL Championship", "NWSL": "NWSL",
 };
 
 // Fallback series names for racing. Only used when the backend hasn't supplied

@@ -556,6 +556,88 @@ def check_start_gate_coverage() -> None:
         record("WARN", "start-gate coverage", "no staked rows anywhere -- nothing to verify")
 
 
+def check_soccer_league_registration() -> None:
+    """Every soccer league we INGEST markets for must also be able to SETTLE
+    them and to render its own name.
+
+    WHY THIS IS A CHECK. Adding a league is four dict entries in four files, and
+    the app has now drifted on three of them:
+
+      * 2026-08-08 -- espn_soccer_client.LEAGUE_CODES held only the original six
+        leagues, so every league added after it had results silently never
+        REQUESTED. 134 live rows across 8 leagues could never resolve, and a
+        user's Liga Portugal bets sat pending on a match that had finished
+        hours earlier. The poller now logs that case, but only once a market
+        already exists and is waiting -- i.e. after the damage.
+      * 2026-08-09 -- fourteen divisions and nine competitions were rendering
+        as raw codes because the two NAME maps had fallen behind.
+      * 2026-08-14 -- KSA1 was wired into the series maps and given no name in
+        either map. It rendered as "KSA1" for four days and nothing noticed.
+
+    Each of those is the SAME defect as the spread guard at 3/13 routers and the
+    duplicate cap at 4/13: a component that exists but is not wired everywhere
+    produces no error at all. This check runs the diff up front, cheaply, in the
+    one direction that matters -- from what we INGEST to what supports it.
+
+    NOT symmetric on purpose. A rated pool with no market series is a coverage
+    OPPORTUNITY, not a defect (E3 and Switzerland are both deliberate), so it is
+    reported as INFO rather than failing the scan."""
+    from app.clients import kalshi_soccer_client as ksc
+    from app.clients import espn_soccer_client as esc
+    from app.api.routers.soccer_markets import _SOCCER_LEAGUE_NAME
+
+    wired = set(ksc.MONEYLINE_SERIES)
+    # A league quoting spreads/totals we never take a moneyline on would never
+    # get a fixture row created for it, since fixtures are built off the market
+    # stream itself (market_catalog_soccer._find_or_create).
+    orphans = sorted((set(ksc.SPREAD_SERIES) | set(ksc.TOTAL_SERIES)
+                      | set(ksc.BTTS_SERIES)) - wired)
+    unsettleable = sorted(wired - set(esc.LEAGUE_CODES))
+    unnamed = sorted(wired - set(_SOCCER_LEAGUE_NAME))
+
+    if unsettleable:
+        record("FAIL", "soccer league registration",
+               f"{len(unsettleable)} league(s) ingest markets with NO ESPN slug -- their bets "
+               f"can never settle: {unsettleable}")
+    elif orphans:
+        record("FAIL", "soccer league registration",
+               f"{len(orphans)} league(s) have spread/total/btts series but no moneyline, "
+               f"so no fixture is ever created for them: {orphans}")
+    elif unnamed:
+        record("WARN", "soccer league registration",
+               f"{len(unnamed)} league(s) render as their raw code: {unnamed}")
+    else:
+        record("PASS", "soccer league registration",
+               f"all {len(wired)} ingested leagues can settle and are named")
+
+    # SEPARATE CHECK, same file, because it guards a different failure.
+    # data/soccer_kalshi_aliases.json is league-SCOPED but is loaded into
+    # market_matcher_soccer.TEAM_ALIASES, which is league-BLIND. An entry whose
+    # KEY is also a real club somewhere else rewrites that club too. The builder
+    # refuses to write those, but the file is hand-editable and the symptom is
+    # invisible -- on 2026-08-18 "Barcelona" -> barcelona sc merged FC Barcelona
+    # and Barcelona SC of Ecuador onto one key and the board still went from 9%
+    # to 87% priced, because within-league lookups canonicalise both sides the
+    # same way. Only the cross-league (UEFA/cup) resolver would have seen it.
+    from app.ingestion.market_matcher_soccer import _FROM_FILE
+    from app.models.baseline import elo_service_soccer as _elo
+    _elo.refresh_ratings()
+    pools = {lg: set(st.attack_log) for lg, st in _elo._cache["states_by_league"].items()}
+    hijacks = []
+    for key, target in _FROM_FILE.items():
+        owning = sorted(lg for lg, members in pools.items()
+                        if key in members and key != target)
+        if owning:
+            hijacks.append(f"{key!r} (also a club in {owning})")
+    if hijacks:
+        record("FAIL", "soccer alias safety",
+               f"{len(hijacks)} league-scoped alias(es) would rewrite a club that "
+               f"exists elsewhere: {hijacks[:5]}")
+    else:
+        record("PASS", "soccer alias safety",
+               f"none of {len(_FROM_FILE)} file aliases collide with a club in another pool")
+
+
 def check_cache_freshness() -> None:
     """Is the warm pass still keeping up with TTL + STALE_SERVE_SECONDS?
 
@@ -615,6 +697,7 @@ def main() -> int:
         check_books(board)
         check_default_ratings(board)
         check_start_gate_coverage()
+        check_soccer_league_registration()
         check_cache_freshness()
 
     print(f"\nBOARD ARTIFACT SCAN  {datetime.datetime.utcnow():%Y-%m-%d %H:%M}Z")

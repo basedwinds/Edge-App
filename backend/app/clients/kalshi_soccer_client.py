@@ -108,9 +108,48 @@ MONEYLINE_SERIES = {
     # volume, edge reading +1.000), not a quality ranking.
     # Live at this check: 3 open, all 3 two-sided, one listed match.
     "I2": "KXSERIEBGAME",
-    # STILL ABSENT, re-checked the same day and deliberately not guessed at:
-    # E3 (KXEFLL2GAME 0 open) and G1 (no series found under KXGREEKSL/
-    # KXGREECESL/KXSUPERLEAGUE). Both stay rated-but-unwired -- that is zero
+    # ---- 2026-08-18: the rated-pool diff, run again -------------------------
+    # The 2026-08-08 note above said to re-run "diff the model's inputs against
+    # the ingester's inputs" periodically. Doing so found SEVEN more leagues
+    # whose ratings have been in the pool the whole time with no series entry.
+    # Every one passed the same two-part admission test used for Saudi: a rated
+    # pool AND a live ESPN slug, because without the slug the bets could never
+    # settle. Volumes are total contracts traded across the series at the check.
+    #
+    #   COL1  KXDIMAYORGAME    54 mkts, all quoted, vol 8,167  (pool 6,218 team-matches)
+    #   ECU1  KXECULPGAME      24 mkts, all quoted, vol 5,194  (pool 3,928)
+    #   USL1  KXUSLGAME        39 mkts, all quoted, vol 4,921  (pool 6,634)
+    #   NWSL  KXNWSLGAME       30 mkts, all quoted, vol 1,497  (pool 2,050)
+    #   URY   KXURYPDGAME      24 mkts, all quoted, vol   304  (pool 4,420)
+    #   VEN1  KXVENFUTVEGAME   42 mkts, all quoted, vol     0  (pool 3,938)
+    #   G1    KXSLGREECEGAME   18 mkts, all quoted, vol     0  (pool 13,990)
+    #
+    # G1 IS NOT A NEW LEAGUE -- it is the one the note directly above gave up on
+    # ("no series found under KXGREEKSL/KXGREECESL/KXSUPERLEAGUE"). The ticker is
+    # KXSLGREECE: league-type first, country second, which is the opposite of
+    # every other Kalshi soccer series. Found by sweeping /events?status=open and
+    # reading the TITLES rather than guessing at tickers, which is the only
+    # method that finds a series named against the pattern.
+    #
+    # VEN1 and G1 have ZERO traded volume -- listed, not traded. Wired anyway on
+    # the DFB Pokal/EFL Cup precedent: an untraded market prices and is then
+    # rejected by the staking gates, whereas leaving it out means discovering in
+    # October that nothing was collected. Expect tracking rows, not bets.
+    #
+    # SWITZERLAND (SUI1) IS STILL REFUSED, and this is the second time. It has a
+    # rated pool (2,616 team-matches) and a live KXSWISSLEAGUEGAME book, but
+    # sui.1 returned ZERO events over a full month window -- the same ESPN half
+    # of the test it failed on 2026-08-08. A market we can price but never settle
+    # is worse than no market.
+    "COL1": "KXDIMAYORGAME",
+    "ECU1": "KXECULPGAME",
+    "URU1": "KXURYPDGAME",
+    "VEN1": "KXVENFUTVEGAME",
+    "USL1": "KXUSLGAME",
+    "NWSL": "KXNWSLGAME",
+    "G1": "KXSLGREECEGAME",
+    # STILL ABSENT, re-checked 2026-08-18 and deliberately not guessed at:
+    # E3 (KXEFLL2GAME 0 open). Stays rated-but-unwired -- that is zero
     # inventory, not a wide book, which is the one thing spread never told us.
 }
 
@@ -159,6 +198,14 @@ SPREAD_SERIES = {
     "T1": "KXSUPERLIGSPREAD",
     "F2": "KXLIGUE2SPREAD",
     "KSA1": "KXSAUDIPLSPREAD",
+    # 2026-08-18, with the seven leagues added to MONEYLINE_SERIES above. Only
+    # the three that actually list spread inventory -- ECU1/URU1/NWSL/G1 had
+    # GAME markets and ZERO spread, so they are absent here rather than wired
+    # hopefully, per the 2026-08-08 rule that an entry which never resolves is a
+    # silent per-pass fetch that always returns nothing.
+    "COL1": "KXDIMAYORSPREAD",
+    "VEN1": "KXVENFUTVESPREAD",
+    "USL1": "KXUSLSPREAD",
 }
 
 LEAGUE_WINNER_SERIES = {
@@ -250,6 +297,10 @@ TOTAL_SERIES = {
     "T1": "KXSUPERLIGTOTAL",
     "F2": "KXLIGUE2TOTAL",
     "KSA1": "KXSAUDIPLTOTAL",
+    # 2026-08-18, same three leagues and same reasoning as SPREAD_SERIES above.
+    "COL1": "KXDIMAYORTOTAL",
+    "VEN1": "KXVENFUTVETOTAL",
+    "USL1": "KXUSLTOTAL",
 }
 
 # BTTS (Both Teams To Score) confirmed live 2026-07-19 with real open
@@ -270,6 +321,11 @@ BTTS_SERIES = {
     "E1": "KXEFLCHAMPIONSHIPBTTS",
     "P1": "KXLIGAPORTUGALBTTS",
     "N1": "KXEREDIVISIEBTTS",
+    # 2026-08-18. These three DO have live BTTS inventory, unlike the five
+    # European series above which were wired ahead of their seasons.
+    "COL1": "KXDIMAYORBTTS",
+    "VEN1": "KXVENFUTVEBTTS",
+    "USL1": "KXUSLBTTS",
 }
 
 # Relegation confirmed live 2026-07-19 for all 5 European leagues
@@ -1318,7 +1374,13 @@ CUP_COMPETITIONS = {
         "top": "D1", "second": "D2",
         "moneyline": "KXDFBPOKALGAME",
         "advance": "KXDFBPOKALADVANCE",
-        "total": None,  # no live total series for the Pokal as of 2026-08-08
+        # WAS None with the note "no live total series for the Pokal as of
+        # 2026-08-08". That went STALE and nothing re-checked it: probed
+        # 2026-08-18 and KXDFBPOKALTOTAL has 180 open markets, every one quoted.
+        # Same shape as the futures "404" note that outlived its 404 -- a dated
+        # observation kept working as a permanent verdict. The re-probe is now
+        # part of the routine, not a one-off (see the note on UEFA spread).
+        "total": "KXDFBPOKALTOTAL",
     },
     # EFL Cup (the Carabao Cup -- Kalshi files it under EFL, not the sponsor
     # name, which is why a KXCARABAO* probe returns nothing). Added 2026-08-08

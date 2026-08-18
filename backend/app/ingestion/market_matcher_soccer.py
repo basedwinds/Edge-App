@@ -24,7 +24,13 @@ mismatch -- extend TEAM_ALIASES as real gaps are found live, don't try to
 guess every league's shorthand upfront."""
 from __future__ import annotations
 
+import json as _json
+import logging as _logging
+from pathlib import Path as _Path
+
 from app.ingestion.soccer_data import normalize_team_name
+
+_log = _logging.getLogger(__name__)
 
 # football-data.co.uk's own shorthand -> a canonical full-ish name, chosen to
 # match how Kalshi/Polymarket tend to render the same club (not necessarily
@@ -595,6 +601,52 @@ TEAM_ALIASES: dict[str, str] = {
     "munster": "preuen munster",                # D2
     "rostock": "hansa rostock",                 # D2
 }
+
+
+# ---- data/soccer_kalshi_aliases.json, loaded rather than transcribed --------
+#
+# WHY THIS EXISTS (2026-08-18). Every "DERIVED, NOT TYPED" batch above was
+# produced by scripts/build_soccer_kalshi_aliases.py and then COPIED IN BY HAND.
+# The builder writes data/soccer_kalshi_aliases.json, and until now nothing in
+# the app read that file -- its only reader was check_cup_market_coverage.py.
+#
+# That was caught the hard way. Seven leagues were wired on 2026-08-18, the
+# builder was re-run and produced 70 verified aliases, the backend was
+# restarted, and pricing did not move: 21 of 212 rows before, 21 of 212 after.
+# The aliases were sitting in a file the app never opened. Same shape as the
+# duplicate-listing cap that was wired to 4 of 13 routers -- the artifact
+# existed, it just was not CONNECTED.
+#
+# So the file is now the source and this dict is the override. Hand-written
+# entries WIN on conflict, because a few of them encode judgement the builder
+# cannot reach (the Leagues Cup "Guadalajara" collision above being the
+# example), and those must not be silently replaced by a re-run.
+def _load_kalshi_aliases() -> dict[str, str]:
+    path = _Path(__file__).resolve().parents[3] / "data" / "soccer_kalshi_aliases.json"
+    try:
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        # LOUD. A silent {} here means every league whose Kalshi spelling
+        # differs from football-data's quietly stops pricing, and the only
+        # symptom is rows that read "no tracked match history" -- which looks
+        # like a coverage gap, not a broken file read.
+        _log.error("soccer kalshi aliases unreadable at %s (%s) -- clubs whose "
+                   "Kalshi spelling differs will price as unrated", path, exc)
+        return {}
+    out: dict[str, str] = {}
+    for kalshi_name, entry in raw.items():
+        key = normalize_team_name(kalshi_name) or ""
+        target = normalize_team_name(entry.get("team") or "") or ""
+        # A key that already normalizes onto its target teaches nothing, and an
+        # entry that would shadow a hand-written one is skipped, not merged.
+        if not key or not target or key == target or key in TEAM_ALIASES:
+            continue
+        out[key] = target
+    return out
+
+
+_FROM_FILE = _load_kalshi_aliases()
+TEAM_ALIASES.update(_FROM_FILE)
 
 
 def canonical_team_key(name: str) -> str:

@@ -106,6 +106,30 @@ LEAGUE_CODES = {
     # this same step. Verified live before adding: ksa.1 returned 10 events in
     # the Aug 4-24 window.
     "KSA1": "ksa.1",
+    # 2026-08-18, with the seven leagues wired into kalshi_soccer_client. Same
+    # admission test as Saudi directly above: a slug is only added after it is
+    # observed returning real events, because a market that cannot settle is
+    # worse than no market. Verified live over a 2026-08-01..09-01 window:
+    #   col.1     63 events   Colombian Primera A
+    #   ven.1     47 events   Venezuelan Primera Division
+    #   usa.usl.1 65 events   USL Championship
+    #   usa.nwsl  43 events   NWSL
+    #   ecu.1     39 events   LigaPro Ecuador
+    #   uru.1     32 events   Liga AUF Uruguaya
+    # G1 needs no entry -- gre.1 has been here since the cup/UEFA build; Greece
+    # was missing its KALSHI ticker, not its ESPN slug.
+    #
+    # sui.1 was probed in the same sweep and returned ZERO events, which is why
+    # Switzerland is absent here AND from kalshi_soccer_client -- the identical
+    # reason it was refused on 2026-08-08. USL needed three wrong guesses first
+    # (usa.usl, usa.usl_championship and usa.2 all 400); the working slug is
+    # usa.usl.1.
+    "COL1": "col.1",       # Colombian Primera A
+    "ECU1": "ecu.1",       # LigaPro Ecuador
+    "URU1": "uru.1",       # Liga AUF Uruguaya
+    "VEN1": "ven.1",       # Venezuelan Primera Division
+    "USL1": "usa.usl.1",   # USL Championship
+    "NWSL": "usa.nwsl",    # NWSL
     # Leagues Cup, 2026-08-08. Present so its bets can SETTLE -- this dict is
     # what refresh_soccer_results iterates, so a competition missing from it
     # produces markets that stay pending forever. The slug is "concacaf.
