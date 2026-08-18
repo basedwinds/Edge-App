@@ -13,3 +13,6 @@ backtest_results.json
 
 # Nested clone of this same repo, created by a desktop Git client. Never track it.
 /Edge App/
+
+# Runtime logs from scripts/start_edge_app.ps1 -- local noise, never committed.
+logs/
