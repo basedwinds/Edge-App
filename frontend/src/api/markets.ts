@@ -603,6 +603,7 @@ const SOCCER_LEAGUE_LABEL: Record<string, string> = {
   "COPPA_ITALIA": "Coppa Italia", "DFB_POKAL": "DFB Pokal", "EFL_CUP": "EFL Cup",
   "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
   "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
+  "GER_SUPER_CUP": "DFL-Supercup",
   "LEAGUES_CUP": "Leagues Cup",
   "LIBERTADORES": "Copa Libertadores", "SUDAMERICANA": "Copa Sudamericana",
   "INTL": "Internationals",

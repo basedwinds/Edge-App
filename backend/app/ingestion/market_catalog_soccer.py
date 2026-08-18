@@ -840,7 +840,8 @@ def upsert_kalshi_soccer_top_n_market(session: Session, row: dict) -> Market:
 # priced off a rating from a division it left years ago).
 CUP_LEAGUE_CODES = {"coppa_italia": "COPPA_ITALIA", "dfb_pokal": "DFB_POKAL",
                     "efl_cup": "EFL_CUP",
-                    "fra_super_cup": "FRA_SUPER_CUP"}
+                    "fra_super_cup": "FRA_SUPER_CUP",
+                    "ger_super_cup": "GER_SUPER_CUP"}
 
 
 def cup_league_code(competition: str) -> str:
@@ -1055,6 +1056,15 @@ def upsert_kalshi_leagues_cup_total_market(session: Session, row: dict, soccer_m
     market = _cup_market(session, row, "leagues_cup_total", soccer_match_id)
     market.line = row.get("line")
     market.side = "over"
+    _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
+                     yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
+    return market
+
+
+def upsert_kalshi_leagues_cup_advance_market(session: Session, row: dict, soccer_match_id: int | None) -> Market:
+    market = _cup_market(session, row, "leagues_cup_advance", soccer_match_id)
+    market.team = row.get("team")
+    market.side = row["side"]
     _upsert_snapshot(session, market, row.get("last_price"), row.get("volume"),
                      yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"))
     return market

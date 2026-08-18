@@ -94,7 +94,7 @@ GAME_MARKET_TYPES = {
     "uefa_moneyline_3way", "uefa_total", "uefa_spread",
     "conmebol_moneyline_3way", "conmebol_total", "conmebol_spread",
     "leagues_cup_moneyline_3way", "leagues_cup_total",
-    "leagues_cup_spread", "leagues_cup_btts",
+    "leagues_cup_spread", "leagues_cup_btts", "leagues_cup_advance",
     "national_moneyline_3way", "national_total",
     "national_spread", "national_btts",
 }
@@ -323,7 +323,7 @@ def _half_btts_model_prob(market: Market, match: SoccerMatch | None, half: int) 
 # club being priced off a division it left years ago.
 CUP_TIERS = {"COPPA_ITALIA": ("I1", "I2"), "DFB_POKAL": ("D1", "D2"),
              "EFL_CUP": ("E0", "E1"),
-             "FRA_SUPER_CUP": ("F1", "F2")}
+             "FRA_SUPER_CUP": ("F1", "F2"), "GER_SUPER_CUP": ("D1", "D2")}
 CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total", "cup_spread"}
 
 # TRACKING-ONLY: priced and shown, never staked.
@@ -522,7 +522,7 @@ def _uefa_spread_model_prob(market: Market, match: SoccerMatch | None) -> float 
 LEAGUES_CUP_LEAGUES = {"LEAGUES_CUP"}
 LEAGUES_CUP_MARKET_TYPES = {
     "leagues_cup_moneyline_3way", "leagues_cup_total",
-    "leagues_cup_spread", "leagues_cup_btts",
+    "leagues_cup_spread", "leagues_cup_btts", "leagues_cup_advance",
 }
 
 
@@ -694,6 +694,19 @@ def _leagues_cup_spread_model_prob(market: Market, match: SoccerMatch | None) ->
     return None
 
 
+def _leagues_cup_advance_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
+    """Single-match advance: win, plus half the draw. Exact for this format --
+    the Leagues Cup goes straight to penalties with no extra time."""
+    pred = _leagues_cup_prediction(match)
+    if pred is None:
+        return None
+    if market.side == "home":
+        return pred.prob_home_advance()
+    if market.side == "away":
+        return pred.prob_away_advance()
+    return None
+
+
 def _leagues_cup_btts_model_prob(market: Market, match: SoccerMatch | None) -> float | None:
     pred = _leagues_cup_prediction(match)
     if pred is None:
@@ -761,6 +774,7 @@ _MODEL_PROB_DISPATCH = {
     "leagues_cup_moneyline_3way": lambda m, match, news: _leagues_cup_moneyline_model_prob(m, match),
     "leagues_cup_total": lambda m, match, news: _leagues_cup_total_model_prob(m, match),
     "leagues_cup_spread": lambda m, match, news: _leagues_cup_spread_model_prob(m, match),
+    "leagues_cup_advance": lambda m, match, news: _leagues_cup_advance_model_prob(m, match),
     "leagues_cup_btts": lambda m, match, news: _leagues_cup_btts_model_prob(m, match),
     "national_moneyline_3way": lambda m, match, news: _national_moneyline_model_prob(m, match),
     "national_total": lambda m, match, news: _national_total_model_prob(m, match),
@@ -1218,6 +1232,7 @@ _SOCCER_LEAGUE_NAME = {
     "COPPA_ITALIA": "Coppa Italia", "DFB_POKAL": "DFB Pokal", "EFL_CUP": "EFL Cup",
     "UCL": "Champions League", "UEL": "Europa League", "UECL": "Conference League",
     "UEFA_SUPER_CUP": "UEFA Super Cup", "FRA_SUPER_CUP": "Trophee des Champions",
+    "GER_SUPER_CUP": "DFL-Supercup",
     "LEAGUES_CUP": "Leagues Cup",
     "LIBERTADORES": "Copa Libertadores", "SUDAMERICANA": "Copa Sudamericana",
     "INTL": "Internationals",

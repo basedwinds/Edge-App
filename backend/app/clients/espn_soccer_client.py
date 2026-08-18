@@ -161,6 +161,10 @@ LEAGUE_CODES = {
     "EFL_CUP": "eng.league_cup",
     "UEFA_SUPER_CUP": "uefa.super_cup",
     "FRA_SUPER_CUP": "fra.super_cup",
+    # Verified before wiring, same admission test as every other slug here:
+    # ger.super_cup returned the live fixture (Bayern Munich at Borussia
+    # Dortmund). ger.dfl_supercup and ger.supercup both 400.
+    "GER_SUPER_CUP": "ger.super_cup",
     # CONMEBOL, 2026-08-18. Verified live before wiring, and these are also the
     # feeds the strength offsets were fitted on: conmebol.libertadores returned
     # 100 events / 99 completed for 2025, conmebol.sudamericana 100/100.

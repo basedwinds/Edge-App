@@ -1057,6 +1057,8 @@ def refresh_kalshi_leagues_cup_markets():
          market_catalog_soccer.upsert_kalshi_leagues_cup_total_market, "leagues_cup_total"),
         (kalshi_soccer_client.get_leagues_cup_spread_markets(),
          market_catalog_soccer.upsert_kalshi_leagues_cup_spread_market, "leagues_cup_spread"),
+        (kalshi_soccer_client.get_leagues_cup_advance_markets(),
+         market_catalog_soccer.upsert_kalshi_leagues_cup_advance_market, "leagues_cup_advance"),
         (kalshi_soccer_client.get_leagues_cup_btts_markets(),
          market_catalog_soccer.upsert_kalshi_leagues_cup_btts_market, "leagues_cup_btts"),
     ]

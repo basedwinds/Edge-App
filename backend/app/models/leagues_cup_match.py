@@ -82,6 +82,11 @@ def load_strength(force: bool = False) -> tuple[float | None, float, dict]:
     return _cache["mu"], _cache["home_log"], _cache["offsets"]
 
 
+# A shootout, priced as a coin flip -- named so it can be tested rather than
+# argued about, same as two_leg_tie.SHOOTOUT_HOME_PROB.
+SHOOTOUT_SPLIT = 0.5
+
+
 @dataclass
 class LeaguesCupPrediction:
     distribution: MatchGoalDistribution
@@ -100,6 +105,22 @@ class LeaguesCupPrediction:
 
     def prob_total_over(self, line: float) -> float:
         return self.distribution.prob_total_over(line)
+
+    # ---- ADVANCE (2026-08-18) ----------------------------------------------
+    # EXACT for this competition, not an approximation, and that is only true
+    # because of the format note at the top of this module: the Leagues Cup
+    # knockout goes STRAIGHT TO A SHOOTOUT when level, with NO extra time. So
+    # there is no ET grid to convolve and no aggregate across legs -- a single
+    # match, and a coin flip for whatever it leaves level.
+    #
+    # This is deliberately NOT models/two_leg_tie.py, which exists for the
+    # two-legged UEFA/CONMEBOL ties and would add an extra-time term this
+    # competition does not play.
+    def prob_home_advance(self) -> float:
+        return self.prob_home_win() + self.prob_draw() * SHOOTOUT_SPLIT
+
+    def prob_away_advance(self) -> float:
+        return self.prob_away_win() + self.prob_draw() * SHOOTOUT_SPLIT
 
 
 def predict_leagues_cup_match(

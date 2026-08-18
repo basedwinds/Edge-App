@@ -203,6 +203,19 @@ SPREAD_SERIES = {
     # GAME markets and ZERO spread, so they are absent here rather than wired
     # hopefully, per the 2026-08-08 rule that an entry which never resolves is a
     # silent per-pass fetch that always returns nothing.
+    # J-LEAGUE, 2026-08-18. The comment above SPREAD_SERIES' BRA1/ARG1/MEX1 block
+    # said "J-League has no spread/total series listed as of 2026-08-08" -- true
+    # then, stale now, and found by the catalog scan rather than by re-reading
+    # the note. Probed live: KXJLEAGUESPREAD 8 open / 8 quoted, KXJLEAGUETOTAL
+    # 12/12, KXJLEAGUEBTTS 2/2, all in the standard
+    # "<team> wins by more than X goals" / "Over X goals scored" shapes.
+    #
+    # Volume is ZERO on all three, so these are listed-not-traded and will price
+    # for tracking without producing bets -- same call as VEN1 and G1 earlier
+    # today, on the DFB Pokal precedent: ingesting an untraded market costs a
+    # fetch, and NOT ingesting it means noticing in October that nothing was
+    # collected.
+    "JPN1": "KXJLEAGUESPREAD",
     "COL1": "KXDIMAYORSPREAD",
     "VEN1": "KXVENFUTVESPREAD",
     "USL1": "KXUSLSPREAD",
@@ -298,6 +311,7 @@ TOTAL_SERIES = {
     "F2": "KXLIGUE2TOTAL",
     "KSA1": "KXSAUDIPLTOTAL",
     # 2026-08-18, same three leagues and same reasoning as SPREAD_SERIES above.
+    "JPN1": "KXJLEAGUETOTAL",   # see the JPN1 note in SPREAD_SERIES
     "COL1": "KXDIMAYORTOTAL",
     "VEN1": "KXVENFUTVETOTAL",
     "USL1": "KXUSLTOTAL",
@@ -323,6 +337,7 @@ BTTS_SERIES = {
     "N1": "KXEREDIVISIEBTTS",
     # 2026-08-18. These three DO have live BTTS inventory, unlike the five
     # European series above which were wired ahead of their seasons.
+    "JPN1": "KXJLEAGUEBTTS",    # see the JPN1 note in SPREAD_SERIES
     "COL1": "KXDIMAYORBTTS",
     "VEN1": "KXVENFUTVEBTTS",
     "USL1": "KXUSLBTTS",
@@ -1414,6 +1429,29 @@ CUP_COMPETITIONS = {
         "moneyline": "KXFRASUPERCUPGAME",
         "advance": None,
         "total": None,
+        "spread": None,
+    },
+    # DFL-Supercup, 2026-08-18, surfaced by the catalog scan rather than by a
+    # probe -- which is the New Markets page doing its job. Structurally the
+    # twin of the Trophee des Champions above: Bundesliga champion vs DFB-Pokal
+    # winner, so both sides are normally D1 and cup_match takes its same-tier
+    # branch with no bridge and no caution. D2 is named for the rare year a
+    # 2. Bundesliga side wins the Pokal.
+    #
+    # Live at wiring: ESPN ger.super_cup returns the single fixture -- Bayern
+    # Munich at Borussia Dortmund, both D1 and both rated -- and Kalshi has
+    # GAME 3 / SPREAD 4 / TOTAL 6 open, all quoted, volume 0. Untraded, so
+    # expect a tracked price rather than a bet, same as VEN1 and G1.
+    #
+    # ADVANCE is None because there is nothing to advance to: it is a one-off
+    # final, decided on the day.
+    "ger_super_cup": {
+        "name": "German Super Cup",
+        "top": "D1", "second": "D2",
+        "moneyline": "KXGERSCGAME",
+        "advance": None,
+        "total": "KXGERSCTOTAL",
+        "spread": "KXGERSCSPREAD",
     },
 }
 
@@ -1598,6 +1636,12 @@ UEFA_COMPETITIONS = {
 # cannot silently drop every row.
 LEAGUES_CUP = {
     "name": "Leagues Cup",
+    # ADVANCE, added 2026-08-18 from the New Markets queue. Safe here where the
+    # UEFA/CONMEBOL equivalents are not: the Leagues Cup knockout is a SINGLE
+    # match that goes straight to penalties, so advancing is a property of the
+    # one game in front of you. 8 open markets, all quoted, volume 3,097 -- the
+    # only advance series in the queue with real trade behind it.
+    "advance": "KXLEAGUESCUPADVANCE",
     "moneyline": "KXLEAGUESCUPGAME",
     "total": "KXLEAGUESCUPTOTAL",
     "spread": "KXLEAGUESCUPSPREAD",
@@ -1665,6 +1709,26 @@ def get_leagues_cup_total_markets() -> list[dict]:
             except ValueError:
                 continue
             rows.append(_leagues_cup_row(ev, m, home, away, line=line, side="over"))
+    return rows
+
+
+def get_leagues_cup_advance_markets() -> list[dict]:
+    """"<Home> vs <Away>: <Team> To Advance". The pair comes from the segment
+    BEFORE the colon, same as the domestic cup advance reader."""
+    rows = []
+    for ev, home, away, markets in _leagues_cup_events(LEAGUES_CUP["advance"]):
+        for m in markets:
+            sub = _ADVANCE_SUB_RE.match((m.get("yes_sub_title") or "").strip())
+            if not sub:
+                continue
+            who = sub.group(1).strip()
+            if who == home:
+                side, team = "home", home
+            elif who == away:
+                side, team = "away", away
+            else:
+                continue
+            rows.append(_leagues_cup_row(ev, m, home, away, side=side, team=team))
     return rows
 
 
