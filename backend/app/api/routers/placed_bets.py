@@ -21,8 +21,17 @@ _GAME_ID_ATTRS = [
     "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
     "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
     "lol_match_id",
+    # cod_match_id ADDED 2026-08-19. The frontend chain HAS had a CoD branch
+    # ("CoD is live on BOTH Kalshi and Polymarket, so without this branch the
+    # same match's two platform rows never dedupe"); this copy did not. These
+    # two functions are required to be byte-identical -- see the docstring below
+    # -- so that was a live violation: a placed CoD bet's key came from the
+    # FALLBACK here while the board computed cod:{id}, so the bet could never be
+    # recognised as already placed and the copycat guard could not see it
+    # either. Inert only because CoD has never staked a row.
+    "cod_match_id",
 ]
-_ESPORTS_ID_ATTRS = {"valorant_match_id", "cs2_match_id", "lol_match_id"}
+_ESPORTS_ID_ATTRS = {"valorant_match_id", "cs2_match_id", "lol_match_id", "cod_match_id"}
 
 
 def _fmt_line(v) -> str:
