@@ -658,6 +658,79 @@ def check_soccer_league_registration() -> None:
                f"their own league")
 
 
+def check_sport_registry_drift() -> None:
+    """Does every sport the FRONTEND knows about reach the backend's caps?
+
+    WHY THIS CHECK EXISTS. The same defect has now been found three times, each
+    in a different hand-kept id chain, each missing a different sport:
+      * frontend rowGameId had no CFB -- its own comment: "the chain form is
+        what silently dropped CFB: a sport missing from it skipped the per-game
+        cap entirely, so one game could surface several correlated bets as if
+        they were independent";
+      * recommended.py::_game_cap_id had no CFB, for the same reason;
+      * the esports ladderKey had no CoD, so every CoD row keyed on an EMPTY
+        match id and two different matches collapsed into one.
+    Each was invisible until the sport in question started staking. Deriving the
+    backend's chains from one registry (recommended.py::_SPORT_IDS) removes
+    three of the four; this check is what stops the registry itself from
+    silently falling behind the frontend.
+
+    It compares the frontend's src/lib/sports.ts::SPORTS -- the source of truth
+    the UI already derives from -- against _SPORT_IDS and _SPORTS, and FAILS on
+    a sport present in one and missing from the other. Parsing the TS by regex
+    is deliberately crude; a parse that finds nothing FAILS rather than passing
+    vacuously, because "found 0 sports, none missing" is exactly the shape of a
+    check that has quietly stopped testing anything.
+    """
+    import re as _re
+    from app.models.recommended import _SPORT_IDS, _SPORTS
+
+    ts = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "sports.ts"
+    try:
+        src = ts.read_text(encoding="utf-8")
+    except OSError as exc:
+        record("FAIL", "sport registry drift", f"cannot read {ts}: {exc}")
+        return
+    block = src.split("export const SPORTS", 1)
+    if len(block) < 2:
+        record("FAIL", "sport registry drift", "SPORTS array not found in sports.ts")
+        return
+    entries = _re.findall(r'\{\s*key:\s*"([a-z0-9]+)".*?\}', block[1].split("];", 1)[0], _re.S)
+    if not entries:
+        record("FAIL", "sport registry drift", "parsed 0 sports from sports.ts -- "
+                                               "the regex has gone stale, not the code")
+        return
+
+    def camel_to_snake(v):
+        return _re.sub(r"(?<!^)(?=[A-Z])", "_", v).lower()
+
+    fe = set(entries)
+    be_ids = {k for k, _f, _p, _c in _SPORT_IDS}
+    be_eps = {s[0] for s in _SPORTS}
+    problems = []
+    for miss in sorted(fe - be_ids):
+        problems.append(f"{miss!r} in sports.ts but NOT in _SPORT_IDS -- it would skip the per-game cap")
+    for extra in sorted(be_ids - fe):
+        problems.append(f"{extra!r} in _SPORT_IDS but not in sports.ts")
+    for miss in sorted(fe - be_eps - {"racing"}):
+        problems.append(f"{miss!r} in sports.ts but NOT in _SPORTS -- its bets would score "
+                        f"was_recommended=False and never reach the Discord alert")
+    # field names must agree too, or the registry points at an attribute the
+    # /markets payload never carries and every lookup silently returns None.
+    for m in _re.finditer(r'\{\s*key:\s*"([a-z0-9]+)".*?gameIdField:\s*"([A-Za-z0-9]+)"',
+                          block[1].split("];", 1)[0], _re.S):
+        key, field = m.group(1), camel_to_snake(m.group(2))
+        be = {k: f for k, f, _p, _c in _SPORT_IDS}.get(key)
+        if be and be != field:
+            problems.append(f"{key!r} id field disagrees: sports.ts {field!r} vs _SPORT_IDS {be!r}")
+    if problems:
+        record("FAIL", "sport registry drift", f"{len(problems)}: {problems[:4]}")
+    else:
+        record("PASS", "sport registry drift",
+               f"all {len(fe)} sports in sports.ts reach _SPORT_IDS and _SPORTS, "
+               f"and their id fields agree")
+
+
 def check_competition_priced_at_all() -> None:
     """A competition we INGEST but price ZERO of is a bug, not a coverage limit.
 
@@ -819,6 +892,7 @@ def main() -> int:
         check_default_ratings(board)
         check_start_gate_coverage()
         check_soccer_league_registration()
+        check_sport_registry_drift()
         check_competition_priced_at_all()
         check_cache_freshness()
 

@@ -93,14 +93,44 @@ _SPORTS = [
     # exactly like its three siblings.
     ("cod", "/cod/markets", "cod_weekly_pool_dollars", "cod_futures_pool_dollars"),
 ]
+# ONE REGISTRY for every per-sport id this module reads. Mirrors the frontend's
+# src/lib/sports.ts::SPORTS, which exists for exactly this reason -- its own
+# comment records that the hand-kept chain form "is what silently dropped CFB: a
+# sport missing from it skipped the per-game cap entirely, so one game could
+# surface several correlated bets as if they were independent".
+#
+# This file had THREE such chains and each had been patched by hand at a
+# different time, so each was missing a different sport: _game_cap_id had no
+# CFB, the esports ladder lookup had no CoD, and _Row's slot list had to be
+# edited in two places whenever either changed. They all read this now, so a new
+# sport is one row here rather than four edits that can each be forgotten.
+#
+#   in_game_cap=False preserves EXISTING behaviour, it is not an endorsement:
+#   wnba is excluded because _build_wnba passes every row through the cap, and
+#   racing has no entry at all because it uses its own per-event cap. The
+#   frontend's rowGameId DOES return a wnba id, so that pair may be a real
+#   drift -- flagged by the scan check rather than silently changed here, since
+#   changing it would alter which bets the board shows.
+#
+# (sport key, _Row attribute, prefix the id with the sport key?, in the game cap?)
+_SPORT_IDS = [
+    ("nfl",      "nfl_game_id",       False, True),
+    ("nba",      "nba_game_id",       False, True),
+    ("wnba",     "wnba_game_id",      False, False),
+    ("cfb",      "cfb_game_id",       False, True),
+    ("mlb",      "mlb_game_id",       False, True),
+    ("soccer",   "soccer_match_id",   False, True),
+    ("mma",      "mma_fight_id",      False, True),
+    ("tennis",   "tennis_match_id",   False, True),
+    ("valorant", "valorant_match_id", True,  True),
+    ("cs2",      "cs2_match_id",      True,  True),
+    ("lol",      "lol_match_id",      True,  True),
+    ("cod",      "cod_match_id",      True,  True),
+]
+_ID_FIELDS = tuple(f for _k, f, _p, _c in _SPORT_IDS)
 # per-sport JSON key that carries the game/match id
-_GID_KEY = {
-    "nfl": "nfl_game_id", "nba": "nba_game_id", "wnba": "wnba_game_id", "mlb": "mlb_game_id",
-    "cfb": "cfb_game_id", "cod": "cod_match_id",
-    "mma": "mma_fight_id", "tennis": "tennis_match_id", "soccer": "soccer_match_id",
-    "valorant": "valorant_match_id", "cs2": "cs2_match_id", "lol": "lol_match_id",
-    "racing": "race_event_id",
-}
+_GID_KEY = {k: f for k, f, _p, _c in _SPORT_IDS}
+_GID_KEY["racing"] = "race_event_id"
 
 
 class _Row:
@@ -109,9 +139,7 @@ class _Row:
 
     __slots__ = ("id", "sport", "market_type", "source", "team", "line", "side",
                  "label", "edge", "volume", "stake", "stake_pool", "gameday", "event", "model_prob",
-                 "nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id", "mlb_game_id", "mma_fight_id",
-                 "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
-                 "lol_match_id", "cod_match_id", "race_event_id")
+                 *_ID_FIELDS, "race_event_id")
 
     def __init__(self, sport: str, d: dict):
         self.id = d.get("id")
@@ -137,9 +165,7 @@ class _Row:
             ct = d.get("close_time")
             self.gameday = ct[:10] if ct else None
             self.event = d.get("race_event_id") if d.get("race_event_id") is not None else (d.get("event") or "")
-        for a in ("nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id", "mlb_game_id", "mma_fight_id",
-                  "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
-                  "lol_match_id", "cod_match_id", "race_event_id"):
+        for a in (*_ID_FIELDS, "race_event_id"):
             setattr(self, a, d.get(a))
 
 
@@ -150,8 +176,8 @@ def _edge(r: _Row) -> float:
 def _ladder_key(r: _Row) -> str:
     esports = _ESPORTS_LADDER.get(r.sport)
     if esports and r.market_type in esports:           # esports series ladder
-        mid = (r.valorant_match_id or r.cs2_match_id or r.lol_match_id
-               or r.cod_match_id or "")
+        mid = next((getattr(r, f) for _k, f, _p, _c in _SPORT_IDS
+                    if getattr(r, f, None)), "")
         return f"{r.market_type}|{r.source}|{mid}|{r.team or ''}|{r.side or ''}"
     if r.market_type in _LADDER:                       # season ladder -> recommendedKey
         return f"{r.market_type}|{r.source}|{r.team if r.team is not None else r.label}"
@@ -169,80 +195,16 @@ def _prefer(cand: _Row, exist: _Row) -> bool:
 
 
 def _game_cap_id(r: _Row):
-    # capToOneRowPerGame: NOTE wnba + racing are intentionally excluded (pass through)
-    # cfb_game_id ADDED 2026-08-19. This is the hand-kept chain form, and the
-    # frontend's own rowGameId comment records that "the chain form is what
-    # silently dropped CFB: a sport missing from it skipped the per-game cap
-    # entirely, so one game could surface several correlated bets as if they
-    # were independent". The frontend fixed that by deriving from its sport
-    # registry; this copy still had the original defect.
-    return (r.nfl_game_id or r.nba_game_id or r.cfb_game_id or r.mlb_game_id
-            or r.mma_fight_id or r.tennis_match_id
-            or r.soccer_match_id
-            or (f"valorant:{r.valorant_match_id}" if r.valorant_match_id else None)
-            or (f"cs2:{r.cs2_match_id}" if r.cs2_match_id else None)
-            or (f"lol:{r.lol_match_id}" if r.lol_match_id else None)
-            or (f"cod:{r.cod_match_id}" if r.cod_match_id else None))
-
-
-def _pool_cap(rows: list[_Row], weekly_pool: float,
-              futures_pool: float | None) -> list[_Row]:
-    """The frontend's portfolio cap, with SEPARATE weekly and futures ceilings.
-
-    futures_pool None means this sport's frontend builder takes no futures pool,
-    so everything is capped as weekly -- identical to the single-ceiling form
-    this file used for every sport before CFB needed the split. Passing a real
-    number turns on the two-ceiling behaviour markets.ts uses, whose own comment
-    is the reason it exists: capping season rows against the weekly ceiling
-    "would let a slate of games crowd out every futures row, or vice versa"."""
-    two = futures_pool is not None
-    ceil = {"weekly": max(0.0, (weekly_pool or 0.0) * _CEILING_PCT),
-            "futures": max(0.0, (futures_pool or 0.0) * _CEILING_PCT)}
-    cum = {"weekly": 0.0, "futures": 0.0}
-    shown: list[_Row] = []
-    for r in rows:
-        pool = "futures" if (two and r.stake_pool == "futures") else "weekly"
-        stake = r.stake or 0.0
-        if cum[pool] + stake > ceil[pool]:
+    """capToOneRowPerGame's id, derived from _SPORT_IDS instead of a hand-kept
+    chain -- see that registry for why. Sports with in_game_cap=False pass
+    through, which is what the previous chain did by omitting them."""
+    for key, field, prefix, in_cap in _SPORT_IDS:
+        if not in_cap:
             continue
-        cum[pool] += stake
-        shown.append(r)
-    return shown
-
-
-def _build_cfb(rows: list[_Row], weekly_pool: float,
-               futures_pool: float | None = None) -> list[_Row]:
-    """Mirror buildCfbRecommendedBets, which matches NEITHER existing builder.
-
-    Like WNBA's it skips the ladder-collapse and per-player passes entirely
-    (markets.ts says so outright: "ladder or player-stat markets yet"), so
-    running _build_sport here would over-collapse. UNLIKE WNBA's it keeps the
-    REAL line -- WNBA forces line and side to null so every rung of a ladder
-    collapses into one key by construction, whereas CFB carries m.line and only
-    side is null. And unlike either, it caps weekly and futures separately.
-
-    So: cross-platform collapse -> per-game cap -> two-pool budget cap."""
-    for r in rows:                      # the builder sets side: null, keeps line
-        r.side = None
-    cands = [r for r in rows if r.stake]
-    xp: dict[str, _Row] = {}
-    for r in cands:
-        k = _cross_platform_key(r)
-        if k not in xp or _prefer(r, xp[k]):
-            xp[k] = r
-    deduped = sorted(xp.values(), key=_edge, reverse=True)
-    game_best: dict[str, _Row] = {}
-    non_game: list[_Row] = []
-    for r in deduped:
-        gid = _game_cap_id(r)
-        if gid is None:
-            non_game.append(r)
-            continue
-        gid = str(gid)
-        if gid not in game_best or _edge(r) > _edge(game_best[gid]):
-            game_best[gid] = r
-    after_game = sorted(non_game + list(game_best.values()), key=_edge, reverse=True)
-    return _pool_cap(after_game, weekly_pool, futures_pool)
+        val = getattr(r, field, None)
+        if val:
+            return f"{key}:{val}" if prefix else val
+    return None
 
 
 def _build_racing(rows: list[_Row], weekly_pool: float, futures_pool: float | None = None) -> list[_Row]:
