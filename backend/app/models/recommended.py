@@ -207,6 +207,66 @@ def _game_cap_id(r: _Row):
     return None
 
 
+def _pool_cap(rows: list[_Row], weekly_pool: float,
+              futures_pool: float | None) -> list[_Row]:
+    """The frontend's portfolio cap, with SEPARATE weekly and futures ceilings.
+
+    futures_pool None means this sport's frontend builder takes no futures pool,
+    so everything is capped as weekly -- identical to the single-ceiling form
+    this file used for every sport before CFB needed the split. Passing a real
+    number turns on the two-ceiling behaviour markets.ts uses, whose own comment
+    is the reason it exists: capping season rows against the weekly ceiling
+    "would let a slate of games crowd out every futures row, or vice versa"."""
+    two = futures_pool is not None
+    ceil = {"weekly": max(0.0, (weekly_pool or 0.0) * _CEILING_PCT),
+            "futures": max(0.0, (futures_pool or 0.0) * _CEILING_PCT)}
+    cum = {"weekly": 0.0, "futures": 0.0}
+    shown: list[_Row] = []
+    for r in rows:
+        pool = "futures" if (two and r.stake_pool == "futures") else "weekly"
+        stake = r.stake or 0.0
+        if cum[pool] + stake > ceil[pool]:
+            continue
+        cum[pool] += stake
+        shown.append(r)
+    return shown
+
+
+def _build_cfb(rows: list[_Row], weekly_pool: float,
+               futures_pool: float | None = None) -> list[_Row]:
+    """Mirror buildCfbRecommendedBets, which matches NEITHER existing builder.
+
+    Like _build_wnba it skips the ladder-collapse and per-player passes
+    (markets.ts: "ladder or player-stat markets yet"), so running _build_sport
+    here would over-collapse. UNLIKE wnba it keeps the REAL line -- wnba forces
+    line and side to null so every rung of a ladder collapses into one key by
+    construction, whereas CFB carries m.line and only side is null. And unlike
+    either, it caps weekly and futures separately.
+
+    So: cross-platform collapse -> per-game cap -> two-pool budget cap."""
+    for r in rows:                      # the builder sets side: null, keeps line
+        r.side = None
+    cands = [r for r in rows if r.stake]
+    xp: dict[str, _Row] = {}
+    for r in cands:
+        k = _cross_platform_key(r)
+        if k not in xp or _prefer(r, xp[k]):
+            xp[k] = r
+    deduped = sorted(xp.values(), key=_edge, reverse=True)
+    game_best: dict[str, _Row] = {}
+    non_game: list[_Row] = []
+    for r in deduped:
+        gid = _game_cap_id(r)
+        if gid is None:
+            non_game.append(r)
+            continue
+        gid = str(gid)
+        if gid not in game_best or _edge(r) > _edge(game_best[gid]):
+            game_best[gid] = r
+    after_game = sorted(non_game + list(game_best.values()), key=_edge, reverse=True)
+    return _pool_cap(after_game, weekly_pool, futures_pool)
+
+
 def _build_racing(rows: list[_Row], weekly_pool: float, futures_pool: float | None = None) -> list[_Row]:
     """Mirror buildRacingRecommendedBets, which does NOT use the shared pipeline:
     staked rows -> ONE bet per race event (best stake wins, ties by first) ->
