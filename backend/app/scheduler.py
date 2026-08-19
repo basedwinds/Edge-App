@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from app import db_backup
 from app import sports as app_sports
 from app.db.database import SessionLocal
 from app.ingestion.catalog_scan import scan_catalog, wake_dormant_sports
@@ -370,6 +371,23 @@ def start():
     # the part that would rot quietly -- promoted clubs arrive each August with
     # names the map has never seen, and an unmapped club falls back to pure
     # goals for its whole season with no error anywhere.
+    # WEEKLY DATABASE SNAPSHOT (app/db_backup.py). app.db is the only record of
+    # what this app predicted and how it resolved, it is gitignored because the
+    # repo is public, so GitHub is not a backup. The one snapshot that existed
+    # before this job was taken by hand and had 1,600 bets accrue past it,
+    # which quietly made it unrestorable without discarding a day of results.
+    #
+    # LAST IN THE STAGGER, deliberately: it reads ~7GB and takes ~25s, so it
+    # runs after every poller has had its slot rather than alongside them.
+    # Verifies before it rotates and keeps 2 -- see the module docstring.
+    scheduler.add_job(
+        db_backup.run_backup,
+        "interval",
+        days=7,
+        id="db_backup",
+        next_run_time=base_tick + timedelta(seconds=12 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
     scheduler.add_job(
         soccer_xg_refresh.refresh,
         "interval",
