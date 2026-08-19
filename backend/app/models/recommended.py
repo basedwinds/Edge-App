@@ -41,22 +41,47 @@ _MAX_RACING_BETS_PER_EVENT = 3
 # (sport, /markets endpoint, weekly-pool settings field). Games view = weekly pool
 # only (Combined passes futures=[]), so no futures pool needed. Order + fields
 # mirror loadCombined's 11 builder calls exactly.
+# (sport, endpoint, weekly pool key, futures pool key or None).
+#
+# THE FUTURES KEY EXISTS BECAUSE CFB NEEDED IT (2026-08-19). The frontend
+# builders that receive season rows cap weekly and futures against SEPARATE
+# ceilings -- "capping them against the WEEKLY ceiling would let a slate of
+# games crowd out every futures row, or vice versa" (markets.ts). This mirror
+# had one ceiling for everything, which was harmless only while no sport put
+# staked futures rows on its /markets endpoint. CFB now does: 31 of its 39
+# staked rows are stake_pool "futures".
+#
+# None means the frontend builder for that sport takes no futures pool
+# (mma/tennis/soccer/racing), and futures rows are then capped as weekly --
+# exactly what a single-ceiling builder does.
 _SPORTS = [
-    ("nfl", "/markets", "weekly_pool_dollars"),
-    ("nba", "/nba/markets", "nba_weekly_pool_dollars"),
-    ("wnba", "/wnba/markets", "wnba_weekly_pool_dollars"),
-    ("mlb", "/mlb/markets", "mlb_weekly_pool_dollars"),
-    ("mma", "/mma/markets", "mma_weekly_pool_dollars"),
-    ("tennis", "/tennis/markets", "tennis_weekly_pool_dollars"),
-    ("soccer", "/soccer/markets", "soccer_weekly_pool_dollars"),
-    ("valorant", "/valorant/markets", "valorant_weekly_pool_dollars"),
-    ("cs2", "/cs2/markets", "cs2_weekly_pool_dollars"),
-    ("lol", "/lol/markets", "lol_weekly_pool_dollars"),
-    ("racing", "/racing/markets", "racing_weekly_pool_dollars"),
+    ("nfl", "/markets", "weekly_pool_dollars", "futures_pool_dollars"),
+    ("nba", "/nba/markets", "nba_weekly_pool_dollars", "nba_futures_pool_dollars"),
+    ("wnba", "/wnba/markets", "wnba_weekly_pool_dollars", "wnba_futures_pool_dollars"),
+    # CFB WAS MISSING ENTIRELY until 2026-08-19, while Combined.tsx's
+    # loadCombined has always included it -- so every CFB bet the app showed and
+    # staked was scored was_recommended=False and never reached the Discord
+    # alert. Invisible while CFB was tracked-not-staked (#208); the moment that
+    # lifted it would have mislabelled exactly the evidence the lift exists to
+    # collect.
+    ("cfb", "/cfb/markets", "cfb_weekly_pool_dollars", "cfb_futures_pool_dollars"),
+    ("mlb", "/mlb/markets", "mlb_weekly_pool_dollars", "mlb_futures_pool_dollars"),
+    ("mma", "/mma/markets", "mma_weekly_pool_dollars", None),
+    ("tennis", "/tennis/markets", "tennis_weekly_pool_dollars", None),
+    ("soccer", "/soccer/markets", "soccer_weekly_pool_dollars", None),
+    ("valorant", "/valorant/markets", "valorant_weekly_pool_dollars", "valorant_futures_pool_dollars"),
+    ("cs2", "/cs2/markets", "cs2_weekly_pool_dollars", "cs2_futures_pool_dollars"),
+    ("lol", "/lol/markets", "lol_weekly_pool_dollars", "lol_futures_pool_dollars"),
+    ("racing", "/racing/markets", "racing_weekly_pool_dollars", None),
+    # CoD is STILL ABSENT and that is a known gap, not an oversight: its
+    # frontend builder's pipeline was not verified, and adding it on a guess
+    # would trade one silent drift for another. It carries 25 rows and 0 staked
+    # today, so the gap is currently inert. See task #221.
 ]
 # per-sport JSON key that carries the game/match id
 _GID_KEY = {
     "nfl": "nfl_game_id", "nba": "nba_game_id", "wnba": "wnba_game_id", "mlb": "mlb_game_id",
+    "cfb": "cfb_game_id",
     "mma": "mma_fight_id", "tennis": "tennis_match_id", "soccer": "soccer_match_id",
     "valorant": "valorant_match_id", "cs2": "cs2_match_id", "lol": "lol_match_id",
     "racing": "race_event_id",
@@ -69,7 +94,7 @@ class _Row:
 
     __slots__ = ("id", "sport", "market_type", "source", "team", "line", "side",
                  "label", "edge", "volume", "stake", "stake_pool", "gameday", "event", "model_prob",
-                 "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
+                 "nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id", "mlb_game_id", "mma_fight_id",
                  "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
                  "lol_match_id", "race_event_id")
 
@@ -97,7 +122,7 @@ class _Row:
             ct = d.get("close_time")
             self.gameday = ct[:10] if ct else None
             self.event = d.get("race_event_id") if d.get("race_event_id") is not None else (d.get("event") or "")
-        for a in ("nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
+        for a in ("nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id", "mlb_game_id", "mma_fight_id",
                   "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
                   "lol_match_id", "race_event_id"):
             setattr(self, a, d.get(a))
@@ -125,14 +150,81 @@ def _prefer(cand: _Row, exist: _Row) -> bool:
 
 def _game_cap_id(r: _Row):
     # capToOneRowPerGame: NOTE wnba + racing are intentionally excluded (pass through)
-    return (r.nfl_game_id or r.nba_game_id or r.mlb_game_id or r.mma_fight_id or r.tennis_match_id
+    # cfb_game_id ADDED 2026-08-19. This is the hand-kept chain form, and the
+    # frontend's own rowGameId comment records that "the chain form is what
+    # silently dropped CFB: a sport missing from it skipped the per-game cap
+    # entirely, so one game could surface several correlated bets as if they
+    # were independent". The frontend fixed that by deriving from its sport
+    # registry; this copy still had the original defect.
+    return (r.nfl_game_id or r.nba_game_id or r.cfb_game_id or r.mlb_game_id
+            or r.mma_fight_id or r.tennis_match_id
             or r.soccer_match_id
             or (f"valorant:{r.valorant_match_id}" if r.valorant_match_id else None)
             or (f"cs2:{r.cs2_match_id}" if r.cs2_match_id else None)
             or (f"lol:{r.lol_match_id}" if r.lol_match_id else None))
 
 
-def _build_racing(rows: list[_Row], weekly_pool: float) -> list[_Row]:
+def _pool_cap(rows: list[_Row], weekly_pool: float,
+              futures_pool: float | None) -> list[_Row]:
+    """The frontend's portfolio cap, with SEPARATE weekly and futures ceilings.
+
+    futures_pool None means this sport's frontend builder takes no futures pool,
+    so everything is capped as weekly -- identical to the single-ceiling form
+    this file used for every sport before CFB needed the split. Passing a real
+    number turns on the two-ceiling behaviour markets.ts uses, whose own comment
+    is the reason it exists: capping season rows against the weekly ceiling
+    "would let a slate of games crowd out every futures row, or vice versa"."""
+    two = futures_pool is not None
+    ceil = {"weekly": max(0.0, (weekly_pool or 0.0) * _CEILING_PCT),
+            "futures": max(0.0, (futures_pool or 0.0) * _CEILING_PCT)}
+    cum = {"weekly": 0.0, "futures": 0.0}
+    shown: list[_Row] = []
+    for r in rows:
+        pool = "futures" if (two and r.stake_pool == "futures") else "weekly"
+        stake = r.stake or 0.0
+        if cum[pool] + stake > ceil[pool]:
+            continue
+        cum[pool] += stake
+        shown.append(r)
+    return shown
+
+
+def _build_cfb(rows: list[_Row], weekly_pool: float,
+               futures_pool: float | None = None) -> list[_Row]:
+    """Mirror buildCfbRecommendedBets, which matches NEITHER existing builder.
+
+    Like WNBA's it skips the ladder-collapse and per-player passes entirely
+    (markets.ts says so outright: "ladder or player-stat markets yet"), so
+    running _build_sport here would over-collapse. UNLIKE WNBA's it keeps the
+    REAL line -- WNBA forces line and side to null so every rung of a ladder
+    collapses into one key by construction, whereas CFB carries m.line and only
+    side is null. And unlike either, it caps weekly and futures separately.
+
+    So: cross-platform collapse -> per-game cap -> two-pool budget cap."""
+    for r in rows:                      # the builder sets side: null, keeps line
+        r.side = None
+    cands = [r for r in rows if r.stake]
+    xp: dict[str, _Row] = {}
+    for r in cands:
+        k = _cross_platform_key(r)
+        if k not in xp or _prefer(r, xp[k]):
+            xp[k] = r
+    deduped = sorted(xp.values(), key=_edge, reverse=True)
+    game_best: dict[str, _Row] = {}
+    non_game: list[_Row] = []
+    for r in deduped:
+        gid = _game_cap_id(r)
+        if gid is None:
+            non_game.append(r)
+            continue
+        gid = str(gid)
+        if gid not in game_best or _edge(r) > _edge(game_best[gid]):
+            game_best[gid] = r
+    after_game = sorted(non_game + list(game_best.values()), key=_edge, reverse=True)
+    return _pool_cap(after_game, weekly_pool, futures_pool)
+
+
+def _build_racing(rows: list[_Row], weekly_pool: float, futures_pool: float | None = None) -> list[_Row]:
     """Mirror buildRacingRecommendedBets, which does NOT use the shared pipeline:
     staked rows -> ONE bet per race event (best stake wins, ties by first) ->
     budget cap that always keeps the first row (`&& rows.length > 0`)."""
@@ -172,7 +264,7 @@ def _build_racing(rows: list[_Row], weekly_pool: float) -> list[_Row]:
     return out
 
 
-def _build_wnba(rows: list[_Row], weekly_pool: float) -> list[_Row]:
+def _build_wnba(rows: list[_Row], weekly_pool: float, futures_pool: float | None = None) -> list[_Row]:
     """Mirror buildWnbaRecommendedBets, which is a LEANER variant of the shared
     pipeline: it builds candidates with `line` and `side` forced to null (so every
     rung of a game's ladder collapses into one cross-platform key by construction)
@@ -201,18 +293,10 @@ def _build_wnba(rows: list[_Row], weekly_pool: float) -> list[_Row]:
         if gid not in game_best or _edge(r) > _edge(game_best[gid]):
             game_best[gid] = r
     after_game = sorted(non_game + list(game_best.values()), key=_edge, reverse=True)
-    ceiling = max(0.0, (weekly_pool or 0.0) * _CEILING_PCT)
-    cumulative = 0.0
-    shown: list[_Row] = []
-    for r in after_game:
-        if cumulative + (r.stake or 0.0) > ceiling:
-            continue
-        cumulative += r.stake or 0.0
-        shown.append(r)
-    return shown
+    return _pool_cap(after_game, weekly_pool, futures_pool)
 
 
-def _build_sport(rows: list[_Row], weekly_pool: float) -> list[_Row]:
+def _build_sport(rows: list[_Row], weekly_pool: float, futures_pool: float | None = None) -> list[_Row]:
     # 1. candidates = staked rows
     cands = [r for r in rows if r.stake]
     # 2. ladder-collapse (best edge per ladder key)
@@ -252,15 +336,7 @@ def _build_sport(rows: list[_Row], weekly_pool: float) -> list[_Row]:
             game_best[gid] = r
     after_game = sorted(non_game + list(game_best.values()), key=_edge, reverse=True)
     # 7. weekly-pool budget cap (games view: everything is the weekly pool)
-    ceiling = max(0.0, (weekly_pool or 0.0) * _CEILING_PCT)
-    cumulative = 0.0
-    shown: list[_Row] = []
-    for r in after_game:
-        if cumulative + (r.stake or 0.0) > ceiling:
-            continue
-        cumulative += r.stake or 0.0
-        shown.append(r)
-    return shown
+    return _pool_cap(after_game, weekly_pool, futures_pool)
 
 
 def _builder_for(sport: str):
@@ -268,7 +344,8 @@ def _builder_for(sport: str):
     leaner frontend builders (see each function). Dispatching in ONE place means
     the live path and the snapshot/verification path can't drift apart, which they
     silently did once (the live path kept calling _build_sport for racing)."""
-    return {"racing": _build_racing, "wnba": _build_wnba}.get(sport, _build_sport)
+    return {"racing": _build_racing, "wnba": _build_wnba,
+            "cfb": _build_cfb}.get(sport, _build_sport)
 
 
 def _fetch(client: httpx.Client, ep: str, failures: list | None = None) -> list[dict]:
@@ -329,19 +406,23 @@ def compute_recommended(settings: dict, snapshot: dict | None = None,
     out: list[_Row] = []
     if snapshot is not None:
         rd = snapshot.get("readiness") or {}
-        for sport, _ep, pool_key in _SPORTS:
+        for sport, _ep, pool_key, fut_key in _SPORTS:
             rows = [_Row(sport, d) for d in snapshot.get(sport, [])]
-            out.extend(_builder_for(sport)(rows, settings.get(pool_key) or 0.0))
+            out.extend(_builder_for(sport)(
+                rows, settings.get(pool_key) or 0.0,
+                (settings.get(fut_key) or 0.0) if fut_key else None))
     else:
         from app.shutdown import is_shutting_down
 
         with httpx.Client(timeout=90.0) as client:
             rd = _fetch_readiness(client)
-            for sport, ep, pool_key in _SPORTS:
+            for sport, ep, pool_key, fut_key in _SPORTS:
                 if is_shutting_down():  # see app/shutdown.py -- unkillable worker
                     break
                 rows = [_Row(sport, d) for d in _fetch(client, ep, failures)]
-                out.extend(_builder_for(sport)(rows, settings.get(pool_key) or 0.0))
+                out.extend(_builder_for(sport)(
+                    rows, settings.get(pool_key) or 0.0,
+                    (settings.get(fut_key) or 0.0) if fut_key else None))
     out = [r for r in out if not _not_ready(r, rd)]  # readiness runs at display, after budget cap
     out.sort(key=lambda r: -(r.stake or 0.0))
     return out
