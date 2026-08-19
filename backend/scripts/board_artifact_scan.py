@@ -254,23 +254,47 @@ def check_start_times() -> None:
     if not rows:
         record("PASS", "soccer kickoff accuracy", "no fixtures stored for today")
         return
+    # TWO DEFECTS FIXED 2026-08-19, both of which made this check report a
+    # 21.5-hour error on a fixture whose stored time was EXACTLY RIGHT.
+    #
+    # 1. A ONE-DAY ESPN WINDOW misses the fixture it is trying to judge. ESPN
+    #    files an event under its own LOCAL date. A South American evening
+    #    kickoff is 00:30Z the NEXT UTC day, so a fixture stored as 00:30Z on
+    #    the 19th sits in ESPN's 18th. Asking only for the 19th returns that
+    #    league's OTHER matches -- the ones actually played on the 19th, around
+    #    22:00Z -- and never the one we asked about. Window is now +/-1 day.
+    #
+    # 2. IT NEVER MATCHED BY TEAM. It took min(abs(gap)) across every event in
+    #    the league that day, so it was asking "is ANY match kicking off near
+    #    ours", not "is OUR match where we think it is". That can pass by luck
+    #    and fail by luck; here it compared a 00:30Z fixture against a 22:00Z
+    #    one and called our data 1290 minutes wrong. Events are now matched on
+    #    BOTH clubs through canonical_team_key, and a fixture with no matching
+    #    ESPN event is SKIPPED (counted and reported) rather than silently
+    #    compared against a stranger.
+    from app.ingestion.market_matcher_soccer import canonical_team_key as _ck
+
     leagues = {r[0] for r in rows if r[0] in LEAGUE_CODES}
     truth = {}
-    day = datetime.datetime.utcnow().strftime("%Y%m%d")
+    today = datetime.datetime.utcnow().date()
+    lo = (today - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    hi = (today + datetime.timedelta(days=1)).strftime("%Y%m%d")
     for lg in leagues:
         try:
             d = json.load(urllib.request.urlopen(
                 "https://site.api.espn.com/apis/site/v2/sports/soccer/"
-                f"{LEAGUE_CODES[lg]}/scoreboard?dates={day}", timeout=25))
+                f"{LEAGUE_CODES[lg]}/scoreboard?dates={lo}-{hi}&limit=200", timeout=25))
         except Exception:
             continue
         for e in d.get("events", []):
             try:
-                truth.setdefault(lg, []).append(
-                    datetime.datetime.strptime(e["date"].replace("Z", ""), "%Y-%m-%dT%H:%M"))
+                cs = e["competitions"][0]["competitors"]
+                names = {_ck(c["team"]["displayName"]) for c in cs}
+                when = datetime.datetime.strptime(e["date"].replace("Z", ""), "%Y-%m-%dT%H:%M")
+                truth.setdefault(lg, []).append((names, when))
             except Exception:
                 pass
-    bad = []
+    bad, unmatched = [], 0
     for lg, h, a, est in rows:
         if lg not in truth:
             continue
@@ -279,14 +303,22 @@ def check_start_times() -> None:
                 str(est).replace("Z", "").replace("T", " ")[:16], "%Y-%m-%d %H:%M")
         except Exception:
             continue
-        gap = min(abs((st - t).total_seconds()) for t in truth[lg]) / 60.0
+        ours = {_ck(h), _ck(a)}
+        hits = [when for names, when in truth[lg] if len(ours & names) == 2]
+        if not hits:
+            unmatched += 1
+            continue
+        gap = min(abs((st - t).total_seconds()) for t in hits) / 60.0
         if gap > 30:
             bad.append(f"{h} v {a} off by {gap:.0f}min")
+    note = f" ({unmatched} not found on ESPN, skipped)" if unmatched else ""
     if bad:
         record("FAIL", "soccer kickoff accuracy",
-               f"{len(bad)} fixture(s) >30min from ESPN: {bad[:3]}")
+               f"{len(bad)} fixture(s) >30min from their OWN ESPN event: {bad[:3]}{note}")
     else:
-        record("PASS", "soccer kickoff accuracy", f"{len(rows)} fixtures within 30min")
+        record("PASS", "soccer kickoff accuracy",
+               f"{len(rows) - unmatched} fixtures matched to their own ESPN event, "
+               f"all within 30min{note}")
 
 
 # ------------------------------------------------------ 2. GRID vs ENTRANTS
