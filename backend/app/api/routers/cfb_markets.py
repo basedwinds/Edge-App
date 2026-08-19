@@ -380,27 +380,42 @@ def list_cfb_markets(session: Session = Depends(get_session)):
                                            yes_bid=snap.yes_bid if snap else None,
                                            yes_ask=snap.yes_ask if snap else None,
                                            sport="cfb", team=m.team)
-        # ---- CFB IS TRACKED, NOT STAKED (#208) ----
+        # ---- CFB STAKING LIFTED 2026-08-19 (was #208 tracked-not-staked) ----
         #
-        # The 20pp edge gate raised on 2026-08-17 was validated on 520 settled
-        # bets spanning tennis, mlb, cs2, lol, valorant, wnba, soccer, mma and
-        # racing. CFB contributed ZERO of them -- it has never settled a single
-        # tracked bet.
+        # The suppression's own exit condition was "once CFB has settled bets of
+        # its own to validate against". IT COULD NEVER BE MET. paper_logger.py
+        # records a row only `if row.get("suggested_stake_dollars")`, so a
+        # suppressed CFB row is never paper-logged, never settles, and never
+        # produces the evidence required to release it. The season starting
+        # changes nothing about that loop.
         #
-        # That matters because CFB would otherwise DOMINATE the gated board: at
-        # >=20pp the live board is 130 rows and 70 of them are CFB. Applying a
-        # threshold measured without CFB and then handing CFB half the resulting
-        # board is an out-of-domain extrapolation, and it lands on exactly the
-        # sport already identified as the entire residue of the "wide books
-        # manufacture edge" finding (#185) -- preseason lines, model_approximate,
-        # the widest books on the board.
+        # This file had already reasoned its way to the right answer 300 lines
+        # up, for the playoff-proxy market types: suppressing them "meant they
+        # would never become paper bets, never accrue forward CLV, and never be
+        # evaluated -- guaranteeing we could never learn whether the
+        # approximation works. That directly contradicts this app's whole
+        # premise." The #208 block then did the thing that comment argues
+        # against, to the whole sport.
         #
-        # Same posture as map_winner and the blind esports tournaments: priced
-        # and shown so it accrues forward evidence, never sized. LIFT THIS once
-        # CFB has settled bets of its own to validate against -- the season
-        # starts in late August, so that is weeks not months away.
-        kelly = None
-        stake_dollars = None
+        # The original concern was real and is NOT dismissed: CFB is the residue
+        # of the wide-books-manufacture-edge finding (#185), and the 20pp gate
+        # was fitted without it. But an untestable-by-construction concern is
+        # settled by measuring it forward with a review date, not by keeping the
+        # sport dark. Everything is paper-traded, so the cost of being wrong is a
+        # distorted tracker, not money.
+        #
+        # Futures lift with it, and that was a CORRECTION mid-discussion: keeping
+        # them suppressed was a CFB-specific exception justified by a general
+        # objection to futures ("season-long lockup, one data point per season")
+        # that applies equally to NBA, NFL, MLB and soccer futures -- all of
+        # which stake today (NBA 20 rows, soccer 6, NFL 4, MLB 1). CFB futures
+        # pass the same price floor, spread guard and global cap as every other
+        # sport, and the APPROXIMATE_MARKET_TYPES badge still flags the proxy
+        # ladders in the UI.
+        #
+        # REVIEW ~2026-09-09 on CFB's OWN settled bets: win rate by edge band,
+        # and whether 20pp is the right threshold for this sport specifically.
+        # Re-suppress with data if it looks like manufactured edge.
         # SAME GATE THE FUTURES BLOCK ALREADY APPLIES, and it belonged here just
         # as much. A team whose rating was built almost entirely outside the FBS
         # pool is measured on a different scale from the opponent it is priced
@@ -590,27 +605,11 @@ def list_cfb_futures(session: Session = Depends(get_session)):
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied,
                                            unit_dollars, flat_marginal, flat_full,
                                            unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None, sport="cfb", team=m.team)
-        # ---- CFB IS TRACKED, NOT STAKED (#208) ----
-        #
-        # The 20pp edge gate raised on 2026-08-17 was validated on 520 settled
-        # bets spanning tennis, mlb, cs2, lol, valorant, wnba, soccer, mma and
-        # racing. CFB contributed ZERO of them -- it has never settled a single
-        # tracked bet.
-        #
-        # That matters because CFB would otherwise DOMINATE the gated board: at
-        # >=20pp the live board is 130 rows and 70 of them are CFB. Applying a
-        # threshold measured without CFB and then handing CFB half the resulting
-        # board is an out-of-domain extrapolation, and it lands on exactly the
-        # sport already identified as the entire residue of the "wide books
-        # manufacture edge" finding (#185) -- preseason lines, model_approximate,
-        # the widest books on the board.
-        #
-        # Same posture as map_winner and the blind esports tournaments: priced
-        # and shown so it accrues forward evidence, never sized. LIFT THIS once
-        # CFB has settled bets of its own to validate against -- the season
-        # starts in late August, so that is weeks not months away.
-        kelly = None
-        stake_dollars = None
+        # ---- CFB STAKING LIFTED 2026-08-19 -- see the game-markets block above
+        # for the full reasoning. Futures lift WITH games: keeping them back was
+        # a CFB-specific exception resting on a general objection to futures.
+        # The price floor, spread guard and global cap below are unchanged, and
+        # APPROXIMATE_MARKET_TYPES still badges the proxy ladders.
         # A team whose rating was built almost entirely outside the FBS pool is
         # priced on a scale the rest of this market is not on. Shown with its
         # model number so it can be tracked, never staked -- same posture as the
