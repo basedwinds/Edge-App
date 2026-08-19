@@ -30,6 +30,19 @@ _CEILING_PCT = 0.6  # markets.ts PORTFOLIO_CEILING_PCT
 _LADDER = {"win_total", "wins_any", "division_wins", "season_pass_yds", "season_rush_yds",
            "season_rec_yds", "season_rush_tds", "season_rec_tds", "season_rec"}
 _GAME_LADDER = {"spread", "total", "team_total", "spread_1h", "spread_2h", "total_1h", "total_2h"}
+# Esports SERIES ladders, per title -- mirrors markets.ts's VALORANT/CS2/LOL/
+# COD_LADDER_TYPES. Polymarket lists "O/U N.5 maps" at several lines on one
+# series and those rungs are the same real proposition, so the frontend
+# collapses them; this file did not, because series_total is in neither _LADDER
+# nor _GAME_LADDER and so fell through to the never-collapse branch. That made
+# the mirror a SUPERSET of the board for cs2/lol/valorant -- the permissive
+# direction, but still drift.
+_ESPORTS_LADDER = {
+    "valorant": {"series_total", "series_handicap"},   # only Valorant has a handicap type
+    "cs2": {"series_total"},
+    "lol": {"series_total"},
+    "cod": {"series_total"},
+}
 _PLAYER_STAT = {"season_pass_yds", "season_rush_yds", "season_rec_yds", "season_rush_tds",
                 "season_rec_tds", "season_rec"}
 # Season champion futures belong on the Futures page, not the cross-sport games
@@ -73,15 +86,17 @@ _SPORTS = [
     ("cs2", "/cs2/markets", "cs2_weekly_pool_dollars", "cs2_futures_pool_dollars"),
     ("lol", "/lol/markets", "lol_weekly_pool_dollars", "lol_futures_pool_dollars"),
     ("racing", "/racing/markets", "racing_weekly_pool_dollars", None),
-    # CoD is STILL ABSENT and that is a known gap, not an oversight: its
-    # frontend builder's pipeline was not verified, and adding it on a guess
-    # would trade one silent drift for another. It carries 25 rows and 0 staked
-    # today, so the gap is currently inert. See task #221.
+    # CoD, added 2026-08-19 once its pipeline was VERIFIED rather than guessed:
+    # buildCodRecommendedBets delegates to the SAME
+    # buildEsportsTitleRecommendedBets as valorant/cs2/lol, with
+    # COD_LADDER_TYPES = {"series_total"} -- so it takes the shared builder,
+    # exactly like its three siblings.
+    ("cod", "/cod/markets", "cod_weekly_pool_dollars", "cod_futures_pool_dollars"),
 ]
 # per-sport JSON key that carries the game/match id
 _GID_KEY = {
     "nfl": "nfl_game_id", "nba": "nba_game_id", "wnba": "wnba_game_id", "mlb": "mlb_game_id",
-    "cfb": "cfb_game_id",
+    "cfb": "cfb_game_id", "cod": "cod_match_id",
     "mma": "mma_fight_id", "tennis": "tennis_match_id", "soccer": "soccer_match_id",
     "valorant": "valorant_match_id", "cs2": "cs2_match_id", "lol": "lol_match_id",
     "racing": "race_event_id",
@@ -96,7 +111,7 @@ class _Row:
                  "label", "edge", "volume", "stake", "stake_pool", "gameday", "event", "model_prob",
                  "nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id", "mlb_game_id", "mma_fight_id",
                  "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
-                 "lol_match_id", "race_event_id")
+                 "lol_match_id", "cod_match_id", "race_event_id")
 
     def __init__(self, sport: str, d: dict):
         self.id = d.get("id")
@@ -124,7 +139,7 @@ class _Row:
             self.event = d.get("race_event_id") if d.get("race_event_id") is not None else (d.get("event") or "")
         for a in ("nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id", "mlb_game_id", "mma_fight_id",
                   "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
-                  "lol_match_id", "race_event_id"):
+                  "lol_match_id", "cod_match_id", "race_event_id"):
             setattr(self, a, d.get(a))
 
 
@@ -133,6 +148,11 @@ def _edge(r: _Row) -> float:
 
 
 def _ladder_key(r: _Row) -> str:
+    esports = _ESPORTS_LADDER.get(r.sport)
+    if esports and r.market_type in esports:           # esports series ladder
+        mid = (r.valorant_match_id or r.cs2_match_id or r.lol_match_id
+               or r.cod_match_id or "")
+        return f"{r.market_type}|{r.source}|{mid}|{r.team or ''}|{r.side or ''}"
     if r.market_type in _LADDER:                       # season ladder -> recommendedKey
         return f"{r.market_type}|{r.source}|{r.team if r.team is not None else r.label}"
     if r.market_type in _GAME_LADDER:                  # game ladder -> gameLadderKey
@@ -161,7 +181,8 @@ def _game_cap_id(r: _Row):
             or r.soccer_match_id
             or (f"valorant:{r.valorant_match_id}" if r.valorant_match_id else None)
             or (f"cs2:{r.cs2_match_id}" if r.cs2_match_id else None)
-            or (f"lol:{r.lol_match_id}" if r.lol_match_id else None))
+            or (f"lol:{r.lol_match_id}" if r.lol_match_id else None)
+            or (f"cod:{r.cod_match_id}" if r.cod_match_id else None))
 
 
 def _pool_cap(rows: list[_Row], weekly_pool: float,

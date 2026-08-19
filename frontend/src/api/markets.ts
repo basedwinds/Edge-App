@@ -725,6 +725,10 @@ export interface RecommendedBetRow {
   valorantMatchId: number | null;
   cs2MatchId: number | null;
   lolMatchId: number | null;
+  // Optional so the dozen other builders that never touch CoD do not each
+  // need a null line. See buildEsportsTitleRecommendedBets: CoD's match id
+  // had nowhere to live, so it was computed and discarded.
+  codMatchId?: number | null;
   /** One id per real FIXTURE. An esports match can exist as TWO rows -- a
    * Kalshi one and a Polymarket one that spell a team differently -- with
    * different match ids. Both the cross-platform dedupe and the per-match
@@ -2241,6 +2245,15 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
       valorantMatchId: sport === "valorant" ? matchId : null,
       cs2MatchId: sport === "cs2" ? matchId : null,
       lolMatchId: sport === "lol" ? matchId : null,
+      // CoD WAS COMPUTING matchIdOf(m) AND THROWING IT AWAY (fixed 2026-08-19).
+      // Only three titles had a line here, so every CoD row carried a null
+      // match id: ladderKey below then keyed on an EMPTY id, collapsing two
+      // different CoD matches with the same team and side into one row, and
+      // rowGameId found no id so CoD skipped the per-game cap entirely -- one
+      // match could surface several correlated bets as if independent. Inert
+      // only because CoD has never had a staked row (candidates filters on
+      // stake); it is wired to stake, so this was waiting to fire.
+      codMatchId: sport === "cod" ? matchId : null,
       // Backend-supplied: the SAME value on both rows of a fixture that exists
       // once per platform, so the dedupe + per-match cap treat them as one.
       fixtureKey: (m as { fixture_key?: number | null }).fixture_key ?? null,
@@ -2264,7 +2277,7 @@ function buildEsportsTitleRecommendedBets<M extends { id: number; market_type: s
   // genuinely different outcomes" reasoning as every other sport's
   // non-ladder market types.
   const ladderKey = (row: RecommendedBetRow) =>
-    `${row.marketType}|${row.source}|${row.valorantMatchId ?? row.cs2MatchId ?? row.lolMatchId ?? ""}|${row.team ?? ""}|${row.side ?? ""}`;
+    `${row.marketType}|${row.source}|${row.valorantMatchId ?? row.cs2MatchId ?? row.lolMatchId ?? row.codMatchId ?? ""}|${row.team ?? ""}|${row.side ?? ""}`;
   const ladderCollapsed = new Map<string, RecommendedBetRow>();
   for (const row of candidates) {
     const key = ladderTypes.has(row.marketType) ? ladderKey(row) : row.key;
