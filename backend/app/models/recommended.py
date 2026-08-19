@@ -26,6 +26,24 @@ log = logging.getLogger("recommended")
 
 _BASE = "http://127.0.0.1:8756"
 _CEILING_PCT = 0.6  # markets.ts PORTFOLIO_CEILING_PCT
+# markets.ts MIN_RECOMMEND_VOLUME. Every one of the ten frontend builders drops
+# a candidate that has not traded this much -- unconditionally, including CFB's
+# season rows -- and this mirror applied NO volume filter at all, so its set was
+# a superset of the board: 7 of 32 rows on a live check were under 100, which
+# would score was_recommended=False against bets the board never offered and
+# would alert on rows you cannot see.
+#
+# NOT A JUDGEMENT ON THE THRESHOLD. 100 is copied to match the frontend, and the
+# evidence says the number itself deserves a fresh look in the opposite
+# direction: on 16,110 settled observations the MARKET is as well calibrated at
+# volume <10 as at >10k, and in the >=20pp tail the thin band is the BEST
+# performer (model +4.2pp overconfident) while >1k volume is the worst
+# (+29.6pp). Raising this would cut the band that holds up. See #224.
+_TRADED_MIN = 100.0
+
+
+def _traded(r: "_Row") -> bool:   # _Row is defined below; quoted so this resolves
+    return (r.volume or 0.0) >= _TRADED_MIN
 
 _LADDER = {"win_total", "wins_any", "division_wins", "season_pass_yds", "season_rush_yds",
            "season_rec_yds", "season_rush_tds", "season_rec_tds", "season_rec"}
@@ -246,7 +264,7 @@ def _build_cfb(rows: list[_Row], weekly_pool: float,
     So: cross-platform collapse -> per-game cap -> two-pool budget cap."""
     for r in rows:                      # the builder sets side: null, keeps line
         r.side = None
-    cands = [r for r in rows if r.stake]
+    cands = [r for r in rows if r.stake and _traded(r)]
     xp: dict[str, _Row] = {}
     for r in cands:
         k = _cross_platform_key(r)
@@ -275,7 +293,7 @@ def _build_racing(rows: list[_Row], weekly_pool: float, futures_pool: float | No
     # Futures page -- and both model_prob + edge must be real.
     staked = [r for r in rows
               if r.market_type not in _RACING_CHAMP and (r.stake or 0) > 0
-              and r.model_prob is not None and r.edge is not None]
+              and r.model_prob is not None and r.edge is not None and _traded(r)]
     # Mirrors the frontend byStakeThenEdge + per-DRIVER / per-race caps (see
     # buildRacingRecommendedBets for why racing doesn't use the one-row-per-game
     # rule: podium bets on different drivers can all win, so they diversify; the
@@ -318,7 +336,7 @@ def _build_wnba(rows: list[_Row], weekly_pool: float, futures_pool: float | None
     for r in rows:                      # match the builder's null line/side
         r.line = None
         r.side = None
-    cands = [r for r in rows if r.stake]
+    cands = [r for r in rows if r.stake and _traded(r)]
     xp: dict[str, _Row] = {}
     for r in cands:
         k = _cross_platform_key(r)
@@ -341,7 +359,7 @@ def _build_wnba(rows: list[_Row], weekly_pool: float, futures_pool: float | None
 
 def _build_sport(rows: list[_Row], weekly_pool: float, futures_pool: float | None = None) -> list[_Row]:
     # 1. candidates = staked rows
-    cands = [r for r in rows if r.stake]
+    cands = [r for r in rows if r.stake and _traded(r)]
     # 2. ladder-collapse (best edge per ladder key)
     ladder: dict[str, _Row] = {}
     for r in cands:
