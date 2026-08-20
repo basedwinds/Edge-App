@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpDown, CircleCheck, Hourglass, Info, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { perGamePoolLabel, fetchOpenBets, fetchReadiness, isRowNotReady, crossPlatformKey, rowGameId, type RecommendedBetRow } from "../../api/markets";
+import { perGamePoolLabel, fetchOpenBets, fetchReadiness, isRowNotReady, placedMatchKeys, placedGameKeys, type RecommendedBetRow } from "../../api/markets";
 
 // Shared across every Recommended page: the cross-platform KEYS of bets already
 // placed (any pool, EITHER book), so a proposition you've marked reads "Placed"
@@ -457,6 +457,14 @@ const sportColumn = columnHelper.accessor("sport", {
   ),
 });
 
+/** True when a REAL open bet already covers this row, under either id spelling.
+ * See placedMatchKeys -- the backend keys on the sport's own match id while the
+ * board keys on fixtureKey, and on a merged fixture those differ. */
+function isAlreadyPlaced(row: RecommendedBetRow, placed: Set<string>): boolean {
+  if (placedMatchKeys(row).some((k) => placed.has(k))) return true;
+  return placedGameKeys(row).some((g) => placed.has(`game:${g}`));
+}
+
 export function RecommendedBetsTable({
   rows,
   onMarkPlaced,
@@ -483,7 +491,32 @@ export function RecommendedBetsTable({
   // season isn't active/near (same rule as the Discord alerts). Fails open
   // (shows everything) until readiness loads, so nothing flickers away wrongly.
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: fetchReadiness }).data;
-  const data = useMemo(() => rows.filter((r) => !isRowNotReady(r, readiness)), [rows, readiness]);
+  // A BET YOU HAVE ALREADY PLACED IS NOT A RECOMMENDATION.
+  //
+  // This table used to only BADGE a placed row -- green "Placed", button
+  // disabled, row still sitting in the list. The per-sport pages (CfbRecommended,
+  // CodRecommended) have always FILTERED instead, so the cross-sport board was
+  // the odd one out and it reads as the app failing to notice (user-reported
+  // 2026-08-20: "I marked bnk fearx vs brion as placed and its in the bet
+  // tracker but not clearing from the all bets recommended section"). A list you
+  // work top-down is only useful if what you have done leaves it.
+  //
+  // Filtering on the GAME key as well as the proposition key is deliberate and
+  // is not over-broad: the board already caps to ONE row per game because bets
+  // on the same game are correlated (see placed_bets.py::_game_key), so the row
+  // that would remain after placing is a second correlated position on a game
+  // already backed, which is exactly what that cap exists to prevent.
+  //
+  // SESSION-MARKED ROWS STAY. markedKeys is this mount's own state, so a row you
+  // just clicked keeps its green confirmation instead of vanishing under the
+  // cursor; it is gone on the next load, which is the behaviour being asked for.
+  // effectivePlaced is empty while its query loads, so this FAILS OPEN and can
+  // never blank the board.
+  const data = useMemo(() => rows.filter((r) => {
+    if (isRowNotReady(r, readiness)) return false;
+    if (markedKeys.has(r.key)) return true;
+    return !isAlreadyPlaced(r, effectivePlaced);
+  }), [rows, readiness, effectivePlaced, markedKeys]);
 
   async function handleMark(row: RecommendedBetRow) {
     setMarkingKeys((prev) => new Set(prev).add(row.key));
@@ -506,11 +539,9 @@ export function RecommendedBetsTable({
       const marking = markingKeys.has(row.original.key);
       // "marked" = tapped this session OR already recorded as placed (survives
       // remounts, so a bet you placed earlier still reads "Placed" on return).
-      const rowGid = rowGameId(row.original);
       const marked =
         markedKeys.has(row.original.key) ||
-        effectivePlaced.has(crossPlatformKey(row.original)) ||
-        (rowGid !== null && effectivePlaced.has(`game:${rowGid}`));
+        isAlreadyPlaced(row.original, effectivePlaced);
       return (
         <div className="flex items-center gap-2">
           <button
@@ -598,7 +629,14 @@ export function RecommendedBetsTable({
           {table.getRowModel().rows.length === 0 && (
             <tr>
               <td colSpan={columns.length + 1} className="px-4 py-10 text-center text-[var(--color-text-dim)]">
-                No bets currently clear the staking threshold (edge below 20pp, or nothing priced yet).
+                {/* "Nothing qualified" and "you already took everything that
+                    qualified" are opposite situations and used to read the same.
+                    Now that placed rows LEAVE the list, an empty board right
+                    after placing the last one would otherwise look like the
+                    board had broken. */}
+                {rows.length > 0
+                  ? "Every bet that cleared the threshold is already placed — see the Bet Tracker."
+                  : "No bets currently clear the staking threshold (edge below 20pp, or nothing priced yet)."}
               </td>
             </tr>
           )}

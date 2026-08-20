@@ -1085,6 +1085,40 @@ function preferForCrossPlatformCollapse(candidate: RecommendedBetRow, existing: 
  * matches at GAME level so a second, correlated line on a game you've already bet
  * (place Over 4.5, then Over 5.5 becomes the best row) reads as placed rather than
  * as a fresh opportunity -- consistent with the one-row-per-game cap below. */
+/** EVERY key a placed bet could have been recorded under for this row.
+ *
+ * crossPlatformKey prefers `fixtureKey`, which deliberately collapses the two
+ * rows a merged duplicate fixture produces. placed_bets.py::_cross_platform_key
+ * has NO fixtureKey to prefer and always uses the sport's own match id -- so its
+ * "BYTE-IDENTICAL to the frontend" claim holds for every row except one whose
+ * fixture was merged, which is exactly where the two ids differ.
+ *
+ * REAL BUG (user-reported 2026-08-20): "I marked bnk fearx vs brion as placed
+ * and its in the bet tracker but not clearing from the all bets recommended
+ * section". The bet was recorded under lol:829 (lol_match_id) while the board
+ * computed lol:757 (fixtureKey), so the row was neither badged nor filtered --
+ * it was not even showing "Placed". Seven LoL rows carried that mismatch, all on
+ * that one merged fixture.
+ *
+ * Checking BOTH is the safe direction: an extra key can only match when a real
+ * placed bet exists under it, whereas picking one id would silently reintroduce
+ * this for whichever half of the pairing lost. */
+export function placedMatchKeys(row: Parameters<typeof crossPlatformKey>[0]): string[] {
+  const withFixture = crossPlatformKey(row);
+  const raw = crossPlatformKey({ ...row, fixtureKey: null });
+  return withFixture === raw ? [withFixture] : [withFixture, raw];
+}
+
+/** Same idea for the GAME-level key that Combined stores as `game:<id>`. */
+export function placedGameKeys(row: Parameters<typeof rowGameId>[0] & { fixtureKey?: number | null }): string[] {
+  const withFixture = gameIdForRow(row);
+  const raw = gameIdForRow({ ...row, fixtureKey: null });
+  const out: string[] = [];
+  if (withFixture) out.push(withFixture);
+  if (raw && raw !== withFixture) out.push(raw);
+  return out;
+}
+
 export function rowGameId(row: {
   nflGameId: string | null; nbaGameId?: string | null; wnbaGameId?: string | null;
   mlbGameId?: string | null; cfbGameId?: string | null; mmaFightId?: string | null;

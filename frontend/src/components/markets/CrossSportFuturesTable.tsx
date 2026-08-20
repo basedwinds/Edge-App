@@ -74,6 +74,21 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
   const placedKeys = placedQuery.data ?? EMPTY_KEYS;
   const isPlaced = (row: CrossSportFuturesRow) => placedIds.has(row.id) || placedKeys.has(propKey(row));
 
+  // A FUTURE YOU HAVE ALREADY PLACED IS NOT A RECOMMENDATION -- same reasoning
+  // as RecommendedBetsTable, and asked for in the same breath ("can we clear the
+  // futures from the list after they've been marked as placed too?"). Futures
+  // capacity is rationed by hand off this very list, so a row you have already
+  // taken is pure noise competing for attention with rows you have not.
+  //
+  // placedIds is THIS mount's own state, so a row you just clicked keeps its
+  // "Placed" confirmation rather than vanishing under the cursor; it is gone on
+  // the next load. placedKeys (persisted, from real open bets) is what actually
+  // removes it, and it is empty while its query loads, so this FAILS OPEN.
+  const visibleRows = useMemo(
+    () => rows.filter((r) => placedIds.has(r.id) || !placedKeys.has(propKey(r))),
+    [rows, placedIds, placedKeys],
+  );
+
   async function place(row: CrossSportFuturesRow) {
     // A row the model DECLINED to size is not placeable. It used to be booked at
     // a fabricated fallback -- which meant the safety gates were showing a stake
@@ -103,7 +118,7 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
     return "—";   // the model declined to size this one; do not invent a number
   }, [unitDollars]);
 
-  if (rows.length === 0) {
+  if (visibleRows.length === 0) {
     return (
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-6 text-sm text-[var(--color-text-dim)]">
         No edge-qualified futures right now (≥3pp model-vs-market disagreement). Futures are season-long/tournament markets — they show here so you can place them for calibration tracking.
@@ -127,7 +142,7 @@ export function CrossSportFuturesTable({ rows: allRows }: { rows: CrossSportFutu
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border)]">
-          {rows.map((r) => (
+          {visibleRows.map((r) => (
             <tr key={`${r.sport}-${r.id}`} className="hover:bg-[var(--color-surface)] align-top">
               <td className="px-3 py-2 text-[var(--color-text-dim)] whitespace-nowrap">{SPORT_LABEL[r.sport] ?? r.sport}</td>
               <td className="px-3 py-2 max-w-[15rem]">
