@@ -40,6 +40,41 @@ function reasoningTarget(b: { market_id: number; sport: string; model_prob_at_pl
   return { marketId: b.market_id, sport: b.sport as ReasoningSport, modelProb: b.model_prob_at_placement, marketProb: b.market_prob_at_placement };
 }
 
+/** THE PRICE YOU ACTUALLY PAID, from the side you bought.
+ *
+ * Every probability on a placed bet is stored in the YES frame, deliberately,
+ * so the numbers mean one thing everywhere. That is right for the data and
+ * wrong for this table: a NO bet on a 72%-priced favourite cost 28c, not 72c,
+ * and the row rendered "NO — DRX Challengers ... 72%", which reads as having
+ * paid 72 for the underdog side. User-reported 2026-08-20: "it said NO — DRX
+ * Challengers implying that we're betting on BRION but DRX is the favorite
+ * however the market for NO was 72%?" -- the confusion is the display's, not
+ * theirs.
+ *
+ * RecommendedBetsTable already fixed exactly this ("SHOWN FROM THE SIDE YOU ARE
+ * ACTUALLY BUYING"). The tracker got the "NO — " label half of that change on
+ * 2026-08-18 and not the price half, so the label said one side and the number
+ * said the other.
+ *
+ * Applied at RENDER only. The payload stays YES-framed so reasoningTarget keeps
+ * handing the reasoning modal the frame it explains in. */
+function boughtSideProb(prob: number | null | undefined, position?: string | null): number | null {
+  if (prob == null) return null;
+  return position === "no" ? 1 - prob : prob;
+}
+
+/** A price MOVE, signed from the bet's point of view.
+ *
+ * NowCell's contract is "positive means the number moved toward the side that
+ * was backed", but the backend computes it as a plain YES-frame subtraction
+ * (placed_bets.py::_move, `now - entry`) with no position flip -- so for a NO
+ * bet it said the opposite of what it promised. DRX drifting 0.72 -> 0.80 is
+ * the market moving AGAINST a NO position, and it rendered as a green +8pp. */
+function boughtSideMove(movePp: number | null | undefined, position?: string | null): number | null {
+  if (movePp == null) return null;
+  return position === "no" ? -movePp : movePp;
+}
+
 // The bet-diary replacement: one cross-sport view of realized P/L, ROI,
 // win/loss record and average CLV, all off the SAME placed-bet snapshots the
 // per-sport Placed pages settle. Realized P/L and ROI are computed on the
@@ -331,11 +366,13 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                   </span>
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
-                  {b.market_prob_at_placement != null ? `${(b.market_prob_at_placement * 100).toFixed(0)}%` : "—"}
+                  {boughtSideProb(b.market_prob_at_placement, b.position) != null
+                    ? `${(boughtSideProb(b.market_prob_at_placement, b.position)! * 100).toFixed(0)}%` : "—"}
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums">
                   <NowCell
-                    marketNow={b.market_prob_now ?? null} marketMove={b.market_move_pp ?? null}
+                    marketNow={boughtSideProb(b.market_prob_now, b.position)}
+                    marketMove={boughtSideMove(b.market_move_pp, b.position)}
                     live={s.live || pricedAsDecided(b.market_prob_now, s.text)}
                   />
                 </td>
@@ -425,7 +462,8 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)] font-mono text-[12px]">{b.final_score ?? "—"}</td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
-                  {b.market_prob_at_placement != null ? `${(b.market_prob_at_placement * 100).toFixed(0)}%` : "—"}
+                  {boughtSideProb(b.market_prob_at_placement, b.position) != null
+                    ? `${(boughtSideProb(b.market_prob_at_placement, b.position)! * 100).toFixed(0)}%` : "—"}
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
                   ${b.stake_dollars.toLocaleString()}
@@ -623,14 +661,17 @@ function FuturesPositions({ open, settled, onExplain }: { open: OpenBetPayload[]
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-dim)]">{r.resolves}</td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
-                  {r.entry != null ? `${(r.entry * 100).toFixed(0)}%` : "—"}
+                  {boughtSideProb(r.entry, r.position) != null
+                    ? `${(boughtSideProb(r.entry, r.position)! * 100).toFixed(0)}%` : "—"}
                 </td>
                 {/* A settled leg has a result, so "now" is noise there. */}
                 <td className="px-3 py-2 text-right font-mono tabular-nums">
                   {r.status === "open" ? (
                     <NowCell
-                      marketNow={r.marketNow} marketMove={r.marketMove}
-                      modelNow={r.modelNow} modelMove={r.modelMove}
+                      marketNow={boughtSideProb(r.marketNow, r.position)}
+                      marketMove={boughtSideMove(r.marketMove, r.position)}
+                      modelNow={boughtSideProb(r.modelNow, r.position)}
+                      modelMove={boughtSideMove(r.modelMove, r.position)}
                     />
                   ) : <span className="text-[var(--color-text-muted)]">—</span>}
                 </td>
