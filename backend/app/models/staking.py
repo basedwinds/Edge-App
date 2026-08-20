@@ -900,6 +900,28 @@ NESTED_FUTURES_FAMILIES: dict[str, tuple[tuple[str, ...], ...]] = {
             "cfb_finalist",
             "cfb_national_champion",
         ),
+        # THE CONFERENCE FAMILY, missing until 2026-08-20 while the playoff
+        # bracket beside it had been handled since 2026-08-10. Winning a
+        # conference title requires reaching its title game, so the two are
+        # nested exactly like the bracket rounds.
+        #
+        # Found live: NDSU staked on conference_champion (+38.8pp) AND
+        # conference_qualifier (+31.7pp) at once; 20 of 47 CFB teams were
+        # carrying more than one qualifying leg.
+        #
+        # Verified the same way the bracket family was, against the model's own
+        # output rather than assumed: across 55 teams holding both legs, zero
+        # violations of P(qualifier) >= P(champion).
+        #
+        # conference_regtop is deliberately NOT in this family. Finishing top-N
+        # of the REGULAR SEASON is not implied by, and does not imply, reaching
+        # the title game -- conferences seed their title game from divisions and
+        # tiebreakers. Genuinely different outcomes belong to the per-team dollar
+        # ceiling in exposure.py, not to a nesting rule.
+        (
+            "conference_qualifier",
+            "conference_champion",
+        ),
     ),
 }
 
@@ -910,7 +932,7 @@ NESTED_LEG_NOTE = (
 )
 
 
-def apply_nested_futures_cap(rows: list, sport: str) -> int:
+def apply_nested_futures_cap(rows: list, sport: str, taken: set[tuple] | None = None) -> int:
     """Keep ONE staked leg per (team, family); zero the stake on the rest.
 
     Returns how many legs were zeroed. Mutates rows in place.
@@ -935,9 +957,29 @@ def apply_nested_futures_cap(rows: list, sport: str) -> int:
     families = NESTED_FUTURES_FAMILIES.get(sport)
     if not families:
         return 0
+    taken = taken or set()
     zeroed = 0
-    for family in families:
+    for fam_index, family in enumerate(families):
         depth = {mt: i for i, mt in enumerate(family)}
+        # A SIBLING ALREADY BACKED WITH REAL MONEY HOLDS THE FAMILY'S SLOT.
+        #
+        # Without this the cap is stateless -- correct within any single
+        # response and defeated across time. Each refresh re-picks a survivor
+        # from whatever currently clears the gates, so as prices move the
+        # surviving leg can change, and the new one reads as an untaken bet on a
+        # team already backed. That is how the soccer twin of this rule was
+        # beaten (Man City top2 on 2026-08-17, top4 on 2026-08-18).
+        #
+        # One-directional: it can only REMOVE a stake. An empty `taken` degrades
+        # to exactly the previous behaviour, so a caller that cannot look up
+        # placed bets is no worse off than before.
+        for r in rows:
+            d = depth.get(r.market_type)
+            if d is None or not r.team or not r.suggested_stake_dollars:
+                continue
+            if (fam_index, r.team) in taken:
+                _unstake(r, NESTED_LEG_NOTE)
+                zeroed += 1
         best: dict[str, int] = {}          # team -> depth of the widest staked leg
         for r in rows:
             d = depth.get(r.market_type)
@@ -954,6 +996,23 @@ def apply_nested_futures_cap(rows: list, sport: str) -> int:
             _unstake(r, NESTED_LEG_NOTE)
             zeroed += 1
     return zeroed
+
+
+def nested_family_slots(sport: str, placed_rows) -> set[tuple]:
+    """(family index, team) already held by a real pending bet, for
+    apply_nested_futures_cap's `taken`. `placed_rows` is any iterable with
+    .market_type and .team -- the caller decides what counts as real (paper is
+    excluded everywhere else, and must be here too)."""
+    families = NESTED_FUTURES_FAMILIES.get(sport)
+    if not families:
+        return set()
+    out: set[tuple] = set()
+    for i, family in enumerate(families):
+        members = set(family)
+        for r in placed_rows:
+            if getattr(r, "market_type", None) in members and getattr(r, "team", None):
+                out.add((i, r.team))
+    return out
 
 
 # Market types whose rungs are a LADDER: several thresholds of one opinion,
@@ -976,6 +1035,17 @@ LADDER_FUTURES_TYPES: dict[str, frozenset[str]] = {
     # different propositions and collapsing them would drop a real bet. Only
     # cumulative over/under types belong in this map.
     "nfl": frozenset({"win_total", "division_wins"}),
+    # Soccer season points, added 2026-08-20. Every one of the 96 clubs on the
+    # board carries exactly FOUR rungs, and clearing 60 points clears 50, so
+    # they are one opinion at four thresholds. Verified monotone on the live
+    # board the same way the nested families were: 288 adjacent comparisons
+    # across 96 clubs, zero violations of "higher line => lower probability".
+    #
+    # LATENT when added -- no club had two staked rungs that day, because the
+    # rungs were failing other gates. Closed anyway: it is the same defect as
+    # the NFL division_wins case above, which was only found after it had
+    # already been staked twice.
+    "soccer": frozenset({"team_points"}),
 }
 
 LADDER_RUNG_NOTE = (

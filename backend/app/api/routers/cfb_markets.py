@@ -30,12 +30,12 @@ from app.api.routers.settings import get_staking_params, get_flat_params, get_un
 from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut
 from app.api.start_gate import iso_z
 from app.db.database import get_session
-from app.db.models import CfbGame, Market
+from app.db.models import CfbGame, Market, PlacedBet
 from app.models import calibration_temp
 from app.models import game_lines_cfb, playoff_sim_cfb, season_sim_cfb
 from app.models.baseline import elo_service_cfb
 from app.models.clv_selection import bucket_clv_stats, gate_kelly, is_bucket_enabled
-from app.models.staking import FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_nested_futures_cap, has_real_trading, kelly_fraction, size_stake_dollars
+from app.models.staking import FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_nested_futures_cap, nested_family_slots, has_real_trading, kelly_fraction, size_stake_dollars
 
 router = APIRouter(prefix="/cfb", tags=["cfb"])
 
@@ -660,7 +660,19 @@ def list_cfb_futures(session: Session = Depends(get_session)):
     # still have logged four correlated Indiana bets as four independent paper
     # trades and quietly corrupted the very forward-CLV record we use to judge
     # this model.
-    nested_zeroed = apply_nested_futures_cap(out, "cfb")
+    # Family slots already held by REAL, still-pending money -- so a leg placed
+    # yesterday keeps its siblings unstaked today even as the prices move and a
+    # different rung becomes the day's best-looking one. paper excluded, same
+    # rule as models/exposure.py.
+    placed = (
+        session.query(PlacedBet)
+        .filter(PlacedBet.paper == False,  # noqa: E712 -- SQLAlchemy needs ==
+                PlacedBet.status == "pending",
+                PlacedBet.stake_pool == "futures",
+                PlacedBet.sport == "cfb")
+        .all()
+    )
+    nested_zeroed = apply_nested_futures_cap(out, "cfb", nested_family_slots("cfb", placed))
     if nested_zeroed:
         log.info("cfb futures: collapsed %d nested bracket legs to one stake per team",
                  nested_zeroed)

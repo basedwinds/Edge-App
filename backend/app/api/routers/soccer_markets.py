@@ -49,7 +49,7 @@ from app.api.schemas import FuturesMarketOut, ReasoningFactorOut, ReasoningOut, 
 from app.clients import kalshi_soccer_client, polymarket_soccer_client
 from app.clients.football_data_client import PROMOTION_SOURCE_DIVISION
 from app.db.database import get_session
-from app.db.models import Market, MarketSnapshot, SoccerMatch, SoccerNewsAdjustmentCache
+from app.db.models import Market, MarketSnapshot, PlacedBet, SoccerMatch, SoccerNewsAdjustmentCache
 from app.ingestion import soccer_data
 from app.ingestion.market_catalog_soccer import get_soccer_news_adjustment_cache, soccer_news_cache_to_pydantic
 from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_match
@@ -71,7 +71,7 @@ from app.models.news_adjustment.schema import NewsAdjustment
 from app.models import playoff_sim_service_ligamx
 from app.models import playoff_sim_service_mls
 from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season, current_season_table
-from app.models.staking import FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import apply_ladder_futures_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/soccer", tags=["soccer"])
@@ -1515,7 +1515,29 @@ def list_soccer_futures(session: Session = Depends(get_session)):
                 line_move_pp=None,
             )
         )
-    _collapse_nested_position_futures(out)
+    # Which (family, club) slots are already held by REAL, still-pending money.
+    # paper is excluded on purpose, same rule as models/exposure.py: the paper
+    # logger records everything priced, so counting it would starve the board of
+    # real recommendations because it had been busy simulating.
+    taken_families: set[tuple] = set()
+    for pb in (
+        session.query(PlacedBet)
+        .filter(PlacedBet.paper == False,  # noqa: E712 -- SQLAlchemy needs ==
+                PlacedBet.status == "pending",
+                PlacedBet.stake_pool == "futures",
+                PlacedBet.sport == "soccer")
+        .all()
+    ):
+        fam = _NESTED_POSITION_FAMILIES.get(pb.market_type or "")
+        if fam and pb.team:
+            taken_families.add((fam, pb.team))
+    _collapse_nested_position_futures(out, taken_families)
+    # WITHIN-type rungs (team_points: 50+/60+/70+ points) -- a different shape
+    # from the cross-type nesting above, and soccer had no entry in
+    # LADDER_FUTURES_TYPES at all until 2026-08-20.
+    ladder_zeroed = apply_ladder_futures_cap(out, "soccer")
+    if ladder_zeroed:
+        log.info("soccer futures: collapsed %d team_points ladder rungs", ladder_zeroed)
 
     # The MLS bracket model is UNCALIBRATED, and saying so is the point.
     #
@@ -1557,6 +1579,12 @@ def list_soccer_futures(session: Session = Depends(get_session)):
 _NESTED_POSITION_FAMILIES: dict[str, str] = {
     "league_winner": "finish_top",
     "top2": "finish_top",
+    # top_half was MISSING until 2026-08-20 while top2/top4/top6 were all here,
+    # so the widest rung of the EPL ladder was the one rung that could always be
+    # staked alongside a narrower one. Verified nested on the live board: across
+    # 20 clubs and 60 adjacent comparisons, top_half >= top4 >= top2 >=
+    # league_winner with zero violations.
+    "top_half": "finish_top",
     "top4": "finish_top",
     "top6": "finish_top",
     "relegation": "finish_bottom",
@@ -1578,7 +1606,7 @@ NESTED_POSITION_NOTE = (
 )
 
 
-def _collapse_nested_position_futures(rows: list[FuturesMarketOut]) -> None:
+def _collapse_nested_position_futures(rows: list[FuturesMarketOut], taken: set[tuple] | None = None) -> None:
     """Keep ONE staked rung per (source, club, nested family); zero the rest.
 
     Found on the live board 2026-08-07: Manchester City was 27.3% of the entire
@@ -1608,9 +1636,34 @@ def _collapse_nested_position_futures(rows: list[FuturesMarketOut]) -> None:
     dollar ceiling in models/exposure.py instead.
     """
     best: dict[tuple, FuturesMarketOut] = {}
+    taken = taken or set()
     for row in rows:
         family = _NESTED_POSITION_FAMILIES.get(row.market_type)
         if family is None or row.suggested_stake_dollars is None or not row.team:
+            continue
+        # A SIBLING ALREADY BACKED WITH REAL MONEY OCCUPIES THE FAMILY'S SLOT.
+        #
+        # This collapse used to be stateless: it picked a survivor per refresh
+        # and had no idea one had already been placed. Survivorship is chosen by
+        # EDGE, which moves with the price while model_prob barely moves -- so as
+        # prices drift the survivor hops between rungs, and each hop offers a
+        # fresh-looking bet on a club already backed.
+        #
+        # That is exactly how it went wrong (user-reported 2026-08-20):
+        # Manchester City top2 placed 2026-08-17 22:54, then top4 placed
+        # 2026-08-18 23:50 once the edges had moved and top4 became the day's
+        # survivor. Two nested legs on one club -- the very outcome this function
+        # was written on 2026-08-07 to prevent, defeated by time rather than by
+        # any single response being wrong.
+        #
+        # Placed-bet awareness is what closes it, and it is one-directional: it
+        # can only REMOVE a stake, never add one, so a feed hiccup that returns
+        # no placed bets degrades to exactly the old behaviour.
+        if (family, row.team) in taken:
+            row.suggested_stake_dollars = None
+            row.suggested_stake_units = None
+            row.stake_pool = None
+            row.model_note = NESTED_POSITION_NOTE
             continue
         key = (family, row.source, row.team)
         held = best.get(key)
