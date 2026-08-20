@@ -239,6 +239,56 @@ def implausible_certainty(model_prob: float, market_price: float) -> bool:
     return ratio >= IMPLAUSIBLE_ODDS_RATIO
 
 
+# HOW CLOSE TO A COIN FLIP THE MODEL MAY BE AND STILL SIZE A BET.
+#
+# A 20pp edge is not one thing. The same 20pp means something completely
+# different depending on where the model itself is standing, and the outcome
+# record separates them cleanly. Every bet below had ALREADY cleared
+# min_edge_to_bet, bucketed by |model_prob - 0.5|, staked rows only, settled:
+#
+#                        ESPORTS                     NON-ESPORTS
+#     within 6pp    n= 177  ROI  -0.55%          n= 901  ROI  -0.37%
+#     6-15pp        n= 208  ROI  +3.71%          n=1040  ROI  +1.86%
+#     >15pp         n= 366  ROI  +7.12%          n=1487  ROI  +3.79%
+#
+# Monotonic in both families, and NOT a price artifact -- average market price
+# is 0.36-0.47 across every band, so these are not longshot books versus even
+# ones. The coin-flip band is 1,078 settled bets returning roughly nothing.
+#
+# WHY IT HAPPENS, caught 2026-08-20 on a live $10 LoL bet the user flagged
+# ("series winner NO for DRX at 72% but they are a massive favourite"):
+# elo_lol trains on a Leaguepedia crawl of PRIMARY TIER ONLY (LCK/LPL/LEC/
+# LCS-LTA/Worlds/MSI). A Challengers-league side therefore has no historical
+# data at all and carries a near-default rating built from a handful of
+# live-polled maps -- DRX Challengers 1534 (5 maps) against OKSavingsBank
+# BRION Challengers 1532 (9 maps). Two ratings 2 points apart produce a 50.6%
+# series probability, the market said 72%, and the app booked the 21.4pp gap as
+# an edge and staked the NO side. The model was not disagreeing with the
+# market. It had no information and said so in a voice indistinguishable from
+# a real read.
+#
+# THIS IS THE CHEAP DIRECTION TO BE WRONG IN. If the effect is noise, the cost
+# is forgoing a band that measurably returned ~0; if it is real, it stops the
+# app systematically betting against the market precisely where the market
+# knows more. Capital freed goes to the >15pp band, which returns +4-7%.
+#
+# NOT a gate on thin ratings, deliberately. Thin CS2 ratings were measured and
+# turned out to be the BEST-calibrated bucket, and a racing thin-rating gate
+# was REJECTED on the same evidence. Nor is it a gate on the model being
+# UNCERTAIN in general -- two well-rated, genuinely even teams belong at 50%.
+# It gates the size of the CLAIM being sized, which is the quantity the outcome
+# record actually separates.
+UNINFORMATIVE_MODEL_BAND = 0.06
+
+
+def uninformative_model(model_prob: float | None) -> bool:
+    """True when the model's own estimate is close enough to a coin flip that
+    its edge has no measured value, whatever the market price is."""
+    if model_prob is None:
+        return False
+    return abs(model_prob - 0.5) <= UNINFORMATIVE_MODEL_BAND
+
+
 def kelly_fraction(
     model_prob: float | None,
     market_price: float | None,
@@ -330,6 +380,12 @@ def kelly_fraction(
     # model wildly disagrees. A genuine pre-match edge of that size against a
     # market that extreme does not exist -- it is a live price, a stale price, or
     # a broken model, and none of those is a bet worth making.
+    # A 20pp edge measured from a coin flip is worth nothing -- see
+    # UNINFORMATIVE_MODEL_BAND. Checked before the price guards because it is a
+    # property of the model's claim alone and does not need a market at all.
+    if uninformative_model(model_prob):
+        return None
+
     if model_prob is not None and market_price is not None:
         if implausible_disagreement(model_prob, market_price):
             return None
