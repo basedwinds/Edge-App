@@ -21,8 +21,15 @@ Design choices:
     the cap is a real-bankroll concern; for a paper CLV study more sample is
     better and nothing is at risk. Structural fields (game id, side, line) come
     from the Market row so the bet is CLV-computable.
-  * One open paper bet per market (dedup), logged the first time a market appears
-    with edge -- the earliest honest entry, giving the line the most room to move.
+  * One paper bet per PROPOSITION (dedup), logged the first time it appears with
+    edge -- the earliest honest entry, giving the line the most room to move.
+    Per-proposition, not per-market: until 2026-08-20 this deduped on market_id,
+    so Kalshi's and Polymarket's copies of one bet were logged twice. They
+    resolve on the same event, so they are perfectly correlated and every
+    downstream statistic counted them as independent (up to 1.66x on LoL,
+    inflating z-scores by ~29%). "More sample is better" is only true of
+    INDEPENDENT sample; more correlated rows just print a smaller error bar under
+    the same information. See the logged_keys block below for the measurement.
   * Match markets only (the /markets endpoints); futures CLV is "not_applicable"
     (no single close), so they're skipped for now.
 """
@@ -32,6 +39,7 @@ from app.models.staking import EXTREME_MARKET_PRICE, IMPLAUSIBLE_EDGE
 
 from app import sports as app_sports
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 
@@ -446,6 +454,45 @@ def run_paper_log():
             # OTHER platform's copy of a bet we've already alerted on (dedup holds
             # across separate runs, not just within one batch).
             alerted_keys = {_cross_platform_key(b) for b in open_paper}
+            # THE SIBLING PLATFORM'S COPY IS NOT A SECOND OBSERVATION.
+            #
+            # Dedup above is per MARKET id, so Kalshi's and Polymarket's copies
+            # of one proposition were logged as two paper bets. They resolve on
+            # the same real event, so they win and lose together -- perfectly
+            # correlated rows that every downstream statistic counts as
+            # independent.
+            #
+            # Measured 2026-08-20, settled paper rows per distinct proposition:
+            #     lol 1.66x  cs2 1.59x  valorant 1.53x  mma 1.31x  mlb 1.21x
+            #     tennis 1.19x  soccer 1.12x  wnba 1.06x  nascar 1.00x
+            # Effective n is the DISTINCT count, so every z-score taken off raw
+            # paper rows was inflated by ~sqrt(factor) -- 1.66x on LoL is a 29%
+            # overstatement of confidence. It nearly cost a wrong call: an MMA
+            # finding read z=-3.20 across 72 rows and z=-2.04 across the 37
+            # DISTINCT fights those rows actually covered.
+            #
+            # THIS FILE'S OWN DESIGN NOTE SAID THE OPPOSITE -- "more sample is
+            # better and nothing is at risk". More CORRELATED sample is not more
+            # information; it is the same information with a smaller error bar
+            # printed under it, which is worse than having less data.
+            #
+            # Cross-platform PRICE comparison is not lost: that is
+            # cross_platform_divergence.py's job and it reads live markets, not
+            # this log. Alerts already deduped on this exact key (below) -- only
+            # logging did not.
+            #
+            # Scoped by SPORT because the key renders non-esports game ids as a
+            # bare number, so tennis_match_id 829 and soccer_match_id 829 would
+            # otherwise collide and silently drop a real observation.
+            _key_names = ("market_type", "team", "line", "side", "sport", *_GAME_ID_FIELDS)
+            logged_keys = {
+                (v[4], _cross_platform_key(SimpleNamespace(**dict(zip(_key_names, v)))))
+                for v in session.query(
+                    PlacedBet.market_type, PlacedBet.team, PlacedBet.line,
+                    PlacedBet.side, PlacedBet.sport,
+                    *[getattr(PlacedBet, f) for f in _GAME_ID_FIELDS],
+                ).filter(PlacedBet.paper == True).all()  # noqa: E712
+            }
             # Which season-sports are "ready" (season active/near) -> gates their
             # futures alerts. Computed ONCE per run (5 quick queries) rather than
             # per futures bet.
@@ -459,6 +506,12 @@ def run_paper_log():
                     continue
                 m = session.get(Market, mid)
                 if m is None:
+                    continue
+                # Same proposition already logged from the other book -- see
+                # logged_keys above.
+                log_key = (m.sport, _cross_platform_key(m))
+                if log_key in logged_keys:
+                    open_ids.add(mid)   # so the run's "already logged" count stays honest
                     continue
                 bet = PlacedBet(
                     # Recorded AT LOG TIME from the set already computed above
@@ -496,6 +549,7 @@ def run_paper_log():
                     setattr(bet, f, getattr(m, f, None))
                 session.add(bet)
                 open_ids.add(mid)
+                logged_keys.add(log_key)   # blocks the sibling book within this same run
                 added += 1
                 # A newly-logged paper bet == a market that JUST cleared the
                 # recommendation gate for the first time -> alert-worthy if its
