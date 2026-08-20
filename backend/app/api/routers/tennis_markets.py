@@ -40,7 +40,7 @@ from app.models.ladder_sanity import (
     pair_looks_resolved,
 )
 from app.models.duplicate_fixtures import canonical_tennis_fixture_ids
-from app.models.staking import no_side_inputs, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import no_side_inputs, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_complementary_leg_cap, apply_duplicate_listing_cap, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/tennis", tags=["tennis"])
@@ -888,6 +888,12 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     duped = apply_duplicate_listing_cap(out, fixture_attr="tennis_match_id")
     if duped:
         log.info("tennis: unstaked %d cross-platform duplicate listings", duped)
+    # Both halves of ONE binary market: buying YES on this side and NO on the
+    # other is the same bet twice. Only reachable where no_side_allowed is
+    # true, which today is tennis/cs2/lol -- see apply_complementary_leg_cap.
+    mirrored = apply_complementary_leg_cap(out, fixture_attr="tennis_match_id")
+    if mirrored:
+        log.info("tennis: unstaked %d complementary legs of one market", mirrored)
     out.sort(key=lambda m: (m.match_date or "9999", m.match_label or ""))
     return out
 

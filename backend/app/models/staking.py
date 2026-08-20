@@ -989,6 +989,102 @@ DUPLICATE_LISTING_NOTE = (
     "better price. Shown for tracking."
 )
 
+COMPLEMENTARY_LEG_NOTE = (
+    "Not staked separately: this is the same bet as the other side of the market, which is "
+    "already staked. Shown for tracking."
+)
+
+# How far two model probabilities may miss summing to 1.0 and still be treated as
+# the two halves of one binary market. Tight on purpose -- the observed pairs sum
+# to 1.0000 exactly, because they come from ONE model call whose complement is
+# computed, not from two independent estimates.
+COMPLEMENTARY_PROB_TOLERANCE = 0.005
+
+
+def apply_complementary_leg_cap(rows: list, fixture_attr: str | None = None,
+                                entity_attr: str = "team") -> int:
+    """One stake per proposition when a BINARY market is listed as both of its
+    outcomes and the app buys YES on one and NO on the other.
+
+    THIS IS NOT apply_duplicate_listing_cap. That one collapses the SAME listing
+    carried by two platforms, keyed on (team, market_type, line, side) -- so by
+    construction it cannot see this, where the two rows have different teams and,
+    for a handicap, different lines. Same defect (double exposure on one view),
+    different mechanism, and the first cap being wired everywhere would not have
+    prevented any of it.
+
+    WHY IT APPEARED NOW. The NO side shipped 2026-08-15 (#186) as an allowlist.
+    For any two-outcome market, "YES on A" and "NO on B" are the SAME bet, and
+    they carry the SAME edge by construction -- so whenever one clears the gate
+    the other clears it too, every time. It is systematic, not occasional.
+
+    Found 2026-08-20 on the live board, three shapes, all one defect:
+        tennis set_spread   Montagud -1.5 YES  ==  Contri +1.5 NO     $20
+        cs2 series_winner   Bushido YES        ==  Raccoons NO        $20
+        cs2 series_winner   HyperSpirit YES    ==  Just Players NO    $20
+    Four of six staked CS2 rows and two of three staked tennis rows were two
+    halves of one bet. No REAL money had been double-staked yet -- the historical
+    placed-bet book has zero such pairs -- so this is preventive.
+
+    IDENTITY IS MEASURED, NOT ENUMERATED. Two legs are the same proposition when
+    their MODEL probabilities sum to 1.0 and their positions are opposite. That
+    test is self-verifying and needs no list of market types to maintain: the
+    observed pairs sum to 1.0000 exactly, while a genuine three-way market cannot
+    trigger it (a soccer home/draw pair sums to ~0.73). MARKET prices are NOT
+    used for this -- the spread means the two sides sum to ~0.93, not 1.0.
+
+    Keeping the better buying-side edge is right for the same reason it is right
+    in apply_duplicate_listing_cap: identical proposition, identical model, so a
+    bigger edge is purely a better price. `edge` is stored in the YES frame, so a
+    NO row's buying-side edge is its negation.
+
+    WIRE THIS WHEREVER `no_side_allowed` CAN RETURN TRUE. Today that is
+    NO_SIDE_CELLS = tennis (set_spread/set_winner/game_total/total_sets), cs2 and
+    lol (series_winner). A YES-only sport cannot produce the pair at all. If
+    NO_SIDE_CELLS grows, this must be wired for the new sport in the same commit
+    -- the last cap sat in only 4 of 13 routers for weeks because nobody checked.
+    """
+    def _entity(r):
+        return getattr(r, entity_attr, None)
+
+    def _buy_edge(r):
+        e = r.edge
+        if e is None:
+            return None
+        return -e if getattr(r, "position", None) == "no" else e
+
+    groups: dict[tuple, list] = {}
+    for r in rows:
+        if not r.suggested_stake_dollars or r.model_prob is None:
+            continue
+        fixture = getattr(r, fixture_attr, None) if fixture_attr else None
+        if fixture is None:
+            continue          # without a fixture scope two unrelated events could pair up
+        groups.setdefault((fixture, r.market_type), []).append(r)
+
+    zeroed = 0
+    for legs in groups.values():
+        if len(legs) < 2:
+            continue
+        # Deterministic order so which leg survives cannot flap between refreshes
+        # when two identical edges tie.
+        legs.sort(key=lambda r: (-(_buy_edge(r) or -9), getattr(r, "id", 0)))
+        kept: list = []
+        for r in legs:
+            twin = next(
+                (k for k in kept
+                 if getattr(k, "position", None) != getattr(r, "position", None)
+                 and _entity(k) != _entity(r)
+                 and abs((k.model_prob or 0) + (r.model_prob or 0) - 1.0) <= COMPLEMENTARY_PROB_TOLERANCE),
+                None,
+            )
+            if twin is None:
+                kept.append(r)
+                continue
+            _unstake(r, COMPLEMENTARY_LEG_NOTE)
+            zeroed += 1
+    return zeroed
+
 
 def apply_ladder_futures_cap(rows: list, sport: str) -> int:
     """One stake per (team, ladder type); keep the WIDEST rung. Mutates in place.

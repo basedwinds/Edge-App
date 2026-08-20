@@ -38,7 +38,7 @@ from app.models.esports_tournament_pricing import (
 from app.models.tournament_sim_esports import TOURNAMENT_SIM_NOTE
 from app.models.ladder_sanity import futures_group_decided, CS2_KALSHI_LIVE_TRADING_MIN_VOLUME_DELTA, ESPORTS_LIVE_TRADING_MIN_PRICE_SWING, looks_already_live_by_trading
 from app.models.esports_start_time import borrowed_start_times, corrected_start_time
-from app.models.staking import no_side_inputs, apply_duplicate_listing_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import no_side_inputs, apply_complementary_leg_cap, apply_duplicate_listing_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.staking import MIN_LIVE_FUTURES_BID
 
 import logging
@@ -634,6 +634,12 @@ def list_cs2_markets(session: Session = Depends(get_session)):
     duped = apply_duplicate_listing_cap(out, fixture_attr="fixture_key")
     if duped:
         log.info("cs2: unstaked %d cross-platform duplicate listings", duped)
+    # Both halves of ONE binary market: buying YES on this side and NO on the
+    # other is the same bet twice. Only reachable where no_side_allowed is
+    # true, which today is tennis/cs2/lol -- see apply_complementary_leg_cap.
+    mirrored = apply_complementary_leg_cap(out, fixture_attr="fixture_key")
+    if mirrored:
+        log.info("cs2: unstaked %d complementary legs of one market", mirrored)
     out.sort(key=lambda m: (m.match_date or "9999", m.match_label or m.group_label or "", m.market_type))
     return out
 
