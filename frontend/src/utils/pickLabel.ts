@@ -10,6 +10,7 @@
  * RecommendedBetRow so a placed-bet payload can use it directly.
  */
 import { MARKET_TYPE_LABELS } from "../components/markets/FuturesTable";
+import { CFB_TEAM_NAMES } from "./cfbTeamNames";
 import { describeTennisSpread, TENNIS_MARKET_TYPE_LABELS } from "./tennisLabel";
 
 export type PickLike = {
@@ -130,6 +131,68 @@ export function marketTypeLabel(marketType: string, sport: string): string {
   return GAME_MARKET_TYPE_LABELS[marketType] ?? MARKET_TYPE_LABELS[marketType] ?? marketType;
 }
 
+/** What the bet actually SETTLES on, in one sentence.
+ *
+ * marketTypeLabel gives a name ("Conference Title Game"); this gives the rule.
+ * The two are not the same thing and the gap is where money goes wrong: a
+ * qualifier settles on finishing TOP TWO, which no amount of staring at the
+ * label tells you, and cfb_title_conference asks which CONFERENCE produces the
+ * champion rather than which team -- a row that looks like an ordinary futures
+ * pick on a team name but is not one.
+ *
+ * Written for the types whose settlement rule is NOT recoverable from the
+ * label. Deliberately absent for moneyline/spread/total and friends: a tooltip
+ * that says "Moneyline: the team wins" is noise, and noise trains people to
+ * stop reading the ones that matter. Sentences are lifted from the backend's
+ * own pricing code (cfb_markets.py, racing_markets.py) so the explanation and
+ * the number come from one source.
+ */
+const MARKET_TYPE_EXPLAINERS: Record<string, string> = {
+  // CFB's conference + playoff family -- the whole reason this exists.
+  conference_qualifier:
+    "Reaches its conference championship game. Priced as a top-two finish in the conference, because reaching the title game IS finishing top two.",
+  conference_champion: "Wins its conference championship game outright.",
+  conference_regtop:
+    "Finishes in the top N of its conference's REGULAR-SEASON standings (N is shown in the pick). Settles before any title game is played.",
+  cfb_title_conference:
+    "Which CONFERENCE the national champion comes from — not which team. A pick here is on the whole conference, so any of its members winning settles it YES.",
+  cfb_playoff: "Makes the College Football Playoff field.",
+  cfb_top4_seed: "Earns one of the top four seeds, i.e. a first-round bye.",
+  cfb_quarterfinal: "Reaches the playoff quarterfinal round.",
+  cfb_semifinal: "Reaches the playoff semifinal round.",
+  cfb_finalist: "Reaches the national championship game (win or lose it).",
+  cfb_national_champion: "Wins the national championship.",
+  win_total:
+    "Total REGULAR-SEASON wins against the listed line. Conference title games and bowls do not count.",
+  // Futures shapes that read like a team pick but are not.
+  top_n:
+    "Finishes in the top N positions (N is the number shown, a finishing PLACE — not a threshold to go over).",
+  team_points: "Finishes the league season on at least this many points.",
+  // Families where the unit being counted is the ambiguity.
+  game_total: "Total across the whole match — goals in soccer, GAMES in tennis.",
+  set_total: "Total games played within the single set named in the pick.",
+  total_sets: "How many sets the match lasts, against the listed line.",
+  map_winner: "Wins that specific numbered map — not the series.",
+  series_total: "How many maps the series lasts, against the listed line.",
+  // MLB / MMA rules that are pure convention.
+  f5: "Settles on the score after five innings only. A lead lost later still wins this bet.",
+  rfi: "Whether ANY run scores in the first inning, by either team.",
+  distance: "The fight reaches the final bell without a finish.",
+  method_of_finish: "HOW the fight ends. The named fighter must win, and win that way.",
+  rounds: "Which round the fight ends in, against the listed line.",
+  btts: "Both teams score at least one goal. Independent of who wins.",
+  ftts: "Which team scores FIRST. Final result is irrelevant.",
+  correct_score: "The exact final scoreline. Any other score, including a win by a different margin, loses.",
+};
+
+export function marketTypeExplainer(marketType: string, sport: string): string | null {
+  // Tennis and soccer share game_total for different quantities; the shared
+  // sentence names both, so no per-sport branch is needed yet. Kept as a
+  // parameter because the collision list here only ever grows.
+  void sport;
+  return MARKET_TYPE_EXPLAINERS[marketType] ?? null;
+}
+
 // Spells out exactly what "Yes"/winning this bet means, in plain English --
 // added 2026-07-17 after user feedback that the old "team ± line" rendering
 // was genuinely ambiguous. The underlying `line` field means "this team's
@@ -166,8 +229,30 @@ export function describePick(row: PickLike): string {
   return describeYesPick(row);
 }
 
+/** CFB rows carry Kalshi's short code, and the code alone is genuinely
+ * ambiguous to a reader placing the bet by hand: "OHIO" under KXNCAAFMACQUAL is
+ * the Ohio BOBCATS, but rendered as "Ohio" it reads as Ohio State -- a Big Ten
+ * team that cannot appear in a Mid-American market at all (user-reported
+ * 2026-08-20, mid-placement). The model was never confused (OHIO is rated
+ * 1752.7, OSU 2107.2, separate codes throughout), so this is purely a display
+ * gap, and it is the display that money gets placed off.
+ *
+ * Resolved in ONE place rather than per-branch: every `${team}` below flows
+ * through here, so a new market type cannot reintroduce the bare code the way
+ * the tennis and esports branches each drifted from this file before.
+ *
+ * Unmapped codes fall through to the raw code deliberately -- a confidently
+ * WRONG school name is worse than an unresolved one. See
+ * backend/scripts/gen_cfb_team_names.py for how the map is derived.
+ */
+export function teamLabel(team: string | null, sport: string): string | null {
+  if (!team || sport !== "cfb") return team;
+  return CFB_TEAM_NAMES[team] ?? team;
+}
+
 function describeYesPick(row: PickLike): string {
-  const { team, line, side, marketType, sport } = row;
+  const { line, side, marketType, sport } = row;
+  const team = teamLabel(row.team, sport);
   if (marketType === "f5") return side === "tie" ? "Tie after 5 innings" : `${team ?? "—"} wins first 5 innings`;
   if (marketType === "rfi") return side === "no" ? "No run in the 1st inning" : "A run scores in the 1st inning";
   if (marketType === "distance") return "Fight goes the distance";

@@ -7,6 +7,7 @@ import { EdgeBadge } from "../components/markets/EdgeBadge";
 import { StatTilesSkeleton, TableSkeleton } from "../components/ui/Skeleton";
 import { fetchCfbMarkets } from "../api/markets";
 import type { CfbMarketRow } from "../types/market";
+import { teamLabel } from "../utils/pickLabel";
 
 /** Human labels for CFB's eight market types. CFB is unusual in this app --
  *  944 of its 974 markets are season-long -- so the table has to say WHICH
@@ -74,7 +75,11 @@ function CfbMarketsTable({ rows }: { rows: CfbMarketRow[] }) {
                   </span>
                 )}
               </td>
-              <td className="px-4 py-3 font-medium whitespace-nowrap">{r.team ?? "—"}</td>
+              {/* Full school name, not Kalshi's code: this column is where
+                  "Ohio" was indistinguishable from Ohio State (user-reported
+                  2026-08-20). teamLabel falls back to the raw code when a
+                  school cannot be resolved with evidence. */}
+              <td className="px-4 py-3 font-medium whitespace-nowrap">{teamLabel(r.team, "cfb") ?? "—"}</td>
               <td className="px-4 py-3 whitespace-nowrap text-[var(--color-text-dim)]">{describeLine(r)}</td>
               <td className="px-4 py-3"><SourceBadge source={r.source} /></td>
               <td className="px-4 py-3 tabular-nums font-mono whitespace-nowrap">{formatPct(r.implied_prob)}</td>

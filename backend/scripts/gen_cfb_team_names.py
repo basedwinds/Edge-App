@@ -1,0 +1,141 @@
+"""Generate frontend/src/utils/cfbTeamNames.ts -- the CFB code -> full team name
+map the board renders.
+
+WHY THIS IS GENERATED AND NOT HAND-WRITTEN. The board carries 240 distinct CFB
+codes and a user could not tell whether "Ohio" under KXNCAAFMACQUAL meant the
+Ohio Bobcats or Ohio State. Hand-transcribing 240 names is the exact failure this
+project has already paid for twice (a hand-kept alias JSON that drifted from its
+source, and a placeholder that swallowed six acronym schools). So the names are
+DERIVED, and this script is re-runnable: if ESPN renames a team the diff shows up
+here rather than rotting silently.
+
+HOW THE AMBIGUITY IS RESOLVED. Abbreviations are NOT safe keys -- ESPN lists both
+"Ohio State Buckeyes" (id 194) and "Ohio State Newark Titans" (id 3161) as OSU.
+So the primary key is the ESPN TEAM ID observed in real games in
+data/cfb_game_cache.json (4,836 games, the same file the Elo constants were
+derived from). An abbreviation that resolves to exactly one id ACROSS ACTUAL
+PLAYED GAMES is grounded in evidence, not in a guess about which of two
+same-named schools was meant. Only codes absent from the cache fall back to a
+unique-abbreviation lookup, and a code that is ambiguous under BOTH rules is left
+out entirely -- the raw code is a worse label than a full name, but a CONFIDENTLY
+WRONG full name is worse than both.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+import httpx
+
+ROOT = Path(__file__).resolve().parents[2]
+CACHE = ROOT / "data" / "cfb_game_cache.json"
+OUT = ROOT / "frontend" / "src" / "utils" / "cfbTeamNames.ts"
+TEAMS_URL = ("https://site.api.espn.com/apis/site/v2/sports/football/"
+             "college-football/teams?limit=1000")
+
+# `team` on these market types is a CONFERENCE, not a school (cfb_title_conference
+# asks which conference produces the champion). They are not in ESPN's team list
+# at all, so they would otherwise render as bare codes forever.
+CONFERENCES = {
+    "ACC": "Atlantic Coast Conference", "B10": "Big Ten", "B12": "Big 12",
+    "SEC": "Southeastern Conference", "PAC": "Pac-12", "MW": "Mountain West",
+    "AAC": "American Athletic", "CUSA": "Conference USA", "MAC": "Mid-American",
+    "SBC": "Sun Belt", "IND": "Independent",
+}
+
+
+# Codes the board carries that ESPN's team list does not resolve. Both are
+# EVIDENCED, not guessed -- the rule everywhere else in this file.
+#   OTHER: not a school. It is the field bucket on KXNCAAFCONF ("which
+#     conference produces the champion"), so it means every conference not
+#     listed as its own row.
+#   RGV:   ESPN has no Rio Grande entry at all, but the Kalshi ticker names the
+#     fixture outright -- KXNCAAFGAME-26SEP05UTRGVUTSA-UTRGV, i.e. UTRGV at
+#     UTSA on 2026-09-05, which cfb_games 401862700 confirms as RGV @ UTSA.
+BOARD_ONLY = {
+    "OTHER": "Other / Field",
+    "RGV": "UT Rio Grande Valley",
+}
+
+
+def espn_teams() -> dict[str, dict]:
+    r = httpx.get(TEAMS_URL, timeout=45.0, headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    rows = r.json()["sports"][0]["leagues"][0]["teams"]
+    return {t["team"]["id"]: t["team"] for t in rows}
+
+
+def abbr_to_ids_from_games() -> dict[str, set[str]]:
+    """abbr -> every ESPN team id it was observed under in a REAL game."""
+    raw = json.loads(CACHE.read_text(encoding="utf-8"))
+    rows = list(raw.values()) if isinstance(raw, dict) else raw
+    out: dict[str, set[str]] = defaultdict(set)
+    for g in rows:
+        for side in ("home", "away"):
+            abbr, tid = g.get(f"{side}_abbr"), g.get(side)
+            if abbr and tid:
+                out[str(abbr)].add(str(tid))
+    return out
+
+
+def main() -> int:
+    teams = espn_teams()
+    observed = abbr_to_ids_from_games()
+
+    by_abbr: dict[str, list[str]] = defaultdict(list)
+    for tid, t in teams.items():
+        if t.get("abbreviation"):
+            by_abbr[t["abbreviation"]].append(tid)
+
+    names: dict[str, str] = {}
+    grounded = fallback = 0
+    ambiguous: list[str] = []
+
+    for abbr in sorted(set(observed) | set(by_abbr)):
+        ids = observed.get(abbr, set())
+        if len(ids) == 1:
+            tid = next(iter(ids))
+            if tid in teams:
+                names[abbr] = teams[tid]["displayName"]
+                grounded += 1
+                continue
+        if len(ids) > 1:
+            ambiguous.append(f"{abbr} (played under ids {sorted(ids)})")
+            continue
+        cand = by_abbr.get(abbr, [])
+        if len(cand) == 1:
+            names[abbr] = teams[cand[0]]["displayName"]
+            fallback += 1
+        elif len(cand) > 1:
+            ambiguous.append(f"{abbr} (ESPN lists {len(cand)}: "
+                             f"{[teams[c]['displayName'] for c in cand]})")
+
+    names.update(CONFERENCES)
+    names.update(BOARD_ONLY)
+
+    body = "\n".join(f'  {json.dumps(k)}: {json.dumps(v)},'
+                     for k, v in sorted(names.items()))
+    OUT.write_text(
+        "// GENERATED by backend/scripts/gen_cfb_team_names.py -- do not hand-edit.\n"
+        "// Re-run that script to refresh; it derives names from ESPN team IDs\n"
+        "// observed in real games, so an abbreviation shared by two schools\n"
+        "// (OSU = Ohio State Buckeyes vs Ohio State Newark) resolves correctly.\n"
+        f"// {len(names)} codes.\n\n"
+        "export const CFB_TEAM_NAMES: Record<string, string> = {\n"
+        f"{body}\n"
+        "};\n", encoding="utf-8")
+
+    print(f"wrote {OUT.relative_to(ROOT)}: {len(names)} codes "
+          f"({grounded} grounded in played games, {fallback} by unique abbreviation, "
+          f"{len(CONFERENCES)} conferences, {len(BOARD_ONLY)} board-only)")
+    if ambiguous:
+        print(f"LEFT UNMAPPED ({len(ambiguous)}) -- these still render as raw codes:")
+        for a in ambiguous:
+            print("  ", a)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -53,7 +53,7 @@ const EMPTY_PLACED: Set<string> = new Set();
 import { SourceBadge } from "./SourceBadge";
 import { EdgeBadge } from "./EdgeBadge";
 import type { SportKey } from "../../lib/sports";
-import { describePick, marketTypeLabel } from "../../utils/pickLabel";
+import { describePick, marketTypeExplainer, marketTypeLabel } from "../../utils/pickLabel";
 
 
 function formatPct(v: number | null) {
@@ -320,6 +320,24 @@ const columns = [
             <div className="flex items-start gap-1 text-xs text-[var(--color-warning)] mt-1 max-w-xs whitespace-normal">
               <Hourglass size={11} className="shrink-0 mt-0.5" />
               <span>{r.waitReason}</span>
+            </div>
+          )}
+          {/* WHAT THE BET SETTLES ON, for the types where the label does not
+              say (user-reported 2026-08-20: "what exactly do some of these
+              bets mean ... KXNCAAFMACQUAL conference_qualifier"). A qualifier
+              settling on a TOP-TWO FINISH is not recoverable from the words
+              "Conference Title Game", and this is placed by hand on Kalshi.
+
+              A visible wrapped line, not a `title` -- for exactly the reason
+              the waitReason comment above gives: a hover-only tooltip has no
+              cue that hovering reveals anything and does not exist at all on
+              touch. Only the non-obvious types return a sentence, so ordinary
+              moneyline/spread/total rows stay one line and this line keeps
+              meaning "there is a rule here you would not have guessed". */}
+          {marketTypeExplainer(r.marketType, r.sport) && (
+            <div className="flex items-start gap-1 text-xs text-[var(--color-text-dim)] mt-1 max-w-xs whitespace-normal">
+              <Info size={11} className="shrink-0 mt-0.5" />
+              <span>{marketTypeExplainer(r.marketType, r.sport)}</span>
             </div>
           )}
         </div>

@@ -16,6 +16,7 @@ import { EdgeBadge } from "./EdgeBadge";
 import { FuturesTrendModal } from "./FuturesTrendModal";
 import { BetReasoningModal } from "./BetReasoningModal";
 import type { SportKey } from "../../lib/sports";
+import { marketTypeExplainer, teamLabel } from "../../utils/pickLabel";
 import { stakeableLegIds, collapseLadderRungs, MAX_STAKED_LEGS_PER_GROUP } from "../../utils/futuresGroupCap";
 
 
@@ -78,6 +79,23 @@ export const MARKET_TYPE_LABELS: Record<string, string> = {
   mls_cup_winner: "MLS Cup Winner",
   mls_conference_winner: "Conference Winner",
   stage_of_elimination: "Stage of Elimination",
+  // CFB (2026-08-20). These were MISSING from this map entirely, so every CFB
+  // futures row fell through to the raw market_type and the futures board --
+  // the surface these actually get placed from -- printed
+  // "conference_qualifier" where every other sport printed English. The CFB
+  // Dashboard and pickLabel each had their own copy of these names; this is the
+  // third, and the one the user was reading. Named to match pickLabel's
+  // GAME_MARKET_TYPE_LABELS so the same row cannot read two different ways on
+  // two pages.
+  conference_qualifier: "Conference Title Game",
+  conference_regtop: "Conference Reg. Season",
+  cfb_playoff: "Make Playoff",
+  cfb_quarterfinal: "Reach Quarterfinal",
+  cfb_semifinal: "Reach Semifinal",
+  cfb_finalist: "Reach Natl. Title Game",
+  cfb_top4_seed: "Earn Top-4 Seed",
+  cfb_national_champion: "Win National Title",
+  cfb_title_conference: "Champion's Conference",
 };
 
 // stage_of_elimination: the distinguishing field is `side`, not line -- shown
@@ -119,15 +137,40 @@ function formatPct(v: number | null) {
 const columns = [
   columnHelper.accessor("market_type", {
     header: "Market",
-    cell: (info) => (
-      <span className="font-medium whitespace-nowrap">{MARKET_TYPE_LABELS[info.getValue()] ?? info.getValue()}</span>
-    ),
+    cell: (info) => {
+      // The NAME of the market is not its SETTLEMENT RULE, and futures are
+      // where the gap is widest -- "Conference Title Game" does not tell you it
+      // prices as a TOP-TWO FINISH, and "Champion's Conference" is a bet on a
+      // whole conference rather than on any team named in the row. Asked for
+      // directly while placing (2026-08-20): "what exactly do some of these
+      // bets mean ... KXNCAAFMACQUAL conference_qualifier".
+      //
+      // Only the non-obvious types return a sentence, so the column stays one
+      // line for Division Winner / MVP / Win Total and this second line keeps
+      // meaning "there is a rule here you would not have guessed".
+      const explainer = marketTypeExplainer(info.getValue(), info.row.original.sport ?? "");
+      return (
+        <div className="max-w-[22rem]">
+          <span className="font-medium whitespace-nowrap">
+            {MARKET_TYPE_LABELS[info.getValue()] ?? info.getValue()}
+          </span>
+          {explainer && (
+            <div className="text-xs text-[var(--color-text-dim)] whitespace-normal mt-0.5">{explainer}</div>
+          )}
+        </div>
+      );
+    },
   }),
   columnHelper.accessor("group_label", {
     header: "Group",
     cell: (info) => <span className="text-[var(--color-text-dim)] whitespace-nowrap">{info.getValue() ?? "—"}</span>,
   }),
+  // Replaced in FuturesTable's allColumns memo by a version that can resolve
+  // CFB codes to school names (it needs the `sport` prop, which module scope
+  // cannot see). Kept here so the column ORDER stays defined in one list;
+  // `id` is explicit so the swap can find it by id rather than by position.
   columnHelper.accessor("team", {
+    id: "team",
     header: "Team",
     cell: (info) => <span className="font-medium">{info.getValue() ?? "—"}</span>,
   }),
@@ -272,8 +315,28 @@ export function FuturesTable({ rows, onMarkPlaced, sport }: { rows: FuturesMarke
   // "Mark placed" button when the page wires a handler. Built here (not at
   // module scope) so the buttons close over sport/onMarkPlaced.
   const allColumns = useMemo(() => {
+    // FULL SCHOOL NAME, NOT KALSHI'S CODE (user-reported 2026-08-20, while
+    // placing CFB futures: "KXNCAAFMACQUAL just reads Ohio, now is that Ohio
+    // Bobcats? Ohio State?"). It is the Bobcats -- Ohio State is Big Ten and
+    // cannot appear in a Mid-American market -- and the model always knew that
+    // (OHIO and OSU are separate codes on separate ratings, 1752.7 vs 2107.2).
+    // The ambiguity was ONLY ever in this cell, which is the cell the bet gets
+    // placed off, so it is the one that matters.
+    //
+    // Two sources for the sport because two surfaces render this table: the
+    // cross-sport Futures window tags each row with its sport, the per-sport
+    // pages pass the `sport` prop and leave the row's own field null.
+    const teamColumn = columnHelper.accessor("team", {
+      id: "team",
+      header: "Team",
+      cell: (info) => (
+        <span className="font-medium">
+          {teamLabel(info.getValue(), info.row.original.sport ?? sport ?? "") ?? "—"}
+        </span>
+      ),
+    });
     return [
-      ...columns,
+      ...columns.map((c) => (c.id === "team" ? teamColumn : c)),
       columnHelper.display({
         id: "actions",
         header: "",
