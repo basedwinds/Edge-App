@@ -214,3 +214,43 @@ def get_live_pairs() -> set[frozenset]:
     already has settled/decided gates fed by real results, and an empty return
     (feed down) must mean "hide nothing" rather than "hide everything"."""
     return {pair for pair, state in get_match_states().items() if state.get("status") == STATUS_LIVE}
+
+
+def get_started_pairs() -> set[frozenset]:
+    """Pairs Flashscore reports as no longer SCHEDULED -- status 2 (live) or 3.
+
+    WHY THIS EXISTS ALONGSIDE get_live_pairs, which stays narrow on purpose.
+    Status 3 is not "finished", it is "not scheduled and not currently playing",
+    and SUSPENDED matches land there too. get_live_pairs' docstring reasons that
+    finished matches are already covered by "settled/decided gates fed by real
+    results" -- true for a completed match, and false for a suspended one, which
+    has no result to feed them.
+
+    Found 2026-08-20: Ryuki Matsuda vs Omar Jasika, an ITF match rain-delayed
+    after two sets. Flashscore reported status 3 with a resumption time of the
+    NEXT DAY; our row had winner_key NULL and score NULL; the market was still
+    active; and the model priced it from 0-0 at 0.8262 against a market of 0.26
+    -- a +56.6pp "edge" that was entirely the two sets already played. Every
+    other gate was blind: the trading detector needs 50,000 of hourly volume
+    (this ITF market had 18.5k) and every other arm needs an extreme price
+    (this sat at 0.41).
+
+    The safe state is SCHEDULED. Anything else means play has begun, and a match
+    that has begun must never be priced as a fresh one.
+
+    FAILS OPEN like its sibling -- callers must treat an empty set as "no
+    information", never as "nothing has started". Of 78 active Kalshi tennis
+    matches when this was written, 26 were absent from the feed entirely, so a
+    caller that read absence as a positive signal would be wrong a third of the
+    time.
+
+    KNOWN LIMITATION: get_match_states keys on the player pair and lets a
+    definite status stick, so if the same two players meet twice inside the
+    feed's +/-3 day window the earlier finished meeting masks the later
+    scheduled one. That costs a skipped bet on a rematch, which is the cheap
+    direction -- but it is why this is not used to hide rows, only to decline
+    to stake them."""
+    return {
+        pair for pair, state in get_match_states().items()
+        if state.get("status") in (STATUS_LIVE, STATUS_FINISHED)
+    }

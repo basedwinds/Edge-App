@@ -719,6 +719,45 @@ def list_tennis_markets(session: Session = Depends(get_session)):
     def _match_live_on_flashscore(m: Market) -> bool:
         return m.tennis_match_id in live_match_ids
 
+    # SUSPENDED IS NEITHER SCHEDULED NOR FINISHED, AND NOTHING COVERED IT.
+    #
+    # Flashscore's status 3 is "not scheduled and not currently playing", which
+    # includes a match halted mid-play. get_live_pairs is status 2 only, and its
+    # reasoning for leaving 3 out -- that finished matches are already handled by
+    # gates fed by real results -- holds for a COMPLETED match and fails for a
+    # suspended one, which has no result to feed them.
+    #
+    # Ryuki Matsuda vs Omar Jasika (2026-08-20, user-reported): ITF match rain
+    # delayed after two sets. Flashscore said status 3 with a resumption time the
+    # next day, our row had winner_key and score both NULL, the market was still
+    # active, and the model priced it from 0-0 at 0.8262 against a market of 0.26
+    # -- a +56.6pp "edge" that was entirely the two sets already played.
+    #
+    # Requires NO RESULT ON RECORD, so this stays aimed at the uncovered state.
+    # A match Flashscore calls finished AND we have graded is already dropped by
+    # _match_already_decided; re-dropping it here would only make it harder to
+    # tell which gate is doing the work.
+    #
+    # Measured on the 78 active Kalshi tennis matches the day it was written:
+    # scheduled 40, absent from the feed 26, live-no-result 4 (already caught),
+    # finished-with-result 3 (already caught), and FIVE status-3-no-result --
+    # Matsuda/Jasika, Geerts/Poullain, Matusevich/Ceban, Edengren/Loureiro,
+    # Koyama/Dellavedova. That 5 is exactly the hole.
+    #
+    # The 26 absent matches are why this reads only POSITIVE labels. Absence is
+    # not evidence of anything, and a gate that treated it as such would decline
+    # a third of the board on a feed hiccup.
+    started_pairs = _flashscore_started_pairs()
+    started_no_result_ids = {
+        mid for mid, match in matches_by_id.items()
+        if match.player_a_key and match.player_b_key
+        and not match.winner_key
+        and frozenset((match.player_a_key, match.player_b_key)) in started_pairs
+    } if started_pairs else set()
+
+    def _match_started_on_flashscore(m: Market) -> bool:
+        return m.tennis_match_id in started_no_result_ids
+
     markets = [
         m for m in markets
         if not _match_already_decided(m)
@@ -726,6 +765,7 @@ def list_tennis_markets(session: Session = Depends(get_session)):
         and not _match_ladder_resolved(m)
         and not _match_looks_live_by_trading(m)
         and not _match_live_on_flashscore(m)
+        and not _match_started_on_flashscore(m)
         and not _match_pair_resolved(m)
         and not _start_time_untrusted(m)
         and not _fixture_halted(m)
@@ -889,6 +929,34 @@ def _flashscore_live_pairs() -> frozenset:
     if fresh:
         _live_cache["at"], _live_cache["data"] = now, fresh
     return _live_cache["data"]  # type: ignore[return-value]
+
+
+_started_cache: dict[str, object] = {"at": None, "data": frozenset()}
+
+
+def _flashscore_started_pairs() -> frozenset:
+    """Pairs Flashscore reports as no longer scheduled -- live OR suspended OR
+    finished. Same fail-open contract as _flashscore_live_pairs: on any error,
+    or before the first success, return the last good set (empty hides nothing).
+
+    Separate cache rather than a wider _flashscore_live_pairs because the two
+    are used for different jobs -- the live set answers "is play happening right
+    now", this one answers "has play begun at all" -- and collapsing them would
+    silently widen every existing caller of the live set.
+    """
+    import time
+
+    now = time.monotonic()
+    at = _started_cache["at"]
+    if isinstance(at, float) and now - at < _LIVE_CACHE_TTL_SECONDS:
+        return _started_cache["data"]  # type: ignore[return-value]
+    try:
+        fresh = frozenset(flashscore_tennis_client.get_started_pairs())
+    except Exception:
+        return _started_cache["data"]  # type: ignore[return-value]
+    if fresh:
+        _started_cache["at"], _started_cache["data"] = now, fresh
+    return _started_cache["data"]  # type: ignore[return-value]
 
 
 log = logging.getLogger("tennis_markets")
