@@ -152,7 +152,30 @@ SPRINT_EVENT_PREFIXES = ("KXF1RACESPRINT", "KXF1SPRINTPOLE", "KXF1SPRINTTOP5",
 
 
 def is_sprint_event(event_ticker: str | None) -> bool:
-    return bool(event_ticker) and str(event_ticker).startswith(SPRINT_EVENT_PREFIXES)
+    """True for a SPRINT event on either platform.
+
+    The prefix tuple above is Kalshi's ticker shape. Polymarket names the same
+    events with a slug -- "f1-dutch-grand-prix-sprint-winner-2026-08-22" -- which
+    startswith() can never match, so its sprint events were classified as grand
+    prix. That matters because poller_racing picks the ESPN session from this:
+    a sprint grid comes from sprint qualifying (SR), a grand prix grid from
+    qualifying (Race). A misclassified sprint therefore gets gated and released
+    against the WRONG session's grid.
+
+    Found 2026-08-20 on the Dutch GP sprint weekend, the first sprint since the
+    grid gate shipped: events 100 ("Sprint Qualifying Pole Winner") and 101
+    ("Sprint Winner", 22 race_winner markets -- a GATED type) both read
+    is_sprint_event=False while their four Kalshi twins read True.
+
+    Substring match on the slug side because Polymarket's slug carries no stable
+    prefix. Safe in both directions: no grand-prix ticker on either platform
+    contains "sprint" (checked against every racing event on the board), and the
+    one Kalshi sprint series deliberately left unpolled
+    (KXF1SPRINTTOPCONSTRUCTOR) has no RaceEvent to misclassify."""
+    if not event_ticker:
+        return False
+    t = str(event_ticker)
+    return t.startswith(SPRINT_EVENT_PREFIXES) or "sprint" in t.lower()
 
 # DELIBERATELY NOT POLLED, and why -- so this list isn't "rediscovered" as a gap
 # every time someone audits Kalshi's racing catalogue (checked live 2026-08-06):
