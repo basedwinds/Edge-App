@@ -287,7 +287,26 @@ def list_valorant_futures(session: Session = Depends(get_session)):
         # leg collapses to bid 0 / ask ~0.01 and is refused here.
         _bid = snap.yes_bid if snap else None
         _live_book = _bid is not None and _bid > MIN_LIVE_FUTURES_BID
-        if not _live_book and (m.group_label or "") not in _progress_aware:
+        # OR, NOT AND -- and the difference cost a real stake (2026-08-21).
+        #
+        # These are two INDEPENDENT reasons to refuse, and joining them with
+        # `and` meant a row had to fail BOTH before it was refused. A group that
+        # fell back to the flat rating-seeded bracket is not progress-aware:
+        # esports_tournament_pricing says of exactly that case, "a team
+        # eliminated yesterday keeps its full pre-tournament win probability.
+        # Only the first kind is safe to STAKE." A LIVE BOOK DOES NOT REPAIR
+        # THAT -- if anything a liquid market makes the stale model MORE
+        # dangerous, because the price it disagrees with is a real opinion.
+        #
+        # Found on VCT EMEA Stage 2: Team Vitality had LOST its upper-bracket
+        # match and sat in Lower Bracket Round 1, five series from the title.
+        # The bracket-blind sim still priced it at .371 -- FIRST of five -- while
+        # the market had it .075, fourth. Fair value from that position is ~4.5%,
+        # so the model was ~8x high, and it carried a real $2.50 stake purely
+        # because the book was live. The market's own ordering was correct and
+        # the model's was inverted; Karmine sat in the Upper Bracket FINAL and
+        # the model ranked it last.
+        if not _live_book or (m.group_label or "") not in _progress_aware:
             _kelly = None
             _stake = None
         out.append(
