@@ -265,6 +265,64 @@ def run_snapshot_prune():
         session.close()
 
 
+def run_wal_checkpoint():
+    """Force a WAL checkpoint. Only logs, never raises.
+
+    WHY THIS EXISTS -- it is the root cause of the 2026-08-21 incident.
+
+    A WAL checkpoint needs a moment with NO ACTIVE READERS. This app has nine
+    sport pollers, a cache warmer and a frontend all reading more or less
+    continuously, so SQLite's automatic checkpoint (wal_autocheckpoint=1000
+    pages = 4.1MB) is perpetually deferred and the WAL simply grows until the
+    process exits. Measured 2026-08-21: 59MB after fifteen minutes, 88MB after
+    twenty-five -- roughly 20x past the level SQLite is trying to hold.
+
+    That is the first link in the chain that destroyed the database:
+
+        WAL grows unbounded (reached 297MB)
+          -> process is hard-killed
+          -> 297MB of unrecovered WAL has to be replayed
+          -> replay damages page 1, SQLite then believes the DB is 5914 pages
+          -> it writes a COHERENT 24MB file over a 7.78GB one
+          -> the tracker reads empty and 655 real bets are gone
+
+    Every link needs the one before it. Bound the WAL and a hard kill costs a
+    few seconds of snapshots instead of the database.
+
+    TRUNCATE, not PASSIVE. PASSIVE never blocks but also does nothing when a
+    reader is attached, which is exactly the situation that created this. But
+    TRUNCATE CANNOT BE FORCED EITHER -- it returns busy=1 rather than waiting
+    forever, and that is fine: this runs on a timer, so a blocked attempt just
+    means the next one tries again. What matters is that it REPORTS the busy
+    case instead of logging a success it did not achieve.
+
+    Takes the write lock so it is not competing with a poller mid-commit, but
+    note the lock does not evict READERS -- it cannot, and that is why busy is
+    an expected outcome rather than an error.
+    """
+    from pathlib import Path
+    from app.config import settings
+    from app.ingestion.poller_lock import db_write_lock
+    from app.db.database import engine
+
+    wal = Path(settings.sqlite_url().replace("sqlite:///", "") + "-wal")
+    before = wal.stat().st_size if wal.exists() else 0
+    try:
+        with db_write_lock():
+            with engine.connect() as conn:
+                row = conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        after = wal.stat().st_size if wal.exists() else 0
+        busy = row[0] if row else None
+        if busy:
+            log.warning("wal checkpoint BUSY (readers attached) -- WAL still %.1fMB, will retry",
+                        after / 1e6)
+        else:
+            log.info("wal checkpoint ok: %.1fMB -> %.1fMB (%d pages)",
+                     before / 1e6, after / 1e6, (row[1] if row and row[1] is not None else -1))
+    except Exception:
+        log.exception("wal checkpoint failed")
+
+
 def run_market_cleanup():
     """Daily -- marks past-date game markets 'closed' so Kalshi markets that
     dropped off the open list don't linger as 'active' forever (see
@@ -655,6 +713,19 @@ def start():
         hours=24,
         id="catalog_scan",
         next_run_time=housekeeping_tick + timedelta(seconds=2 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
+    # EVERY 5 MINUTES, and not serialized(): it takes the write lock itself for
+    # the one PRAGMA, and wrapping it in the whole-run serializer would make a
+    # cheap maintenance call queue behind a slow poller. Frequent and cheap is
+    # the point -- the WAL grows ~4MB/min under normal polling, so a 5-minute
+    # cadence holds it near 20MB instead of the 297MB that destroyed the DB.
+    scheduler.add_job(
+        run_wal_checkpoint,
+        "interval",
+        minutes=5,
+        id="wal_checkpoint",
+        next_run_time=housekeeping_tick + timedelta(seconds=4 * JOB_STAGGER_SECONDS),
         replace_existing=True,
     )
     scheduler.add_job(
