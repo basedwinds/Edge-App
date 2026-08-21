@@ -715,19 +715,19 @@ def start():
         next_run_time=housekeeping_tick + timedelta(seconds=2 * JOB_STAGGER_SECONDS),
         replace_existing=True,
     )
-    # EVERY 5 MINUTES, and not serialized(): it takes the write lock itself for
-    # the one PRAGMA, and wrapping it in the whole-run serializer would make a
-    # cheap maintenance call queue behind a slow poller. Frequent and cheap is
-    # the point -- the WAL grows ~4MB/min under normal polling, so a 5-minute
-    # cadence holds it near 20MB instead of the 297MB that destroyed the DB.
-    scheduler.add_job(
-        run_wal_checkpoint,
-        "interval",
-        minutes=5,
-        id="wal_checkpoint",
-        next_run_time=housekeeping_tick + timedelta(seconds=4 * JOB_STAGGER_SECONDS),
-        replace_existing=True,
-    )
+    # run_wal_checkpoint IS DELIBERATELY NOT REGISTERED (2026-08-21).
+    #
+    # It was added the same day to bound WAL growth, ran for ~3 hours on a
+    # 5-minute interval, and the database was found corrupt afterwards -- damage
+    # in the market_snapshots b-trees, on a file that had passed a FULL
+    # integrity_check at 11:58 before the job went live. That is not proof:
+    # TRUNCATE is a standard operation and the app was also crash-looping in the
+    # same window, which is the hazard that produced the original 297MB WAL. But
+    # a change went in, damage followed, and the app ran for weeks without it.
+    #
+    # The function is kept, unregistered, so the reasoning is not lost. Before
+    # re-enabling it, shrink the database first (68.5M market_snapshots rows is
+    # the real fragility) and re-test on a DB small enough to verify quickly.
     scheduler.add_job(
         run_snapshot_prune,   # takes the lock per batch itself, must NOT be serialized()
         "interval",

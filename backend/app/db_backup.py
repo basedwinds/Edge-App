@@ -70,11 +70,34 @@ def _snapshots(db: Path) -> list[Path]:
 def _verify(path: Path) -> tuple[bool, str]:
     """Integrity check plus a real read. quick_check alone can pass on a file
     whose tables are missing, so this also counts a table the app cannot run
-    without."""
+    without.
+
+    FULL integrity_check, NOT quick_check -- and this distinction cost a
+    database on 2026-08-21.
+
+    quick_check skips most page-level validation. The snapshot taken that
+    morning was certified "integrity ok, 655 bets" by this function and was
+    ACTUALLY CORRUPT: a full check on it reported dozens of
+    "btreeInitPage() returns error code 11" failures across trees 6, 7 and 10.
+    Both of this function's old tests passed anyway, because the damage was in
+    the market_snapshots b-trees while `placed_bets` -- the very table counted
+    here -- read perfectly.
+
+    A backup verifier that can certify a corrupt backup is worse than no
+    verifier, because it is trusted precisely at the moment it matters. The
+    whole point of the surrounding code is "never rotate on an unverified
+    backup"; that guarantee is only as good as this check.
+
+    COST, measured on the live 7.78GB DB: quick_check ~1s, integrity_check
+    ~240s. That is the right trade for a job that runs daily and exists solely
+    so a restore can be trusted -- and it is a strong argument for keeping the
+    database small enough that verifying it is cheap.
+    """
     try:
         c = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
-            status = c.execute("pragma quick_check").fetchone()[0]
+            c.execute("pragma cache_size=-262144")   # else the check crawls
+            status = c.execute("pragma integrity_check(20)").fetchone()[0]
             bets = c.execute("select count(*) from placed_bets").fetchone()[0]
         finally:
             c.close()
