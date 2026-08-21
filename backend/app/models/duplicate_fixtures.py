@@ -318,9 +318,35 @@ def canonical_race_event_ids(session: Session) -> dict[int, int]:
     across refreshes, matching the tennis/esports helpers above.
     """
     rows = session.query(RaceEvent).all()
-    by_series: dict[str, list] = {}
+
+    # A SPRINT AND ITS GRAND PRIX ARE TWO RACES, NOT ONE.
+    #
+    # Pass 1 groups on the Kalshi ticker SUFFIX, and that suffix identifies the
+    # WEEKEND: KXF1RACE-DUTGP26 and KXF1RACESPRINT-DUTGP26 share "DUTGP26". So
+    # every sprint landed in its grand prix's group, and both consumers of this
+    # map were wrong on a sprint weekend:
+    #
+    #   * reconcile_canonical_race_dates gives a group the EARLIEST start_time in
+    #     it. All 15 Dutch GP events -- sprint and grand prix, both platforms --
+    #     were normalised to Sunday 13:00 while the sprint runs Saturday and
+    #     sprint qualifying Friday. Its justification ("the minimum is the one
+    #     that isn't a settlement deadline") is sound for ONE race per group and
+    #     wrong for two, and it fails in BOTH directions: the sprints read a day
+    #     late, and a sprint carrying its correct earlier time would have dragged
+    #     the GRAND PRIX back onto the sprint's day.
+    #   * cross_platform_divergence would pair a Kalshi SPRINT market against a
+    #     Polymarket GRAND PRIX market as the same proposition -- a manufactured
+    #     divergence between two genuinely different races.
+    #
+    # Splitting the bucket rather than the grouping loop keeps the algorithm
+    # below byte-identical: a weekend with no sprint yields ONE partition and
+    # therefore exactly the previous result. Found 2026-08-20 on the Dutch GP,
+    # the first sprint weekend since the qualifying grid gate shipped.
+    from app.clients.kalshi_racing_client import is_sprint_event
+
+    by_series: dict[tuple, list] = {}
     for r in rows:
-        by_series.setdefault(r.series or "", []).append(r)
+        by_series.setdefault((r.series or "", is_sprint_event(r.event_ticker)), []).append(r)
 
     out: dict[int, int] = {}
     for _series, evs in by_series.items():
