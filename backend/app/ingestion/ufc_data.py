@@ -14,7 +14,7 @@ import json
 import re
 from pathlib import Path
 
-from app.clients.ufcstats_client import UfcStatsClient
+from app.clients.ufcstats_client import BASE_URL, UfcStatsClient
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 FIGHTS_CACHE_PATH = DATA_DIR / "ufc_fight_cache.json"
@@ -156,6 +156,54 @@ def pair_fight_rows(raw_rows: list[dict]) -> list[dict]:
 
 def load_fights() -> list[dict]:
     return pair_fight_rows(load_raw_fight_rows())
+
+
+def fetch_fight_results(fight_ids: list[str]) -> dict[str, dict]:
+    """{fight_id: MmaFight-shaped dict} for fights that have since been fought.
+
+    THE GAP THIS CLOSES. fetch_upcoming_fights scrapes ONLY
+    /statistics/events/upcoming. The moment a card is fought it drops off that
+    list, and nothing ever went back for the result -- so a fight was created
+    with winner_id=None and stayed that way forever. Measured 2026-08-25: 160 of
+    180 MmaFight rows had no winner, and the only 20 that did came from the
+    static ufc_fight_cache.json (built once, 2026-07-17, not scheduled).
+
+    That silence was invisible because MMA BETS still settled: bet_settlement
+    reaches Kalshi's own resolution for those. The forward observation log has no
+    such path -- it grades through _game_is_final, which for mma reads
+    MmaFight.winner_id -- so all 828 MMA observations sat pending and MMA was one
+    of two sports taking real money with no measurement at all.
+
+    Targeted rather than a re-crawl: MmaFight.id IS the ufcstats fight-details
+    URL id, so each fight is one direct fetch with no event-list walk.
+
+    Reuses pair_fight_rows deliberately. That function already encodes the
+    W/L/D/NC distinctions -- including the 2026-07-17 fix separating a real draw
+    (rating-relevant) from a no-contest (not) -- and a second copy here is
+    exactly how one of them ends up not getting a fix the other got. It needs
+    event_* keys it cannot get from a fight-details page, so those are stubbed;
+    the CALLER must take only the result fields and keep the identity fields
+    already on the row.
+    """
+    out: dict[str, dict] = {}
+    if not fight_ids:
+        return out
+    with UfcStatsClient() as client:
+        for fid in fight_ids:
+            try:
+                rows = client.get_fight_details(f"{BASE_URL}/fight-details/{fid}")
+            except Exception:
+                continue  # one unreachable fight must not cost the rest
+            if not rows:
+                continue  # cancelled-bout stub, or did not parse
+            for r in rows:
+                r["event_id"] = ""
+                r["event_name"] = ""
+                r["event_date"] = ""
+            paired = pair_fight_rows(rows)
+            if paired:
+                out[fid] = paired[0]
+    return out
 
 
 # In-process cache, TTL 1h -- re-scraping ufcstats' upcoming-card list every

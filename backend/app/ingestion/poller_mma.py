@@ -6,6 +6,7 @@ only -- see elo_mma.py/elo_service_mma.py). Deliberately NOT built yet:
 futures (KXUFCTITLE family -- user asked for these last/low-priority) and
 the situational/news layer (Phase 3).
 """
+import datetime as dt
 import logging
 
 from app.clients import kalshi_mma_client, polymarket_mma_client
@@ -59,6 +60,72 @@ def refresh_mma_fights():
             log.info("refreshed %d upcoming mma fights", count)
         finally:
             session.close()
+
+
+# How many fights to resolve per pass. Each is one PoW-gated ufcstats fetch, so
+# an unbounded backlog would stall the whole mma refresh behind it. A UFC card is
+# ~12 fights and they run weekly, so 40 clears a normal week's backlog in one
+# pass and any historical backlog within a few.
+_RESULT_BACKFILL_LIMIT = 40
+
+
+def backfill_mma_results() -> int:
+    """Fill in winner/method/round for fights that have HAPPENED.
+
+    refresh_mma_fights only ever sees ufcstats' UPCOMING list, so a fight is
+    created with winner_id=None and never revisited once it is fought. See
+    ufc_data.fetch_fight_results for the full measurement cost of that.
+
+    Only the RESULT fields are written. The identity fields (event, date,
+    fighters) stay as ingested -- fetch_fight_results stubs them because a
+    fight-details page carries no event context, and copying those stubs over
+    good data would be a far worse bug than the one being fixed.
+
+    A fight that has not actually been fought yet comes back with winner_id=None
+    and is left untouched, so an early call cannot blank anything.
+    """
+    today = dt.date.today().isoformat()
+    session = SessionLocal()
+    try:
+        pending = [
+            f.id for f in session.query(MmaFight)
+            .filter(MmaFight.winner_id.is_(None),
+                    MmaFight.event_date < today)
+            .order_by(MmaFight.event_date.desc())
+            .limit(_RESULT_BACKFILL_LIMIT).all()
+        ]
+    finally:
+        session.close()
+    if not pending:
+        return 0
+
+    results = ufc_data.fetch_fight_results(pending)
+    updated = 0
+    with db_write_lock():
+        session = SessionLocal()
+        try:
+            for fid, f in results.items():
+                row = session.get(MmaFight, fid)
+                if row is None:
+                    continue
+                # Still unfought (or a genuine draw/NC with nothing to record) --
+                # leave the row exactly as it is rather than writing nulls.
+                if not f.get("winner_id") and not f.get("method"):
+                    continue
+                row.winner_id = f.get("winner_id")
+                row.method = f.get("method")
+                row.round = f.get("round")
+                row.time = f.get("time")
+                if f.get("scheduled_rounds"):
+                    row.scheduled_rounds = f["scheduled_rounds"]
+                if f.get("went_the_distance") is not None:
+                    row.went_the_distance = f["went_the_distance"]
+                updated += 1
+            session.commit()
+        finally:
+            session.close()
+    log.info("backfilled results for %d mma fights (%d checked)", updated, len(pending))
+    return updated
 
 
 def _infer_scheduled_rounds_from_kalshi(session, rounds_rows: list[dict], fight_id_by_suffix: dict[str, str | None]) -> int:
@@ -357,6 +424,9 @@ def run_full_refresh_mma():
     # skipping soccer's settlement until 2026-08-08; the same shape applies here.
     for name, fn in (
         ("fights", refresh_mma_fights),
+        # AFTER fights, BEFORE ratings: a fight resolved this pass should feed
+        # the Elo refresh in the SAME pass rather than waiting a cycle.
+        ("results backfill", backfill_mma_results),
         ("ratings", refresh_mma_ratings),
         ("kalshi markets", refresh_kalshi_mma_markets),
         ("kalshi title futures", refresh_kalshi_mma_title_markets),
