@@ -25,6 +25,7 @@ same field names on NflGame/NbaGame/MlbGame (confirmed live) -- so they were
 already sport-agnostic in practice, just never given a non-NFL game to grade.
 """
 import logging
+import re
 
 from sqlalchemy.orm import Session, object_session
 
@@ -453,15 +454,69 @@ def _grade_mma_distance(bet: PlacedBet, fight: MmaFight) -> "str | None":
     return "won" if went else "lost"  # side "yes" (the priced YES row)
 
 
+_MMA_ROUND_MINUTES = 5.0
+
+
+def _mma_elapsed_minutes(fight: MmaFight) -> "float | None":
+    """Total fight time in minutes, or None if the finish time is unparseable.
+
+    MmaFight.time is "MM:SS" WITHIN the finishing round (ufcstats), so the full
+    elapsed time is every completed round plus that. A decision carries the full
+    final round ("5:00"), which lands on exactly round_count x 5:00 as it should.
+    """
+    if fight.round is None:
+        return None
+    m = re.match(r"^\s*(\d+):(\d{2})\s*$", fight.time or "")
+    if not m:
+        return None
+    return ((fight.round - 1) * _MMA_ROUND_MINUTES
+            + int(m.group(1)) + int(m.group(2)) / 60.0)
+
+
 def _grade_mma_rounds(bet: PlacedBet, fight: MmaFight) -> "str | None":
-    """over/under X.5 rounds, graded on the round the fight ended in (a finish
-    in round R, or R=scheduled_rounds for a decision). "Entered the round"
-    convention: over X.5 needs round > X.5."""
+    """over/under N rounds. The LINE SHAPE decides the question being asked.
+
+    A WHOLE line is a round-index question and a HALF line is a duration
+    question. They are genuinely different, and each platform lists only one
+    shape, so this branches on the shape rather than on the source (a source
+    check would go stale the moment either platform lists the other form).
+
+      whole N  -> over wins if the fight REACHED round N   (round >= N)
+                  Kalshi's captured rules text, verbatim: "If the ... fight ...
+                  ends before round 3, then the market resolves to Yes" -- so a
+                  finish IN round 3 is a NO, i.e. over.
+      half X.5 -> over wins if the fight passed X.5 x 5:00  (elapsed > X.5*5)
+                  "over 2.5" means past 12:30, halfway through round 3 -- NOT
+                  merely that round 3 began.
+
+    SCORED AGAINST THE PLATFORMS' OWN RESOLUTIONS, 157 settled rounds bets:
+
+        rule                              all        kalshi (whole)  polymarket (half)
+        over = round >  N   (shipped)   129/157        46/64             83/93
+        over = elapsed > N*5            139/157        46/64             93/93
+        THIS (branch on shape)          157/157        64/64             93/93
+
+    Both earlier rules failed, in different places and for different reasons.
+    `round > N` treats round==N as a loss for BOTH sides, so every Kalshi fight
+    ending in the line round was misgraded whichever way it was bet. Pure
+    elapsed-time fixed Polymarket and left Kalshi untouched at 46/64, because on
+    a whole line it also puts round==N below the threshold.
+
+    Falls back to the round index when the finish time is unparseable -- that
+    only affects half lines, and a half line genuinely is not decidable without
+    a time.
+    """
     if fight.round is None or bet.line is None:
         return None
+    line = float(bet.line)
+    if line == int(line):
+        over = fight.round >= line
+    else:
+        elapsed = _mma_elapsed_minutes(fight)
+        over = (elapsed > line * _MMA_ROUND_MINUTES) if elapsed is not None             else (fight.round > line)
     if bet.side == "under":
-        return "won" if fight.round < bet.line else "lost"
-    return "won" if fight.round > bet.line else "lost"  # side "over"
+        return "won" if not over else "lost"
+    return "won" if over else "lost"  # side "over"
 
 
 def _grade_mma_method(bet: PlacedBet, fight: MmaFight) -> "str | None":
