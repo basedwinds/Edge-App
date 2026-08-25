@@ -55,6 +55,7 @@ from app.models.staking import FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUT
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 from app.api.routers.settings import get_pool_dollars, get_unit_dollars, get_staking_params, get_flat_params
 from app.data.divisions import DIVISIONS
+from app.api.cross_key import teamless_ladder_cross_key
 from app.api.schemas import FuturesMarketOut, MarketOut, ReasoningFactorOut, ReasoningOut
 from app.api.start_gate import iso_z
 
@@ -1276,6 +1277,10 @@ def list_futures(session: Session = Depends(get_session)):
                 source=m.source,
                 team=m.team,
                 group_label=m.group_label,
+                # Only set for a futures family with no team and no label of its
+                # own (see app/api/cross_key.py); "" -> None everywhere else so
+                # the frontend keeps computing its own key exactly as before.
+                cross_key=teamless_ladder_cross_key("nfl", m.market_type) or None,
                 line=m.line,
                 side=m.side,
                 implied_prob=implied,

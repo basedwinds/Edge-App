@@ -29,6 +29,17 @@ function propKey(p: { sport: string; market_type: string; team: string | null; s
   // emitting cross_key on its futures rows AND being added here -- both halves,
   // or neither.
   if (p.sport === "soccer" && p.cross_key) return p.cross_key;
+  // NFL wins_any OPTS IN TOO, and it is the case that proved the gate matters.
+  // These rows carry no team AND no group_label, so the raw key below became
+  // `nfl|wins_any|||16` while the placed bet keyed on `nfl|wins_any|NFL wins_any`
+  // -- they never matched, so a recommended "15+ wins" row could not be cleared
+  // by marking it placed (user-reported 2026-08-25). The raw key also includes
+  // `line`, which the backend deliberately excludes, so the two disagreed twice.
+  //
+  // Excluding the line is the point: 15+/16+/17+ are NESTED, not independent --
+  // any team winning 16+ has already won 15+. One proposition, one row, and
+  // placing any rung clears them all.
+  if (p.market_type === "wins_any" && p.cross_key) return p.cross_key;
   return `${p.sport}|${p.market_type}|${p.team ?? ""}|${p.side ?? ""}|${p.line ?? ""}`;
 }
 

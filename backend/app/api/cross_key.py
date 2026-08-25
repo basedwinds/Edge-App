@@ -54,3 +54,45 @@ def soccer_game_cross_key(match_id, market_type, team, line, side) -> str:
 
     canon = canonical_team_key((team or "").strip())
     return f"{match_id}|{market_type or ''}|{canon}|{fmt_line(line)}|{side or ''}"
+
+
+# FUTURES WITH NO IDENTITY OF THEIR OWN.
+#
+# The futures cross-platform key is `sport|market_type|team ?? label`. A handful
+# of futures carry NO team AND no group_label, so that key degenerates and can
+# never match anything -- user-reported 2026-08-25: a recommended "any team to
+# win 15+ games" row could not be cleared by marking it placed, because the
+# board row keyed on `nfl|wins_any|None` while the placed bet keyed on
+# `nfl|wins_any|NFL wins_any` (its stored label). The frontend made it worse by
+# including `line` in its own futures key while the backend deliberately
+# excludes it, so the two disagreed twice over.
+#
+# MEASURED BEFORE NARROWING THE FIX. Across every active market: 14,300 carry no
+# team, but only 84 ALSO lack a group_label AND any link id. Of those 84, 81 are
+# MMA/MLB GAME markets that failed to link to their fight or game -- a separate
+# unlinked-market problem, already its own health-check category. Exactly ONE
+# genuine futures family is left, and it is a nested ladder:
+#
+#     nfl wins_any   lines 15.0 / 16.0 / 17.0, side "over"
+#
+# The line is EXCLUDED from the identity on purpose: these rungs are nested, not
+# independent. Any team winning 16+ has by definition won 15+, so they are one
+# proposition at different thresholds and must collapse to a single row and
+# clear together when one is placed.
+#
+# DELIBERATELY NOT a broad rule. mvp / dpoy / opoy / coach_of_year and the
+# season-stat leaders are also team-less, but carry the PLAYER NAME in
+# group_label -- 16 distinct MVP candidates on the live board. Keying those on
+# sport|market_type would merge every candidate into one row.
+TEAMLESS_LADDER_FUTURES = {("nfl", "wins_any")}
+
+
+def teamless_ladder_cross_key(sport, market_type) -> str:
+    """Stable identity for a futures ladder that has no team and no label.
+
+    Returns "" when this is not such a market, so callers fall through to their
+    existing key rather than collapsing unrelated rows together.
+    """
+    if (sport or "", market_type or "") in TEAMLESS_LADDER_FUTURES:
+        return f"{sport}|{market_type}"
+    return ""

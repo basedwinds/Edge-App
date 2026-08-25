@@ -18,7 +18,7 @@ VALID_SETTLE_STATUSES = {"won", "lost", "push", "void"}
 # read it (racing rows fall to the sport|market_type|team fallback), so this must
 # stay byte-identical to the frontend -- the Recommended view's cross-platform
 # "already placed" check compares this backend key against the frontend key.
-from app.api.cross_key import soccer_game_cross_key
+from app.api.cross_key import soccer_game_cross_key, teamless_ladder_cross_key
 
 _GAME_ID_ATTRS = [
     "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
@@ -123,6 +123,14 @@ def _cross_platform_key(bet) -> str:
         from app.ingestion.market_matcher_soccer import canonical_team_key
         _t = bet.team if bet.team is not None else (bet.label or "")
         return f"soccer|{mt}|{canonical_team_key(_t or '')}"
+    # A FUTURES FAMILY WITH NO TEAM AND NO LABEL falls back to `bet.label`, which
+    # is a synthesised string ("NFL wins_any") that the BOARD row does not carry --
+    # so the two never matched and the row could not be cleared. Keyed on
+    # sport|market_type instead, which both sides can produce. See cross_key.py
+    # for why this is one family and not a general rule.
+    _ladder = teamless_ladder_cross_key(bet.sport, mt)
+    if _ladder:
+        return _ladder
     return f"{bet.sport or ''}|{mt}|{bet.team if bet.team is not None else (bet.label or '')}"
 
 # Calibration buckets group settled bets by their predicted probability at
