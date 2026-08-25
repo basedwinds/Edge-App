@@ -277,6 +277,120 @@ class SeasonSimResult:
 CALENDAR_YEAR_LEAGUES = frozenset({"BRA1", "CHN1", "JPN1", "NOR1", "SWE1", "MLS", "MEX1"})
 
 
+# ---------------------------------------------------------------------------
+# SEASON-PROGRESS GATE
+#
+# WHY. The position/clean-sheet outputs below were scored against finished
+# seasons for the first time on 2026-08-25
+# (scripts/check_soccer_season_sim_calibration.py, 17 leagues, n=6,186
+# team-seasons per cutoff). They are OVERCONFIDENT EARLY and fine late -- the
+# same failure racing top_n had. Worst case, preseason relegation:
+#
+#     claimed 0.94  ->  actually went down 45% of the time   (+49.3pp)
+#     claimed 0.78  ->  actually 48%                         (+29.7pp)
+#
+# The error is the model claiming HIGH probabilities that do not land, which
+# manufactures false edge on the YES side of favourites -- the worst possible
+# direction for staking. It decays as the season is played, and by 75% every
+# question is inside a few points.
+#
+# THE AGGREGATE DOES NOT SHOW THIS. Every question reads gap +0.00pp overall at
+# every cutoff, because the simulation normalises positions to sum to 1. Only
+# the per-bucket table reveals it. Do not "re-check whether this gate is needed"
+# with an aggregate calibration number -- it will always say the model is
+# perfect.
+#
+# MEASURED IN FIXTURES, NOT WEEKS, because that is what was measured and because
+# international breaks, midweek rounds and differing season lengths make a
+# calendar threshold mean different amounts of football in different leagues.
+#
+# The gate lifts itself: progress is recomputed per request from the live table,
+# so a league starts pricing again the moment it crosses its threshold.
+MIN_SEASON_PROGRESS = {
+    # ---- DIRECTLY MEASURED (17 leagues, n=6,186 team-seasons per cutoff) ----
+    #
+    # league_winner (the `champion` question). Overconfidence by cutoff, pooled,
+    # on the buckets claiming >= 0.50:
+    #     0%   +16.3 / +10.6 / +21.0 pp
+    #     25%  +10.0 /  +7.4 /  +8.0 pp
+    #     50%   +1.2 / +11.7 /  +0.4 pp   <- still one bad band (n=96)
+    #     75%   +4.5 /  -3.1 /  +1.6 pp
+    # 50% looks tempting -- two of its three bands are near-perfect. It is set at
+    # 0.75 anyway because a SECOND, independent view agrees that 50% is not
+    # clean: per league at 50%, D1 reads +11.9pp and T1 +28.6pp. One noisy band
+    # would be noise; a pooled band and two leagues is a pattern. This is also
+    # the biggest live surface (579 of 735 markets), so it is the wrong place to
+    # take the optimistic reading.
+    "league_winner": 0.75,
+    # relegation, per league at 50%: E0 +9.3, SP1 +13.3, D1 +6.2, F1 +8.7.
+    # At 75%: +1.8 / +5.0 / +1.6 / +5.3 / -2.1. Clean only at 75%.
+    "relegation": 0.75,
+    # top4 is the best-behaved question. Pooled at 25%: +0.8 / +3.8 / +4.1 pp --
+    # already inside the noise. NOR1 (+16.6) and SWE1 (+11.0) are still off at
+    # 25%, but those cells hold ~10-40 rows each and both are inside +-5pp by
+    # 50%, so the pooled reading carries it.
+    "top4": 0.25,
+
+    # ---- NOT DIRECTLY MEASURED ----
+    # Each takes its stricter measured neighbour, because the error grows as the
+    # question gets tighter. Change these by ADDING THEM TO THE BACKTEST, not by
+    # argument.
+    "top_half": 0.25,   # looser than top4 -> inherits top4's bar
+    "top2": 0.50,       # tighter than top4, looser than champion -> between them
+
+    # ---- NOT YET LIVE ----
+    # The 23 "Team with Most Clean Sheets" markets are still in the catalog
+    # backlog. Per league at 50% every one is inside 10pp; by 75% several flip
+    # to -10..-15pp (UNDER-confident, the safe direction but still wrong). Wired
+    # ahead of the markets so they cannot land ungated -- update the key if
+    # ingestion names the type differently.
+    "most_clean_sheets": 0.50,
+}
+
+# Not gated: team_points (a scalar total, not a finishing position) and the
+# MLS/Liga MX bracket markets, which are not priced from this simulation at all.
+
+
+def season_progress(n_teams: int, played_pairs) -> float:
+    """Fraction of the season's double round-robin already played, 0.0-1.0.
+
+    Returns 0.0 for an unknown or degenerate field rather than raising, so a
+    league with no current table reads as preseason -- which is the safe answer,
+    because every threshold above then blocks.
+    """
+    if not n_teams or n_teams < 2:
+        return 0.0
+    total = n_teams * (n_teams - 1)
+    return min(1.0, len(played_pairs or ()) / total)
+
+
+def season_progress_ok(market_type: str, progress: float) -> bool:
+    """True when this market type may be STAKED at this point in the season.
+
+    An ungated market type returns True -- the gate is an allowlist of known
+    problems, not a default-deny, so adding a new futures type does not silently
+    switch it off.
+    """
+    threshold = MIN_SEASON_PROGRESS.get(market_type)
+    if threshold is None:
+        return True
+    return (progress or 0.0) >= threshold
+
+
+def season_progress_note(market_type: str, progress: float) -> str:
+    """User-facing reason a row is priced but not stakeable."""
+    threshold = MIN_SEASON_PROGRESS.get(market_type, 0.0)
+    return (
+        f"Not staked yet: this league is {progress*100:.0f}% through its season and "
+        f"this market needs {threshold*100:.0f}%. Measured across 17 leagues and "
+        f"6,186 team-seasons, the season model is overconfident early -- preseason it "
+        f"has claimed 94% for teams that were relegated 45% of the time -- which "
+        f"invents edge on favourites. It self-corrects as fixtures are played, and "
+        f"this market becomes stakeable automatically."
+    )
+
+
+
 def current_season_table(league: str, matches, today=None):
     """(starting_table, played_pairs) for the season IN PROGRESS.
 

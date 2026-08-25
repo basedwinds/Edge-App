@@ -77,10 +77,27 @@ from app.models.season_sim_soccer import (
     simulate_season,
 )
 
-# Only leagues with a real, fixed relegation zone -- the same five the shipped
-# RELEGATION_ZONE_SIZE covers. A league without one cannot be scored on the
-# relegation question at all, and these five are also the deepest history.
-LEAGUES = list(RELEGATION_ZONE_SIZE)
+# Every top-flight league the app prices season futures for that has enough
+# history to score. The first pass covered only RELEGATION_ZONE_SIZE's five, but
+# 735 season-futures markets are live and three of the user's open positions sit
+# in leagues outside that set -- so their corrections were extrapolated.
+#
+# The relegation question is scored ONLY where RELEGATION_ZONE_SIZE defines a
+# real zone; inventing a zone size for the rest would be making up the answer
+# key. The other four questions need no zone and are scored everywhere.
+#
+# DELIBERATELY EXCLUDED, because simulate_season models a straight double
+# round-robin and these are not one -- a bad score would measure the format
+# mismatch, not calibration:
+#   MEX1  split torneos, won in the Liguilla (playoff_sim_service_ligamx)
+#   MLS   unbalanced conference schedule (season_sim_soccer's own docstring)
+#   ARG1  rotating multi-stage format
+# KEPT despite partial-format doubts (B1/G1 playoffs, SC0's post-33-game split)
+# precisely so the per-league table SHOWS whether that breaks them.
+LEAGUES = ["E0", "SP1", "I1", "D1", "F1",        # already tested
+           "N1", "P1", "BRA1",                   # the user's open positions
+           "T1", "B1", "G1", "SC0",              # other European top flights
+           "JPN1", "DNK1", "NOR1", "SWE1", "CHN1"]
 CUTOFFS = [0.0, 0.25, 0.50, 0.75]
 N_SIMULATIONS = 2000
 WARMUP_SEASONS = 3          # seasons of ratings before the first scored season
@@ -131,7 +148,7 @@ def main() -> int:
     raw = [m for m in soccer_data.load_matches() if not elo_service_soccer._is_exhibition(m)]
     by_league = defaultdict(list)
     for m in raw:
-        if m.get("league") not in RELEGATION_ZONE_SIZE:
+        if m.get("league") not in set(LEAGUES):
             continue
         if m.get("home_goals_ft") is None:
             continue
@@ -154,6 +171,7 @@ def main() -> int:
 
     # question -> cutoff -> list of (predicted, actual 0/1)
     scored = defaultdict(lambda: defaultdict(list))
+    per_league = defaultdict(lambda: defaultdict(list))
     n_team_seasons = defaultdict(int)
 
     for league in LEAGUES:
@@ -174,7 +192,7 @@ def main() -> int:
         print(f"\n{league}: scoring seasons {scored_years[0] if scored_years else '-'}"
               f"..{scored_years[-1] if scored_years else '-'} "
               f"({len(scored_years)})", flush=True)
-        zone = RELEGATION_ZONE_SIZE[league]
+        zone = RELEGATION_ZONE_SIZE.get(league)  # None -> skip relegation
 
         for year in scored_years:
             season_matches = seasons[year]
@@ -246,11 +264,20 @@ def main() -> int:
                     if pos is None:
                         continue
                     scored["champion"][frac].append((p_champ, 1.0 if pos == 1 else 0.0))
+                    per_league["champion"][(league, frac)].append(
+                        (p_champ, 1.0 if pos == 1 else 0.0))
                     scored["top_four"][frac].append((p_top4, 1.0 if pos <= 4 else 0.0))
+                    per_league["top_four"][(league, frac)].append(
+                        (p_top4, 1.0 if pos <= 4 else 0.0))
                     scored["exact_third"][frac].append((p_third, 1.0 if pos == 3 else 0.0))
-                    scored["relegated"][frac].append(
-                        (p_rel, 1.0 if pos > len(order) - zone else 0.0))
+                    if zone:
+                        scored["relegated"][frac].append(
+                            (p_rel, 1.0 if pos > len(order) - zone else 0.0))
+                        per_league["relegated"][(league, frac)].append(
+                            (p_rel, 1.0 if pos > len(order) - zone else 0.0))
                     scored["most_clean_sheets"][frac].append(
+                        (p_cs, 1.0 if t in cs_leaders else 0.0))
+                    per_league["most_clean_sheets"][(league, frac)].append(
                         (p_cs, 1.0 if t in cs_leaders else 0.0))
                     n_team_seasons[frac] += 1
             print(f"  {year} done ({len(teams)} teams)", flush=True)
@@ -282,6 +309,31 @@ def main() -> int:
                     flag = "   <-- off by >10pp"
                 print(f"        {lo:.2f}-{hi:.2f}  n={len(g):>5}  "
                       f"claimed {c:.3f}  actual {a:.3f}  {(c-a)*100:+7.1f}pp{flag}")
+    # PER LEAGUE. Pooling 17 leagues lets the well-behaved big five mask a
+    # league whose format the round-robin model does not describe -- the same
+    # "aggregate hides the build" trap this exercise exists to avoid. B1/G1
+    # have playoffs and SC0 splits after 33 games; if that breaks them, it
+    # shows up here rather than being averaged away.
+    print("=" * 96)
+    print("PER LEAGUE -- overconfidence on rows claiming >= 0.50 (claimed - actual, pp)")
+    print("  dash = fewer than 10 such rows at that cutoff")
+    print("=" * 96)
+    for question in ("champion", "top_four", "most_clean_sheets", "relegated"):
+        print("")
+        print("### " + question)
+        print("  league  " + "  ".join(f"{int(f*100):>3}%played" for f in CUTOFFS))
+        for league in LEAGUES:
+            cells, any_data = [], False
+            for frac in CUTOFFS:
+                rr = [(pp, yy) for pp, yy in per_league[question][(league, frac)] if pp >= 0.50]
+                if len(rr) < 10:
+                    cells.append("       -  ")
+                    continue
+                any_data = True
+                gap = (sum(pp for pp, _ in rr) - sum(yy for _, yy in rr)) / len(rr)
+                cells.append(f"{gap*100:+7.1f}pp ")
+            if any_data:
+                print(f"  {league:6}  " + " ".join(cells))
     print("\ndone.")
     return 0
 

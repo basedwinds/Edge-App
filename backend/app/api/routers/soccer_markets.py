@@ -71,7 +71,9 @@ from app.models.ladder_sanity import (
 from app.models.news_adjustment.schema import NewsAdjustment
 from app.models import playoff_sim_service_ligamx
 from app.models import playoff_sim_service_mls
-from app.models.season_sim_soccer import SeasonSimResult, prob_points_at_least, simulate_season, current_season_table
+from app.models.season_sim_soccer import (SeasonSimResult, prob_points_at_least, simulate_season,
+                                          current_season_table, season_progress, season_progress_ok,
+                                          season_progress_note)
 from app.models.staking import apply_ladder_futures_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
@@ -1325,6 +1327,7 @@ def list_soccer_futures(session: Session = Depends(get_session)):
 
     sim_by_league: dict[str, SeasonSimResult | None] = {}
     mid_season_divisions: set[str] = set()
+    progress_by_division: dict[str, float] = {}
     # HOISTED OUT OF THE LOOP. This was called per division below, and it parses
     # the whole 122 MB match cache (1.26s) -- 24 divisions meant 30 seconds of
     # identical work per request, holding the GIL throughout and starving every
@@ -1396,6 +1399,12 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         starting_table, played_pairs = current_season_table(division, matches_by_league.get(division, []))
         if played_pairs:
             mid_season_divisions.add(division)
+        # HOW FAR INTO ITS SEASON THIS LEAGUE IS. Feeds the season-progress gate
+        # below -- see season_sim_soccer.MIN_SEASON_PROGRESS for the measurement
+        # that makes it necessary. Recorded for EVERY division, including ones
+        # with no table yet: those read 0.0, which is the correct answer and the
+        # one that blocks.
+        progress_by_division[division] = season_progress(len(canonical_teams), played_pairs)
         sim_by_league[division] = simulate_season(
             state, canonical_teams, division, n_simulations=3000, second_tier_state=second_tier_state,
             starting_table=starting_table, played_pairs=played_pairs,
@@ -1484,6 +1493,17 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         implied = _implied_prob(snap)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
         kelly = gate_kelly(kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None), clv_stats, "soccer", m.market_type)
+        # SEASON-PROGRESS GATE. Priced but not stakeable while the league is too
+        # early in its season for this question to be calibrated. kelly=None is
+        # the established "did not qualify" signal size_stake_dollars reads, and
+        # a null stake is what keeps a row off the recommended list.
+        #
+        # Labelled rather than hidden, matching the MLS-bracket and CFB posture:
+        # the model number stays visible with a note saying why it is not backed
+        # and when it will be.
+        _progress = progress_by_division.get(_futures_division(m), 0.0)
+        if not season_progress_ok(m.market_type, _progress):
+            kelly = None
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None, sport="soccer", team=m.team)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
         out.append(
@@ -1577,6 +1597,16 @@ def list_soccer_futures(session: Session = Depends(get_session)):
     for row in out:
         if _futures_division(row) in mid_season_divisions:
             row.model_note = f"{row.model_note or ''} {MID_SEASON_SIM_NOTE}".strip()
+    # Season-progress note, on the rows the gate actually blocked. Keyed off a
+    # null stake PLUS a real model number, so it cannot fire on a row left
+    # unstaked for some other reason (no book, no price, below the edge bar).
+    for row in out:
+        _div = _futures_division(row)
+        if _div is None or row.model_prob is None:
+            continue
+        _prog = progress_by_division.get(_div, 0.0)
+        if row.suggested_stake_dollars is None and not season_progress_ok(row.market_type, _prog):
+            row.model_note = f"{row.model_note or ''} {season_progress_note(row.market_type, _prog)}".strip()
 
     out.sort(key=lambda m: (m.group_label or "", -(m.implied_prob or 0)))
     return out
