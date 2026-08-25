@@ -139,6 +139,34 @@ def refresh() -> int:
                 log.exception("observation logger: %s route failed, skipping", sport)
                 continue
 
+            # RACING IS THREE SPORTS AND THIS TABLE MUST SAY SO.
+            #
+            # SPORT_ROUTES keys are ROUTE names. For every other entry the route
+            # name and the sport happen to coincide, but racing's route serves
+            # f1 + irl + nascar, and PlacedBet stores those three separately.
+            # Writing the route name here cost the app its entire racing
+            # measurement: bet_settlement dispatches on `sport in ("f1","irl",
+            # "nascar")` in FOUR places, so a row saying "racing" missed all of
+            # them, fell through _get_game's final line to the NFL branch, found
+            # a null nfl_game_id and returned None. All 2,798 gradeable racing
+            # observations sat pending forever -- and racing was the one sport
+            # carrying real money with no forward measurement at all, so a bad
+            # model and a bad run were indistinguishable there.
+            #
+            # Fixing it at the SOURCE rather than teaching the settler a fourth
+            # name also buys per-series scoring, which racing actually needs:
+            # on real money nascar is -61% and irl is +66%, and a pooled
+            # "racing" row cannot tell those apart.
+            #
+            # One batched query per refresh, not one per row.
+            sport_by_market = {}
+            if sport == "racing":
+                from app.db.models import Market as _Market
+                sport_by_market = dict(
+                    session.query(_Market.id, _Market.sport)
+                    .filter(_Market.sport.in_(("f1", "irl", "nascar"))).all()
+                )
+
             n_rows = n_priced = 0
             for r in rows:
                 n_rows += 1
@@ -159,12 +187,28 @@ def refresh() -> int:
                 start = _parse_dt(_get(r, *_START_FIELDS))
                 implied = getattr(r, "implied_prob", None)
                 if obs is None:
-                    obs = ModelObservation(market_id=mid, sport=sport, first_seen_at=now)
+                    obs = ModelObservation(
+                        market_id=mid,
+                        sport=sport_by_market.get(mid, sport),
+                        first_seen_at=now,
+                    )
                     session.add(obs)
                     existing[mid] = obs
                 obs.market_type = getattr(r, "market_type", None)
                 obs.source = getattr(r, "source", None)
-                obs.team = getattr(r, "team", None)
+                # `driver` IS racing's `team`. Every other sport's route row calls
+                # the entity `team` -- tennis and mma deliberately reuse the
+                # field for a player/fighter name -- but RacingMarketOut names it
+                # `driver`, so this copied None for all 3,010 racing rows.
+                #
+                # Every racing grader resolves its subject from bet.team
+                # (_grade_racing_race_winner/top_n/pole via _race_did, and h2h via
+                # split_h2h_label), so a null team meant each one returned None
+                # and the row stayed pending even once the race result existed.
+                # This was the SECOND of two independent faults blocking racing
+                # measurement; fixing the sport key alone left 1,577 rows still
+                # ungradeable.
+                obs.team = getattr(r, "team", None) or getattr(r, "driver", None)
                 obs.side = getattr(r, "side", None)
                 obs.line = getattr(r, "line", None)
                 for f in ENTITY_FIELDS:
