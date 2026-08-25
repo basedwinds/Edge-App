@@ -169,6 +169,10 @@ class TeamSeasonResult:
     points: int = 0
     goals_for: int = 0
     goals_against: int = 0
+    # Matches this team finished without conceding. Counted per simulated match
+    # rather than derived from goals_against, because a season total of 0 against
+    # says nothing about how many individual matches were shut out.
+    clean_sheets: int = 0
 
     @property
     def goal_diff(self) -> int:
@@ -240,6 +244,27 @@ class SeasonSimResult:
     # histogram rather than a raw sample list so it stays small (a season spans
     # ~40 distinct point totals) and can be cached alongside the other outputs.
     points_dist: dict = field(default_factory=dict)
+    # team -> {final position (1-based): share of simulated seasons}. Read off
+    # the SAME `ranked` list champion/top4/relegation already come from, so it is
+    # exactly consistent with them by construction -- P(position 1) equals
+    # champion_prob, and the bottom `zone_size` positions sum to relegation_prob.
+    # That identity is the cheapest available check that this is right, and
+    # test_position_identities() in the probe asserts it.
+    #
+    # Prices Kalshi/Polymarket's "Nth Place Finish" and "Nth Place (Relegation
+    # Survivor)" and "Last Place Finisher" markets -- 51 live entries across 30+
+    # leagues that were previously, and wrongly, labelled unmodellable.
+    position_dist: dict = field(default_factory=dict)
+    # team -> P(finishes the season with the most clean sheets). Ties split
+    # evenly among the co-leaders, matching how these books settle a tie (see
+    # Market.rules_secondary, e.g. h2h_wins "all markets resolve to 50/50").
+    #
+    # EMPTY when the season is already part-played and the caller did not supply
+    # `starting_clean_sheets`. See the docstring of simulate_season: a partial
+    # season's clean sheets cannot be recovered from `starting_table`, which
+    # carries only points/goals, so the honest output is nothing rather than a
+    # count that silently ignores every match already played.
+    most_clean_sheets_prob: dict = field(default_factory=dict)
     unrated_teams: list[str] = field(default_factory=list)
     n_simulations: int = 0
 
@@ -306,6 +331,7 @@ def simulate_season(
     second_tier_state: SoccerRatingState | None = None,
     starting_table: dict[str, tuple[int, int, int]] | None = None,
     played_pairs: set[tuple[str, str]] | None = None,
+    starting_clean_sheets: dict[str, int] | None = None,
 ) -> SeasonSimResult:
     """Monte Carlo double round-robin -- every team plays every other team
     home AND away exactly once (see module docstring on why this is the
@@ -401,6 +427,14 @@ def simulate_season(
     # "<team> finishes with N+ points" ladders (KX*TEAMPOINTS, 384 live markets
     # across 5 leagues) priceable, with no second model and no extra simulation.
     points_count: dict[str, dict[int, int]] = {t: {} for t in teams}
+    position_count: dict[str, dict[int, int]] = {t: {} for t in teams}
+    # Fractional because a tie splits the market evenly among co-leaders.
+    clean_sheet_leader: dict[str, float] = {t: 0.0 for t in teams}
+    # A part-played season's clean sheets are NOT recoverable from
+    # starting_table (points/goals only), so unless the caller supplies them the
+    # count would cover simulated matches alone and quietly understate every
+    # team. Emit nothing in that case rather than a wrong number.
+    clean_sheets_known = not starting_table or starting_clean_sheets is not None
     zone_size = RELEGATION_ZONE_SIZE.get(league)
     half_size = len(teams) // 2
 
@@ -410,6 +444,7 @@ def simulate_season(
             pts, gf, ga = (starting_table or {}).get(t, (0, 0, 0))
             r = TeamSeasonResult(team=t)
             r.points, r.goals_for, r.goals_against = pts, gf, ga
+            r.clean_sheets = (starting_clean_sheets or {}).get(t, 0)
             results[t] = r
         for (home, away), (outcomes, cum_weights) in pairings.items():
             idx = bisect.bisect_left(cum_weights, rng.random() * cum_weights[-1])
@@ -419,6 +454,10 @@ def simulate_season(
             results[home].goals_against += a_goals
             results[away].goals_for += a_goals
             results[away].goals_against += h_goals
+            if a_goals == 0:
+                results[home].clean_sheets += 1
+            if h_goals == 0:
+                results[away].clean_sheets += 1
             if h_goals > a_goals:
                 results[home].points += 3
             elif h_goals < a_goals:
@@ -432,6 +471,15 @@ def simulate_season(
             pc[r.points] = pc.get(r.points, 0) + 1
 
         ranked = sorted(results.values(), key=lambda r: (-r.points, -r.goal_diff, -r.goals_for))
+        for pos, r in enumerate(ranked, start=1):
+            pd = position_count[r.team]
+            pd[pos] = pd.get(pos, 0) + 1
+        if clean_sheets_known:
+            best_cs = max(r.clean_sheets for r in results.values())
+            leaders = [r.team for r in results.values() if r.clean_sheets == best_cs]
+            share = 1.0 / len(leaders)
+            for t in leaders:
+                clean_sheet_leader[t] += share
         champion_count[ranked[0].team] += 1
         for r in ranked[:2]:
             top2_count[r.team] += 1
@@ -451,6 +499,10 @@ def simulate_season(
         top_half_prob={t: top_half_count[t] / n_simulations for t in teams},
         relegation_prob={t: relegation_count[t] / n_simulations for t in teams} if zone_size else {},
         points_dist=points_count,
+        position_dist={t: {p: c / n_simulations for p, c in position_count[t].items()}
+                       for t in teams},
+        most_clean_sheets_prob=({t: clean_sheet_leader[t] / n_simulations for t in teams}
+                                if clean_sheets_known else {}),
         unrated_teams=unrated_teams,
         n_simulations=n_simulations,
     )
