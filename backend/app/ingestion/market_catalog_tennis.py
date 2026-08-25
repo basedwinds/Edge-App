@@ -65,14 +65,42 @@ def _infer_slam_attributes(tour: str, tournament_text: str) -> tuple[int, str] |
     tournament's real surface -- the rest of this app already tolerates
     surface=None as an honest gap (elo_tennis.py blends gracefully), so this
     only needs to fix the one case that was actively wrong, not guess broadly.
-    Qualifying rounds are always best-of-3 for both tours even at a Slam."""
+    Returns best_of=3 always -- see the body for why the Bo5 inference was
+    removed rather than repaired."""
     text = tournament_text.lower()
     surface = next((s for name, s in _SLAM_SURFACE_BY_NAME.items() if name in text), None)
     if surface is None:
         return None
-    is_qualifying = "qualif" in text
-    best_of = 3 if (tour == "wta" or is_qualifying) else 5
-    return best_of, surface
+    # BEST-OF IS NO LONGER INFERRED FROM THE TITLE, because the title provably
+    # cannot carry it. Kalshi labels a men's Slam QUALIFYING match
+    # "US Open Men Singles" -- byte-identical to the main draw -- so the old
+    # `"qualif" in text` test never fired and every qualifier was priced as
+    # best-of-5.
+    #
+    # WHAT THAT COST (user-reported 2026-08-25, US Open qualifying week). All 80
+    # live-created men's US Open rows were flagged Bo5, which moves expected
+    # total games from ~22 to ~38. Every game_total line then looked far too low
+    # and the model screamed OVER: it disagreed with TIGHT, LIQUID books (1-2c
+    # spreads) by +48 to +72pp, and 36 such bets were staked. The market's own
+    # ladder crossed 50% at ~22 games, i.e. the book was pricing Bo3 and was
+    # right. On genuine Bo3 rows model and market agree closely (~20-22 both).
+    #
+    # WHY DEFAULT TO 3 RATHER THAN GUESS BETTER. Bo3 is correct for WTA always,
+    # for Challenger/ITF always, for all Slam qualifying, and for most ATP tour
+    # matches -- and the totals model is VALIDATED on 4,396 settled Bo3 matches
+    # (expected vs actual bias +0.15 games). TOTAL_GAMES_PARAMS[5] has never
+    # been validated at all: fewer than 40 settled Bo5 matches exist to check
+    # against. So an unconfirmed Bo5 guess is both more often wrong AND routes
+    # into the unmeasured half of the model.
+    #
+    # Main-draw Bo5 matches sourced from tennisdata carry a REAL "Best of"
+    # column and are unaffected -- this only governs LIVE-created rows, which
+    # is where the guess was being made. If a live source ever does flag main
+    # draw, restore the Bo5 branch on THAT signal, not on the tournament name.
+    #
+    # The surface half of this function is unchanged and still useful: the four
+    # Slam surfaces are unambiguous from the name.
+    return 3, surface
 
 
 def infer_tour_and_tier_from_text(title: str, default_tour: str) -> tuple[str, str]:
