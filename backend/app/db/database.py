@@ -67,6 +67,9 @@ _MISSING_COLUMNS_BY_TABLE = {
         ("away_score_1h", "INTEGER"), ("home_score_1h", "INTEGER"),
     ],
     "markets": [
+        ("rules_primary", "VARCHAR"),
+        ("rules_secondary", "VARCHAR"),
+        ("rules_fetched_at", "VARCHAR"),
         ("group_label", "VARCHAR"),
         ("sport", "VARCHAR"),
         ("nba_game_id", "VARCHAR"),

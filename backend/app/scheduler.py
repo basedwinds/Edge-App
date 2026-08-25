@@ -6,6 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app import db_backup
 from app import sports as app_sports
 from app.db.database import SessionLocal
+from app.ingestion import market_rules
 from app.ingestion.catalog_scan import scan_catalog, wake_dormant_sports
 from app.ingestion.poller import run_full_refresh
 from app.ingestion.poller_soccer import refresh_mls_playoff_sim
@@ -408,6 +409,18 @@ def run_catalog_scan():
 JOB_STAGGER_SECONDS = 20
 
 
+
+def _refresh_market_rules_job():
+    """Session wrapper for market_rules.refresh_market_rules."""
+    session = SessionLocal()
+    try:
+        market_rules.refresh_market_rules(session)
+    except Exception:
+        log.exception("market_rules job failed")
+    finally:
+        session.close()
+
+
 def start():
     # next_run_time is set to now+interval, not None: passing None tells APScheduler to
     # add the job paused (per its add_job docstring), which means it never fires again on
@@ -438,6 +451,25 @@ def start():
     # LAST IN THE STAGGER, deliberately: it reads ~7GB and takes ~25s, so it
     # runs after every poller has had its slot rather than alongside them.
     # Verifies before it rotates and keeps 2 -- see the module docstring.
+    # MARKET RESOLUTION TERMS (app/ingestion/market_rules.py). Backfills Kalshi's
+    # rules_primary/rules_secondary onto markets that have none, so questions
+    # about what a contract actually PAYS ON are answerable from stored data.
+    # Two such questions in one day were pure guesswork without it, and one of
+    # them ("does 15+ wins include playoffs?") flips a model verdict depending
+    # on the answer.
+    #
+    # HOURLY AND CHEAP. It only touches markets with no rules stored, in batches
+    # of 100 tickers, so once the backlog clears a run is a single query. New
+    # markets arrive continuously, which is why it repeats rather than being a
+    # one-off backfill.
+    scheduler.add_job(
+        _refresh_market_rules_job,
+        "interval",
+        hours=1,
+        id="market_rules",
+        next_run_time=base_tick + timedelta(seconds=13 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
     scheduler.add_job(
         db_backup.run_backup,
         "interval",

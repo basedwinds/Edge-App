@@ -662,6 +662,16 @@ class Market(Base):
     correct_score_home = Column(Integer, nullable=True)
     correct_score_away = Column(Integer, nullable=True)
     status = Column(String, nullable=False, default="active")
+    # THE MARKET'S OWN RESOLUTION TERMS, straight from Kalshi. Kept because the
+    # app previously stored a market's identifier and title but not what it
+    # actually pays on, so questions like "does 15+ wins include playoffs?" and
+    # "how is a tie settled?" could not be answered from the data at all -- and
+    # the first of those flips a model-accuracy verdict completely depending on
+    # the answer. Filled by app/ingestion/market_rules.py, not by the upsert
+    # paths. BOTH fields matter: the edge cases (ties, voids) live in secondary.
+    rules_primary = Column(String)
+    rules_secondary = Column(String)
+    rules_fetched_at = Column(String)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
