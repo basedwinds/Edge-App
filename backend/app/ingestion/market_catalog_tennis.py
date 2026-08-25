@@ -260,7 +260,24 @@ def upsert_kalshi_tennis_moneyline_market(session: Session, row: dict, tennis_ma
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        **quote_fields(row, row.get("last_price")),
+        # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
+        # through. quote_fields() is a POLYMARKET helper that reads raw_bid/
+        # raw_ask and orients them against the row's own price -- and the Kalshi
+        # tennis client never sets raw_bid/raw_ask at all, so calling it here
+        # silently returned (None, None) and DISCARDED the bid/ask the client
+        # had correctly read from yes_bid_dollars/yes_ask_dollars.
+        #
+        # WHAT THAT COST (found 2026-08-25). Every Kalshi tennis snapshot stored
+        # a null book. The spread guard cannot fire on a MISSING book -- absence
+        # is deliberately not treated as a wide spread -- so these rows fell
+        # through to the volume gate, which passes on stale cumulative volume,
+        # and were then priced against a stale last_price. Live result: 13 staked
+        # US Open game_total bets with "edges" of +42 to +67pp against Kalshi
+        # books that were actually 0.00 bid / 0.99 ask -- empty, zero open
+        # interest, zero liquidity. Every other sport's Kalshi catalog already
+        # passes the quote through directly; tennis was the only one that did not.
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -304,7 +321,24 @@ def upsert_kalshi_tennis_set_winner_market(session: Session, row: dict, tennis_m
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        **quote_fields(row, row.get("last_price")),
+        # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
+        # through. quote_fields() is a POLYMARKET helper that reads raw_bid/
+        # raw_ask and orients them against the row's own price -- and the Kalshi
+        # tennis client never sets raw_bid/raw_ask at all, so calling it here
+        # silently returned (None, None) and DISCARDED the bid/ask the client
+        # had correctly read from yes_bid_dollars/yes_ask_dollars.
+        #
+        # WHAT THAT COST (found 2026-08-25). Every Kalshi tennis snapshot stored
+        # a null book. The spread guard cannot fire on a MISSING book -- absence
+        # is deliberately not treated as a wide spread -- so these rows fell
+        # through to the volume gate, which passes on stale cumulative volume,
+        # and were then priced against a stale last_price. Live result: 13 staked
+        # US Open game_total bets with "edges" of +42 to +67pp against Kalshi
+        # books that were actually 0.00 bid / 0.99 ask -- empty, zero open
+        # interest, zero liquidity. Every other sport's Kalshi catalog already
+        # passes the quote through directly; tennis was the only one that did not.
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -328,7 +362,24 @@ def upsert_kalshi_tennis_game_spread_market(session: Session, row: dict, tennis_
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        **quote_fields(row, row.get("last_price")),
+        # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
+        # through. quote_fields() is a POLYMARKET helper that reads raw_bid/
+        # raw_ask and orients them against the row's own price -- and the Kalshi
+        # tennis client never sets raw_bid/raw_ask at all, so calling it here
+        # silently returned (None, None) and DISCARDED the bid/ask the client
+        # had correctly read from yes_bid_dollars/yes_ask_dollars.
+        #
+        # WHAT THAT COST (found 2026-08-25). Every Kalshi tennis snapshot stored
+        # a null book. The spread guard cannot fire on a MISSING book -- absence
+        # is deliberately not treated as a wide spread -- so these rows fell
+        # through to the volume gate, which passes on stale cumulative volume,
+        # and were then priced against a stale last_price. Live result: 13 staked
+        # US Open game_total bets with "edges" of +42 to +67pp against Kalshi
+        # books that were actually 0.00 bid / 0.99 ask -- empty, zero open
+        # interest, zero liquidity. Every other sport's Kalshi catalog already
+        # passes the quote through directly; tennis was the only one that did not.
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -352,7 +403,24 @@ def upsert_kalshi_tennis_game_total_market(session: Session, row: dict, tennis_m
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        **quote_fields(row, row.get("last_price")),
+        # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
+        # through. quote_fields() is a POLYMARKET helper that reads raw_bid/
+        # raw_ask and orients them against the row's own price -- and the Kalshi
+        # tennis client never sets raw_bid/raw_ask at all, so calling it here
+        # silently returned (None, None) and DISCARDED the bid/ask the client
+        # had correctly read from yes_bid_dollars/yes_ask_dollars.
+        #
+        # WHAT THAT COST (found 2026-08-25). Every Kalshi tennis snapshot stored
+        # a null book. The spread guard cannot fire on a MISSING book -- absence
+        # is deliberately not treated as a wide spread -- so these rows fell
+        # through to the volume gate, which passes on stale cumulative volume,
+        # and were then priced against a stale last_price. Live result: 13 staked
+        # US Open game_total bets with "edges" of +42 to +67pp against Kalshi
+        # books that were actually 0.00 bid / 0.99 ask -- empty, zero open
+        # interest, zero liquidity. Every other sport's Kalshi catalog already
+        # passes the quote through directly; tennis was the only one that did not.
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -377,7 +445,24 @@ def upsert_kalshi_tennis_exact_match_market(session: Session, row: dict, tennis_
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        **quote_fields(row, row.get("last_price")),
+        # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
+        # through. quote_fields() is a POLYMARKET helper that reads raw_bid/
+        # raw_ask and orients them against the row's own price -- and the Kalshi
+        # tennis client never sets raw_bid/raw_ask at all, so calling it here
+        # silently returned (None, None) and DISCARDED the bid/ask the client
+        # had correctly read from yes_bid_dollars/yes_ask_dollars.
+        #
+        # WHAT THAT COST (found 2026-08-25). Every Kalshi tennis snapshot stored
+        # a null book. The spread guard cannot fire on a MISSING book -- absence
+        # is deliberately not treated as a wide spread -- so these rows fell
+        # through to the volume gate, which passes on stale cumulative volume,
+        # and were then priced against a stale last_price. Live result: 13 staked
+        # US Open game_total bets with "edges" of +42 to +67pp against Kalshi
+        # books that were actually 0.00 bid / 0.99 ask -- empty, zero open
+        # interest, zero liquidity. Every other sport's Kalshi catalog already
+        # passes the quote through directly; tennis was the only one that did not.
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
@@ -574,7 +659,24 @@ def upsert_kalshi_tennis_tournament_winner_market(session: Session, row: dict) -
     session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
-        **quote_fields(row, row.get("last_price")),
+        # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
+        # through. quote_fields() is a POLYMARKET helper that reads raw_bid/
+        # raw_ask and orients them against the row's own price -- and the Kalshi
+        # tennis client never sets raw_bid/raw_ask at all, so calling it here
+        # silently returned (None, None) and DISCARDED the bid/ask the client
+        # had correctly read from yes_bid_dollars/yes_ask_dollars.
+        #
+        # WHAT THAT COST (found 2026-08-25). Every Kalshi tennis snapshot stored
+        # a null book. The spread guard cannot fire on a MISSING book -- absence
+        # is deliberately not treated as a wide spread -- so these rows fell
+        # through to the volume gate, which passes on stale cumulative volume,
+        # and were then priced against a stale last_price. Live result: 13 staked
+        # US Open game_total bets with "edges" of +42 to +67pp against Kalshi
+        # books that were actually 0.00 bid / 0.99 ask -- empty, zero open
+        # interest, zero liquidity. Every other sport's Kalshi catalog already
+        # passes the quote through directly; tennis was the only one that did not.
+        yes_bid=row.get("yes_bid"),
+        yes_ask=row.get("yes_ask"),
         last_price=row.get("last_price"), volume=row.get("volume"),
     ))
     return market
