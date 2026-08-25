@@ -175,6 +175,11 @@ def refresh() -> int:
                 obs.market_prob = implied
                 obs.edge = getattr(r, "edge", None)
                 obs.volume = getattr(r, "volume", None)
+                # The decision and the quote behind it -- see ModelObservation's
+                # own comment for the measurement error these exist to prevent.
+                obs.would_stake_dollars = getattr(r, "suggested_stake_dollars", None)
+                obs.yes_bid = getattr(r, "yes_bid", None)
+                obs.yes_ask = getattr(r, "yes_ask", None)
                 obs.observed_at = now
                 obs.event_start = start
                 if obs.status is None:

@@ -58,7 +58,10 @@ _MISSING_COLUMNS_BY_TABLE = {
     # observation log raised OperationalError -- the log that exists to score
     # models against outcomes was simply dead, and silently, because nothing
     # reads it on a normal request path.
-    "model_observations": [("cod_match_id", "VARCHAR")],
+    "model_observations": [
+        ("would_stake_dollars", "FLOAT"),
+        ("yes_bid", "FLOAT"),
+        ("yes_ask", "FLOAT"),("cod_match_id", "VARCHAR")],
     "valorant_matches": [("start_time_source", "VARCHAR")],
     "cs2_matches": [("start_time_source", "VARCHAR")],
     "lol_matches": [("start_time_source", "VARCHAR")],

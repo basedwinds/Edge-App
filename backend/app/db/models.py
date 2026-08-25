@@ -1089,3 +1089,24 @@ class ModelObservation(Base):
     status = Column(String, default="pending", index=True)   # pending|won|lost|push|void
     settled_at = Column(DateTime)
     settlement_note = Column(String)
+    # THE APP'S OWN STAKING DECISION AT OBSERVATION TIME, plus the quote it was
+    # made from. Without these the log can record WHAT was priced but not what
+    # the app would have DONE about it, and every analysis has to approximate the
+    # staking rule by hand.
+    #
+    # THAT APPROXIMATION WAS WRONG AND IT MATTERED (2026-08-25). A per-cell scan
+    # defined "what we stake" as edge>=20pp + price>=10c + ratio<10x + volume>0
+    # and concluded tennis moneyline returned -26.3%. Joined row-by-row against
+    # the real book: only 47 of those 196 rows were ever bet, those 47 returned
+    # -2.9% (against -4.4% on the real book -- the instruments agree), and the
+    # 149 rows the app DECLINED returned -33.6%. The hand-rolled arm was a
+    # superset that included everything the spread guard, coin-flip guard,
+    # uninformative band and the caps reject. The guards were working; the
+    # measurement could not see them.
+    #
+    # `would_stake_dollars` is the size the board offered (NULL = declined), so a
+    # later analysis can filter to the STAKED population exactly rather than
+    # re-deriving a rule that lives in thirteen routers.
+    would_stake_dollars = Column(Float)
+    yes_bid = Column(Float)
+    yes_ask = Column(Float)
