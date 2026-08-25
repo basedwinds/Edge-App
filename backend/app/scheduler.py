@@ -481,13 +481,17 @@ def start():
     # expected total games from ~22 to ~38, which manufactured +48 to +72pp of
     # edge and staked 36 bets against liquid books.
     #
-    # HOURLY because the inventory arrives with the markets: a match listed
-    # before its total_sets/exact_score rungs appear stays undecided (and so
-    # keeps the safe Bo3 default) until they do.
+    # EVERY 15 MINUTES, not hourly. The inventory arrives with the markets, and
+    # until it does a match keeps the Bo3 default -- which is right for the vast
+    # majority but WRONG for a Grand Slam main draw, where it would under-state
+    # expected games by ~16 and tilt the model toward false UNDERs. Kalshi lists
+    # these markets days ahead so the window is small in practice, but the job is
+    # a single query pass when nothing has changed, so a tighter interval is
+    # nearly free insurance.
     scheduler.add_job(
         _refresh_tennis_best_of_job,
         "interval",
-        hours=1,
+        minutes=15,
         id="tennis_best_of",
         next_run_time=base_tick + timedelta(seconds=14 * JOB_STAGGER_SECONDS),
         replace_existing=True,
