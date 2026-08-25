@@ -290,8 +290,9 @@ const columns = [
   // English pick sit on a dimmer second line underneath.
   columnHelper.accessor("label", {
     header: "Bet",
-    cell: ({ row }) => {
+    cell: ({ row, table }) => {
       const r = row.original;
+      const drawnKeys = (table.options.meta as { drawnKeys?: Set<string> } | undefined)?.drawnKeys;
       return (
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
@@ -301,6 +302,22 @@ const columns = [
               <CircleCheck size={12} className="text-[var(--color-good)] shrink-0" />
             )}
             <span className="font-medium whitespace-nowrap" title={r.waitReason ?? "Ready"}>{r.label}</span>
+            {/* A bet this sport's own slice could not afford -- it is here
+                because another sport left capacity unused. Worth marking
+                because these are the MARGINAL picks: the same measurement that
+                justified funding them (paper rank 6-15 beats the market about
+                as well as rank 1-5) also showed they carry less cushion against
+                the spread, since paper prices are quotes and real fills pay the
+                ask. Nothing about the bet is worse; there is simply less room
+                for the execution to go against you. */}
+            {drawnKeys?.has(r.key) && (
+              <span
+                className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full border border-[var(--color-border)] text-[var(--color-text-dim)]"
+                title="Funded from capacity another sport wasn't using, beyond this sport's guaranteed slice."
+              >
+                drawn
+              </span>
+            )}
           </div>
           <div className="text-xs text-[var(--color-text-dim)] whitespace-nowrap mt-0.5">
             {marketTypeLabel(r.marketType, r.sport)} · {describePick(r)}
@@ -471,12 +488,18 @@ export function RecommendedBetsTable({
   onShowReasoning,
   placedMarketIds,
   showSport = false,
+  drawnKeys,
 }: {
   rows: RecommendedBetRow[];
   onMarkPlaced: (row: RecommendedBetRow) => Promise<void>;
   onShowReasoning: (row: RecommendedBetRow) => void;
   placedMarketIds?: Set<string>; // cross-platform placed KEYS (see usePlacedKeys); Combined passes its own
   showSport?: boolean;
+  /** Keys of rows funded by DRAWING on capacity other sports were not using,
+   *  rather than by the sport's own guaranteed slice. Optional: only the
+   *  cross-sport page allocates that way, so per-sport pages pass nothing and
+   *  render exactly as before. */
+  drawnKeys?: Set<string>;
 }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: false }]);
   const [markingKeys, setMarkingKeys] = useState<Set<string>>(new Set());
@@ -583,6 +606,9 @@ export function RecommendedBetsTable({
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    // `columns` is module-level and cannot close over a prop, so per-render
+    // context reaches the cells through meta instead.
+    meta: { drawnKeys },
   });
 
   return (

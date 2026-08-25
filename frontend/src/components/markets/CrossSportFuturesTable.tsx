@@ -14,7 +14,21 @@ export type CrossSportFuturesRow = FuturesMarketRow & { sport: SportKey };
 // Identifies a future by the real-world proposition, NOT the market id -- so a
 // future placed on Kalshi also marks its Polymarket twin (different id, same
 // bet) as placed, and vice-versa. Same shape as loadCombinedFutures' dedup key.
-function propKey(p: { sport: string; market_type: string; team: string | null; side: string | null; line: number | null }): string {
+function propKey(p: { sport: string; market_type: string; team: string | null; side: string | null; line: number | null; cross_key?: string | null }): string {
+  // SOCCER USES THE BACKEND'S CANONICAL KEY. The two books spell clubs
+  // differently -- Kalshi "Eindhoven", Polymarket "PSV Eindhoven" -- so a
+  // raw-name key made one proposition look like two and re-offered a future the
+  // user had already placed (reported 2026-08-22). Only the backend can
+  // canonicalise: the club alias map lives there and is far too large to mirror
+  // here.
+  //
+  // GATED ON SOCCER ON PURPOSE. A placed bet ALWAYS carries cross_key, but only
+  // soccer futures ROWS emit one today. Preferring it unconditionally would
+  // compare a canonical placed key against a raw row key for every other sport
+  // and silently break their "Placed ✓" badges. Another sport opts in by
+  // emitting cross_key on its futures rows AND being added here -- both halves,
+  // or neither.
+  if (p.sport === "soccer" && p.cross_key) return p.cross_key;
   return `${p.sport}|${p.market_type}|${p.team ?? ""}|${p.side ?? ""}|${p.line ?? ""}`;
 }
 

@@ -45,8 +45,14 @@ export function SoccerRecommended() {
   const placedEntityKeys = useMemo(
     () =>
       new Set(
+        // PASS THE BACKEND'S cross_key THROUGH. These are placed bets, and the
+        // board's soccer rows now key off the canonical club name rather than the
+        // raw label ("Fulham" / "Fulham FC"). Recomputing the raw key here would
+        // have matched before that change and silently stopped matching after it,
+        // so a soccer game bet you had already placed would reappear as unplaced
+        // on this page -- the exact re-offer the canonicalisation exists to stop.
         (pendingBetsQuery.data ?? []).map((b) =>
-          crossPlatformKey({ marketType: b.market_type, nflGameId: null, soccerMatchId: b.soccer_match_id, team: b.team, line: b.line, side: b.side, label: b.label })
+          crossPlatformKey({ marketType: b.market_type, nflGameId: null, soccerMatchId: b.soccer_match_id, team: b.team, line: b.line, side: b.side, label: b.label, crossKey: b.cross_key ?? null })
         )
       ),
     [pendingBetsQuery.data]

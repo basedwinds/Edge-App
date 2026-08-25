@@ -177,6 +177,50 @@ def name_key(name: str, expansions: dict[str, str] | None = None) -> str:
     t = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
     t = re.sub(r"[^a-z0-9]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
+    # A LEADING "ex" IS THE ROSTER-LEFT-THE-ORG CONVENTION. "ex-Sangal ALTERS"
+    # is the five players who were Sangal ALTERS, now without the org, and the
+    # history belongs to them. Stripped before the "team" strip below so
+    # "ex-Team Spirit" and "Team Spirit" reach the same key.
+    #
+    # THE PREMISE WAS TESTED, NOT ASSUMED. Every CS2 pair holding history under
+    # both spellings (2026-08-24, edge-probe/ex_pairs_audit.py) was checked for
+    # the two things that would falsify it -- having faced each other, and
+    # having played in the same weeks against different opponents:
+    #
+    #     ex-ENEIDA 9 / ENEIDA 6            org window ends before stub begins
+    #     ex-Zero Tenacity 8 / 69           "
+    #     ex-RUBY 13 / RUBY 35              "
+    #     ex-RUSTEC 18 / RUSTEC 19          "
+    #     ex-TALON 13 / TALON 12            "
+    #     ex-MANA eSports 13 / MANA 7       "
+    #     ex-CatEvil 4 / CatEvil 14         WINDOWS OVERLAP -- premise fails here
+    #
+    # No pair ever met. Eight of nine show the org's history ending where the
+    # ex- roster's starts, which is the shape the convention predicts. The one
+    # counterexample is why this is not shipped on the strip alone: CatEvil was
+    # active Jan-Aug 2024 while ex-CatEvil played that February, so they are two
+    # teams. _DOMINANCE_RATIO independently refuses it (14 is not >= 5*4), as it
+    # does five of the other six -- only Zero Tenacity's 69-vs-8 clears the bar.
+    # So the strip's whole live effect is three lookups, each premise-verified.
+    #
+    # Measured across all three titles before shipping, the same bar the "team"
+    # strip was held to (edge-probe/ex_strip_measure.py): CS2 gained 2 ratings
+    # ('ex-GUARA' -> 'Guara' 4 games, 'ex-Sangal ALTERS' -> 'Sangal ALTERS' 4)
+    # and repointed 1 ('ex-Zero Tenacity' 8 games -> 'Zero Tenacity' 69); LoL and
+    # Valorant were unaffected; ZERO names lost a rating in any title.
+    #
+    # THE REPOINT IS THE ONE JUDGEMENT CALL, stated rather than buried: unlike a
+    # misspelling with accidental history, 'ex-Zero Tenacity' has 8 real recent
+    # games of its own that the redirect sets aside for the org's larger, older
+    # pool. Dominance says trust the big pool and those 69 games include these
+    # players, but it is not free, and it is the first thing to revisit if
+    # ex-rosters ever price badly.
+    #
+    # Only a STANDALONE leading token: "EXTREMUM" is one word and is untouched.
+    # A genuine team whose name simply starts with "Ex" keeps its own rating
+    # anyway -- resolve() never redirects a name that has its own MIN_GAMES of
+    # history unless a canonical dominates it 5:1.
+    t = re.sub(r"^ex\s+", "", t)
     # A LEADING "team" IS DECORATION, and dropping it is worth a real bug.
     #
     # User-reported 2026-08-11: JiJieHao was priced 65.3% to beat Spirit, one of

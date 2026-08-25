@@ -71,19 +71,83 @@ NO_HISTORY_REASON = (
 )
 
 
+def _name_tokens(name: str | None) -> set[str]:
+    """Lowercased alphanumeric tokens, single letters dropped so an initial
+    ("A.") cannot be what decides an identity."""
+    cleaned = "".join(
+        c.lower() if (c.isalnum() or c.isspace()) else " " for c in (name or "")
+    )
+    return {t for t in cleaned.split() if len(t) > 1}
+
+
+def _resolve_side_by_opponent(market_team: str, match: TennisMatch) -> str | None:
+    """The player_key this market names, judged by token overlap against the two
+    real names on the match it is ALREADY LINKED TO. None when not decisive.
+
+    WHY THIS IS SAFE WHERE A GLOBAL ALIAS WOULD NOT BE. It never searches a name
+    space -- the market carries a tennis_match_id, so there are exactly two
+    candidates and the opponent anchors the choice. "Ignacio Parisca Romera" has
+    to be one of {Sergi Perez Contri, Ignacio Parisca}, and only one of those
+    shares any name with it.
+
+    Deliberately refuses ambiguity: two shared tokens AND strictly beating the
+    other candidate, or a single shared token only when the opponent shares
+    NOTHING. A tie resolves to None, same discipline as team_name_resolver.
+    """
+    scored = []
+    mt = _name_tokens(market_team)
+    if not mt:
+        return None
+    for key, name in ((match.player_a_key, match.player_a_name),
+                      (match.player_b_key, match.player_b_name)):
+        nt = _name_tokens(name)
+        if not key or not nt:
+            continue
+        scored.append((len(mt & nt), key))
+    if len(scored) < 2:
+        return None
+    scored.sort(reverse=True)
+    (top_n, top_key), (second_n, _) = scored[0], scored[1]
+    if top_n >= 2 and top_n > second_n:
+        return top_key
+    if top_n == 1 and second_n == 0:
+        return top_key
+    return None
+
+
 def _resolve_side(market_team: str | None, match: TennisMatch | None) -> tuple[str, str] | None:
     """Returns (player_key, opponent_key) for whichever of player_a/player_b
-    `market_team` refers to, or None if it can't be resolved (shouldn't
-    happen in practice -- market.team is always one of the match's two real
-    names)."""
+    `market_team` refers to, or None if it can't be resolved.
+
+    THE COMMENT HERE USED TO SAY THIS "SHOULDN'T HAPPEN IN PRACTICE". It happens
+    117 times, across 28 matches, on a single live board (measured 2026-08-24).
+    The two books spell the same player differently and
+    full_name_to_abbreviated_key folds only case, so a middle name or a dropped
+    one produces a key matching NEITHER player: "Ignacio Parisca Romera" keys to
+    'parisca romera i.' while the match holds 'parisca i.'. The row then returns
+    None here and goes UNPRICED -- confirmed live, that spelling had model_prob
+    None while the other book's "Ignacio Parisca" priced at 0.3048.
+
+    So this is a COVERAGE loss, not a double-staking risk: of the 148 rows in
+    cross-book mismatched slots, 113 were unpriced and ZERO were staked.
+
+    The exact-key path below is untouched and still tried first, so a row that
+    resolves today resolves identically tomorrow. Measured before shipping: the
+    fallback recovers all 117, and produces ZERO conflicts against the 5,837
+    rows that already resolve -- it never disagrees with a working answer, only
+    supplies one where there was none.
+    """
     if match is None or market_team is None:
         return None
     key_from_market = full_name_to_abbreviated_key(market_team)
-    if key_from_market is None:
-        return None
     if key_from_market == match.player_a_key:
         return match.player_a_key, match.player_b_key
     if key_from_market == match.player_b_key:
+        return match.player_b_key, match.player_a_key
+    resolved = _resolve_side_by_opponent(market_team, match)
+    if resolved == match.player_a_key:
+        return match.player_a_key, match.player_b_key
+    if resolved == match.player_b_key:
         return match.player_b_key, match.player_a_key
     return None
 

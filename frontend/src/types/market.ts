@@ -139,6 +139,10 @@ export interface SoccerMarketRow {
   suggested_stake_units: number | null;
   stake_pool: "weekly" | "futures" | null;
   news_adjustment_pct: number | null; // moneyline_3way only -- free injury (Transfermarkt) + motivation (ESPN standings) blend, home-perspective pp
+  /** Canonical cross-platform identity built by the backend (app/api/cross_key.py).
+   * crossPlatformKey prefers it so two books spelling one club differently
+   * ("Fulham" / "Fulham FC") stop producing two rows for one proposition. */
+  cross_key?: string | null;
 }
 
 export interface ValorantMarketRow {
@@ -418,6 +422,10 @@ export interface MlbMarketRow {
 }
 
 export interface FuturesMarketRow {
+  /** Canonical cross-platform proposition key from the backend, where the route
+   *  supplies one (soccer futures today). Absent elsewhere, in which case the
+   *  caller falls back to building a key from the raw team name. */
+  cross_key?: string | null;
   /** Only /racing/futures sets this: one route, three series (f1|irl|nascar). */
   sport?: string | null;
   id: number;

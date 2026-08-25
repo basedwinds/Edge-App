@@ -163,6 +163,12 @@ export interface RacingMarketRow {
   volume: number | null;
   close_time: string | null;
   model_note?: string | null;
+  /** True for a SPRINT race. A sprint is its own race with its own grid and
+   *  result, but it shares the grand prix's name and weekend, so without this
+   *  a sprint row and a grand prix row on the same driver and market type are
+   *  identical on screen. Set by the backend from the same predicate that picks
+   *  which qualifying session supplies the grid. */
+  is_sprint?: boolean;
   kelly_fraction?: number | null;
   suggested_stake_dollars?: number | null;
   suggested_stake_units?: number | null;
@@ -180,7 +186,10 @@ export async function markRacingBetPlaced(row: RacingMarketRow, stakeDollars: nu
     team: row.driver,
     line: row.line,
     side: null,
-    label: `${row.driver} — ${mt}`,
+    // Sprint marked in the stored label as well as via the backend's derived
+    // is_sprint flag: the label is what a human reads back in the tracker, and
+    // "George Russell — Top 5" is the same string for two different races.
+    label: `${row.driver} — ${mt}${row.is_sprint ? " (Sprint)" : ""}`,
     stake_pool: "weekly",
     stake_dollars: stakeDollars,
     stake_units: stakeUnits,
@@ -729,6 +738,12 @@ export interface RecommendedBetRow {
   // need a null line. See buildEsportsTitleRecommendedBets: CoD's match id
   // had nowhere to live, so it was computed and discarded.
   codMatchId?: number | null;
+  /** Backend-supplied canonical cross-platform identity, when the route can
+   * build one. Optional so only the soccer builder sets it -- every other
+   * builder omits it and crossPlatformKey falls back to computing the key
+   * exactly as before. See app/api/cross_key.py for why only the backend can
+   * canonicalise a club name. */
+  crossKey?: string | null;
   /** One id per real FIXTURE. An esports match can exist as TWO rows -- a
    * Kalshi one and a Polymarket one that spell a team differently -- with
    * different match ids. Both the cross-platform dedupe and the per-match
@@ -971,7 +986,20 @@ export function crossPlatformKey(row: {
   line: number | null;
   side: string | null;
   label: string;
+  crossKey?: string | null;
 }): string {
+  // PREFER THE BACKEND'S KEY WHEN IT SUPPLIED ONE. Everything below builds the
+  // key from the RAW team label, which is correct for every sport whose two
+  // books agree on spelling -- but soccer's do not ("Fulham" on Kalshi,
+  // "Fulham FC" on Polymarket), so one proposition produced two keys, survived
+  // the cross-platform collapse, and could be staked on both books. Measured on
+  // the live board 2026-08-24: 483 such rows across 130 fixtures in 7 leagues.
+  //
+  // The alias map that resolves this lives in Python and is far too large to
+  // mirror here, which is why the fix is a backend-supplied key rather than more
+  // logic in this function -- the same mechanism /soccer/futures already uses.
+  // Optional by design: a route that supplies nothing falls through unchanged.
+  if (row.crossKey) return row.crossKey;
   // REAL BUG caught while building the NBA recommended-bets path
   // (2026-07-17): the NFL-only version below assumed a truthy nflGameId
   // means "this is a game-tied row" and anything else means "this is a
@@ -1023,7 +1051,12 @@ export function crossPlatformKey(row: {
     // propositions and both survive. The prefix is the same auto-increment
     // collision guard the other three titles carry.
     (row.codMatchId ? `cod:${row.fixtureKey ?? row.codMatchId}` : null);
-  if (gameId) return `${gameId}|${row.marketType}|${row.team ?? ""}|${row.line ?? ""}|${row.side ?? ""}`;
+  // .trim() MATCHES placed_bets._cross_platform_key's .strip(). Measured
+  // 2026-08-23: 10 cross-platform pairs across CS2 and LoL differed ONLY by
+  // trailing whitespace ("PCIFIC" vs "PCIFIC "), producing two keys for one
+  // proposition and defeating both placed-detection and the duplicate cap.
+  // Free to fix and impossible to over-merge, unlike club-name canonicalisation.
+  if (gameId) return `${gameId}|${row.marketType}|${(row.team ?? "").trim()}|${row.line ?? ""}|${row.side ?? ""}`;
   // `sport` scopes the FUTURES fallback too (real risk unique to esports:
   // the 3 titles reuse the same market_type string, e.g. "tournament_winner",
   // and Kalshi/Polymarket futures catalogs use generic placeholder team
@@ -2140,6 +2173,7 @@ export function buildSoccerRecommendedBets(
       valorantMatchId: null,
       cs2MatchId: null,
       lolMatchId: null,
+      crossKey: m.cross_key ?? null,
       groupKey: recommendedKey(m.market_type, m.source, m.team, label),
       waitReason: null, // no injury-report-style situational data source exists for Soccer yet
     });
@@ -2506,7 +2540,7 @@ export function buildRacingRecommendedBets(
   const ranked: RecommendedBetRow[] = deduped.map((m) => ({
     key: `racing-${m.id}`, marketId: m.id,
     league: m.series_label ?? RACING_SERIES_LABEL[m.series] ?? null,
-    label: `${m.driver} — ${RACING_MT_LABEL[m.market_type] ?? m.market_type}`,
+    label: `${m.driver} — ${RACING_MT_LABEL[m.market_type] ?? m.market_type}${m.is_sprint ? " (Sprint)" : ""}`,
     marketType: m.market_type, team: m.driver, line: m.line, side: null,
     gameday: m.close_time ? m.close_time.slice(0, 10) : null, gametime: null,
     estimatedStartTime: m.close_time ?? null,
@@ -2519,7 +2553,11 @@ export function buildRacingRecommendedBets(
     mmaFightId: null, tennisMatchId: null, soccerMatchId: null,
     valorantMatchId: null, cs2MatchId: null, lolMatchId: null,
     raceEventId: m.race_event_id,
-    groupKey: `racing|${m.series}|${m.market_type}|${m.driver}`,
+    // Sprint is part of the identity, not decoration: the sprint and the grand
+    // prix are two DIFFERENT races on one weekend, so "Russell top 5" exists
+    // twice with different grids and different results. Sharing a groupKey
+    // would let one collapse the other in the dedup/cap pass.
+    groupKey: `racing|${m.series}|${m.market_type}|${m.driver}|${m.is_sprint ? "sprint" : "main"}`,
     waitReason: null,
   }));
 
@@ -2610,6 +2648,10 @@ export interface PlacedBetPayload {
   line: number | null;
   side: string | null;
   label: string;
+  /** True when the bet is on a sprint race rather than the grand prix. Derived
+   *  server-side from the linked RaceEvent, so it is correct for bets placed
+   *  before the label carried "(Sprint)". */
+  is_sprint?: boolean;
   nfl_game_id: string | null;
   nba_game_id: string | null;
   wnba_game_id: string | null;
@@ -2635,6 +2677,10 @@ export interface PlacedBetPayload {
   clv_status: "closed" | "pending" | "unavailable" | "not_applicable";
   profit_dollars: number | null;  // realized P/L, null while pending
   profit_units: number | null;
+  /** Canonical cross-platform identity from the backend. Prefer this over
+   * recomputing a key from the raw team label -- soccer game rows key off the
+   * canonical club name, so a recomputed raw key stops matching the board. */
+  cross_key?: string | null;
 }
 
 export interface PortfolioSportPayload {
@@ -2743,6 +2789,10 @@ export interface OpenBetPayload {
   source: string;
   market_type: string;
   label: string;
+  /** True when the bet is on a sprint race rather than the grand prix. Derived
+   *  server-side from the linked RaceEvent, so it is correct for racing bets
+   *  placed before the label carried "(Sprint)". */
+  is_sprint?: boolean;
   team: string | null;
   side: string | null;
   line: number | null;
@@ -2852,6 +2902,10 @@ export interface SettledBetPayload {
   source: string;
   market_type: string;
   label: string;
+  /** True when the bet is on a sprint race rather than the grand prix. Derived
+   *  server-side from the linked RaceEvent, so it is correct for racing bets
+   *  placed before the label carried "(Sprint)". */
+  is_sprint?: boolean;
   team: string | null;
   side: string | null;
   line: number | null;

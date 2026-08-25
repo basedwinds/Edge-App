@@ -369,6 +369,47 @@ def _series_state(series: str) -> dict:
 _DRIVER_ALIASES = {
     "patriciooward": "patooward",
     "stingrobb": "stingrayrobb",
+    # F1, measured 2026-08-21 on the Dutch GP sprint -- the first race ever
+    # priced off a REAL starting grid. Both are the same "extra name part" shape
+    # as stingrobb: Kalshi carries the full given name / a suffix, ESPN does not.
+    # These two were the ONLY names in a 22-car field that failed to resolve, and
+    # the cost was not cosmetic: the field sim normalises to a fixed total (5.000
+    # for a top-5 market), so an unresolved driver's mass is redistributed over
+    # whoever is left. Antonelli starts P5 and the market prices him at 40.5% to
+    # finish top 5; dropping him inflated George Russell to 83.4% against a 57.0%
+    # market -- a +26pp "edge" at a 1.46x ratio, far too plausible-looking for
+    # implausible_disagreement to catch, and it was staked at $10.
+    # Each target verified unique and CURRENT in the f1 pool before adding.
+    "andreakimiantonelli": "kimiantonelli",
+    "carlossainzjr": "carlossainz",
+    # NASCAR Cup, measured 2026-08-22 on the New Hampshire weekend -- the same
+    # failure the F1 pair above caused, found by the incomplete-field gate
+    # firing on a real race rather than by anyone looking. All three were
+    # unresolvable on the exchange's spelling, and two Cup events (36 rows each)
+    # were suppressed from staking as a result, including a +23.1pp edge.
+    #   "John H. Nemechek"    vs ESPN "John Hunter Nemechek"  (initialised name)
+    #   "Ricky Stenhouse"     vs ESPN "Ricky Stenhouse Jr."   (dropped suffix)
+    #   "Darrell Wallace Jr"  vs ESPN "Bubba Wallace"         (racing name, the
+    #                                    same shape as patriciooward above)
+    # Each target verified UNIQUE and CURRENT in the nascar pool before adding.
+    "johnhnemechek": "johnhunternemechek",
+    "rickystenhouse": "rickystenhousejr",
+    "darrellwallacejr": "bubbawallace",
+    # NASCAR Truck, 2026-08-22. Same two shapes yet again -- a shortened given
+    # name and a dropped suffix. Both targets verified unique and CURRENT in the
+    # nascar_truck pool, with real history behind them (Ruggiero 36 starts,
+    # Christopher 3), so these are drivers we CAN rate and were simply failing to
+    # match. That is now five separate name failures across three series in two
+    # days; see project_racing_field_completeness for the standing check this
+    # argues for.
+    "gioruggiero": "giovanniruggiero",
+    "michaelchristopher": "michaelchristopherjr",
+    # Found 2026-08-23 by auditing every racing driver name EVER ingested (197
+    # distinct) rather than by a race surfacing them: 12 resolved in no pool, and
+    # these two were plain name variants hiding among them. Both targets verified
+    # unique and CURRENT before adding.
+    "nicholassanchez": "nicksanchez",      # nascar_xfinity + nascar_truck
+    "justinscarroll": "justincarroll",     # nascar_truck
 }
 
 

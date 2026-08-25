@@ -5,7 +5,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.database import get_session
-from app.db.models import PlacedBet
+from app.db.models import PlacedBet, RaceEvent
+from app.clients.kalshi_racing_client import is_sprint_event
 from app.models.clv import compute_bet_clv
 
 router = APIRouter(prefix="/placed-bets", tags=["placed-bets"])
@@ -17,6 +18,8 @@ VALID_SETTLE_STATUSES = {"won", "lost", "push", "void"}
 # read it (racing rows fall to the sport|market_type|team fallback), so this must
 # stay byte-identical to the frontend -- the Recommended view's cross-platform
 # "already placed" check compares this backend key against the frontend key.
+from app.api.cross_key import soccer_game_cross_key
+
 _GAME_ID_ATTRS = [
     "nfl_game_id", "nba_game_id", "wnba_game_id", "mlb_game_id", "mma_fight_id",
     "tennis_match_id", "soccer_match_id", "valorant_match_id", "cs2_match_id",
@@ -66,7 +69,13 @@ def _cross_platform_key(bet) -> str:
     exposed as OpenBetOut/SettledBetOut.cross_key so the Recommended view can mark
     a proposition "placed" no matter which book's copy the deduped row shows. MUST
     match the frontend exactly (esports title-prefix, JS line formatting, race
-    excluded, team??label fallback)."""
+    excluded, team??label fallback).
+
+    ONE DOCUMENTED EXCEPTION: soccer GAME rows. Those are canonicalised here and
+    the frontend prefers the backend-supplied cross_key instead of computing its
+    own, because the club alias map cannot be mirrored in TypeScript. The two
+    sides therefore agree by construction (both call app.api.cross_key) rather
+    than by byte-identical transcription."""
     gid = None
     for attr in _GAME_ID_ATTRS:
         v = getattr(bet, attr, None)
@@ -74,8 +83,46 @@ def _cross_platform_key(bet) -> str:
             gid = f"{attr.replace('_match_id', '')}:{v}" if attr in _ESPORTS_ID_ATTRS else str(v)
             break
     mt = bet.market_type or ""
+    # WHITESPACE-STRIPPED. Measured 2026-08-23 across every sport's live board:
+    # 10 cross-platform pairs differed ONLY by trailing whitespace -- CS2's
+    # "Phantom Academy" vs "Phantom Academy ", LoL's "PCIFIC" vs "PCIFIC " --
+    # which produced two keys for one proposition and defeated placed-detection
+    # and the duplicate cap. Unlike club-name canonicalisation this is free and
+    # cannot merge two different entities, and JS `.trim()` matches Python
+    # `.strip()` for the ASCII whitespace involved, so the byte-identical
+    # contract with the frontend holds.
     if gid:
-        return f"{gid}|{mt}|{bet.team or ''}|{_fmt_line(bet.line)}|{bet.side or ''}"
+        # SOCCER GAME ROWS CANONICALISE THE CLUB, matching what /soccer/markets
+        # now emits as cross_key and the frontend prefers. The comment below used
+        # to say the game branch must stay raw because canonicalising here without
+        # a matching change on every game row would break placed-detection -- that
+        # was right, so BOTH halves shipped together (2026-08-24) and both call the
+        # same app.api.cross_key builder rather than transcribing the format twice.
+        #
+        # The duplication it removes was measured on the live board first, not
+        # assumed: 483 rows across 130 fixtures in 7 leagues, every one of them
+        # cross-platform, zero same-book. And the merge-the-two-sides catastrophe
+        # was checked for explicitly -- no fixture on the board has
+        # canonical(home) == canonical(away).
+        if (bet.sport or "") == "soccer" and getattr(bet, "soccer_match_id", None):
+            return soccer_game_cross_key(bet.soccer_match_id, mt, bet.team, bet.line, bet.side)
+        return f"{gid}|{mt}|{(bet.team or '').strip()}|{_fmt_line(bet.line)}|{bet.side or ''}"
+    # SOCCER FUTURES CANONICALISE THE CLUB NAME. The two books spell clubs
+    # differently -- "Eindhoven" on Kalshi, "PSV Eindhoven" on Polymarket -- so a
+    # raw-name key made one proposition look like two and re-offered a bet the
+    # user had already placed (reported 2026-08-22). soccer_markets' futures rows
+    # now emit the identical canonical key, and the frontend prefers it.
+    #
+    # DELIBERATELY the futures branch only. The game branch above is keyed on a
+    # shared game id and its raw team name still matches the frontend's own
+    # computation byte-for-byte; canonicalising there without a matching change
+    # on every game row would BREAK placed-detection for soccer game bets, which
+    # works today. Game markets very likely have the same latent duplication --
+    # measure it before changing that branch.
+    if (bet.sport or "") == "soccer":
+        from app.ingestion.market_matcher_soccer import canonical_team_key
+        _t = bet.team if bet.team is not None else (bet.label or "")
+        return f"soccer|{mt}|{canonical_team_key(_t or '')}"
     return f"{bet.sport or ''}|{mt}|{bet.team if bet.team is not None else (bet.label or '')}"
 
 # Calibration buckets group settled bets by their predicted probability at
@@ -200,6 +247,13 @@ class PlacedBetOut(BaseModel):
     side: str | None
     position: str = "yes"   # yes | no -- see PlacedBetIn
     label: str
+    # True when this bet is on a SPRINT race rather than the grand prix. Both
+    # live on the same weekend under the same event name, so without this a
+    # sprint bet and a grand prix bet on the same driver and market type are
+    # indistinguishable in the tracker. Derived from the RaceEvent's ticker via
+    # the same is_sprint_event() predicate the pricer uses, NOT from the frozen
+    # label -- so it is correct for bets placed before this field existed.
+    is_sprint: bool = False
     nfl_game_id: str | None
     nba_game_id: str | None
     wnba_game_id: str | None
@@ -228,6 +282,11 @@ class PlacedBetOut(BaseModel):
 
     class Config:
         from_attributes = True
+    # Canonical cross-platform identity, same value /open and /settled expose.
+    # SoccerRecommended compares these bets against board rows, and soccer game
+    # rows now key off the canonical club name -- without this the page would
+    # recompute a RAW key, stop matching, and re-offer a bet already placed.
+    cross_key: str | None = None
 
 
 class SettleIn(BaseModel):
@@ -396,6 +455,13 @@ class OpenBetOut(BaseModel):
     source: str
     market_type: str
     label: str
+    # True when this bet is on a SPRINT race rather than the grand prix. Both
+    # live on the same weekend under the same event name, so without this a
+    # sprint bet and a grand prix bet on the same driver and market type are
+    # indistinguishable in the tracker. Derived from the RaceEvent's ticker via
+    # the same is_sprint_event() predicate the pricer uses, NOT from the frozen
+    # label -- so it is correct for bets placed before this field existed.
+    is_sprint: bool = False
     team: str | None
     side: str | None
     line: float | None
@@ -443,6 +509,13 @@ class SettledBetOut(BaseModel):
     source: str
     market_type: str
     label: str
+    # True when this bet is on a SPRINT race rather than the grand prix. Both
+    # live on the same weekend under the same event name, so without this a
+    # sprint bet and a grand prix bet on the same driver and market type are
+    # indistinguishable in the tracker. Derived from the RaceEvent's ticker via
+    # the same is_sprint_event() predicate the pricer uses, NOT from the frozen
+    # label -- so it is correct for bets placed before this field existed.
+    is_sprint: bool = False
     team: str | None
     side: str | None
     line: float | None
@@ -464,9 +537,33 @@ class SettledBetOut(BaseModel):
     game_key: str = ""          # real-world game id (see OpenBetOut.game_key)
 
 
-def _to_out(session: Session, row: PlacedBet) -> PlacedBetOut:
+def _sprint_map(session: Session, rows: list[PlacedBet]) -> dict:
+    """{race_event_id: is_sprint} for a whole page of bets in ONE query.
+
+    Built up front rather than looked up per row: the tracker lists every bet
+    ever placed (658 and climbing), so a per-row RaceEvent lookup here is an
+    N+1 that would be paid on every tracker load to serve a boolean.
+    """
+    ids = {r.race_event_id for r in rows if r.race_event_id is not None}
+    if not ids:
+        return {}
+    return {e.id: is_sprint_event(e.event_ticker or "")
+            for e in session.query(RaceEvent).filter(RaceEvent.id.in_(ids)).all()}
+
+
+def _is_sprint_bet(session: Session, row: PlacedBet, sprint_by_event: dict | None) -> bool:
+    if row.race_event_id is None:
+        return False
+    if sprint_by_event is not None:
+        return bool(sprint_by_event.get(row.race_event_id))
+    ev = session.get(RaceEvent, row.race_event_id)      # single-row callers only
+    return bool(ev is not None and is_sprint_event(ev.event_ticker or ""))
+
+
+def _to_out(session: Session, row: PlacedBet, sprint_by_event: dict | None = None) -> PlacedBetOut:
     clv = compute_bet_clv(session, row)
     return PlacedBetOut(
+        cross_key=_cross_platform_key(row),
         id=row.id,
         market_id=row.market_id,
         market_type=row.market_type,
@@ -476,6 +573,7 @@ def _to_out(session: Session, row: PlacedBet) -> PlacedBetOut:
         line=row.line,
         side=row.side,
         label=row.label,
+        is_sprint=_is_sprint_bet(session, row, sprint_by_event),
         nfl_game_id=row.nfl_game_id,
         nba_game_id=row.nba_game_id,
         wnba_game_id=row.wnba_game_id,
@@ -518,7 +616,8 @@ def list_placed_bets(status: str | None = None, sport: str = "nfl", session: Ses
     if status:
         query = query.filter(PlacedBet.status == status)
     rows = query.order_by(PlacedBet.placed_at.desc()).all()
-    return [_to_out(session, r) for r in rows]
+    _sprints = _sprint_map(session, rows)
+    return [_to_out(session, r, _sprints) for r in rows]
 
 
 @router.get("/locked", response_model=LockedPoolsOut)
@@ -975,6 +1074,7 @@ def get_open_bets(session: Session = Depends(get_session)):
         .filter(PlacedBet.status == "pending", PlacedBet.paper == False)  # noqa: E712
         .all()
     )
+    _sprints = _sprint_map(session, rows)
     from app.db.models import Market, MmaFight
 
     out: list[tuple[datetime.datetime | None, OpenBetOut]] = []
@@ -1060,7 +1160,7 @@ def get_open_bets(session: Session = Depends(get_session)):
         out.append((start_dt, OpenBetOut(
             market_status=market_status_by_id.get(r.market_id),
             id=r.id, market_id=r.market_id, sport=r.sport, league=r.league, source=r.source, market_type=r.market_type,
-            label=r.label, team=r.team, side=r.side, line=r.line,
+            label=r.label, is_sprint=_is_sprint_bet(session, r, _sprints), team=r.team, side=r.side, line=r.line,
             position=(r.position or "yes"),
             stake_pool=r.stake_pool,
             stake_dollars=r.stake_dollars, stake_units=r.stake_units,
@@ -1114,6 +1214,7 @@ def get_settled_bets(session: Session = Depends(get_session)):
         .filter(PlacedBet.status.in_(("won", "lost", "push", "void")), PlacedBet.paper == False)  # noqa: E712
         .all()
     )
+    _sprints = _sprint_map(session, rows)
     def _key(r: PlacedBet):
         return r.settled_at or r.placed_at or datetime.datetime.min
     rows.sort(key=_key, reverse=True)
@@ -1129,7 +1230,7 @@ def get_settled_bets(session: Session = Depends(get_session)):
             final_score = None
         out.append(SettledBetOut(
             id=r.id, market_id=r.market_id, sport=r.sport, league=r.league, source=r.source, market_type=r.market_type,
-            label=r.label, team=r.team, side=r.side, line=r.line,
+            label=r.label, is_sprint=_is_sprint_bet(session, r, _sprints), team=r.team, side=r.side, line=r.line,
             position=(r.position or "yes"),
             stake_pool=r.stake_pool, stake_dollars=r.stake_dollars, stake_units=r.stake_units,
             market_prob_at_placement=r.market_prob_at_placement,

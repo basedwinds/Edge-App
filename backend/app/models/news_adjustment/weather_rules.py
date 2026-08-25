@@ -120,25 +120,44 @@ def _fetch_severity(home_team: str, game_roof: str | None, game_date_iso: str) -
     if forecast is None:
         return None  # game too far out for a forecast yet
 
-    wind = forecast["wind_mph"]
-    cold = forecast["temp_min_f"]
+    # A FORECAST CAN ARRIVE WITH A FIELD MISSING, and this used to assume it
+    # could not. Open-Meteo returned a dict whose wind_mph (or temp_min_f) was
+    # null and `wind >= WIND_SEVERE_MPH` raised
+    # "'>=' not supported between instances of 'NoneType' and 'float'" --
+    # which propagated all the way out and returned HTTP 500 for the ENTIRE
+    # /markets board, not just the one game's weather nudge. Every NFL row was
+    # unreachable while a single stadium's forecast was partial.
+    #
+    # Each dimension is now independent: a missing one is skipped rather than
+    # crashing or being read as zero. Zero would be actively wrong here -- 0mph
+    # wind and 0F cold are both "no adjustment" and "extreme cold" respectively,
+    # so a null must mean UNKNOWN, never a value.
+    wind = forecast.get("wind_mph")
+    cold = forecast.get("temp_min_f")
+    if wind is None and cold is None:
+        return None  # nothing usable -- same as having no forecast at all
 
     severity = 0.0
     notes = []
-    if wind >= WIND_SEVERE_MPH:
-        severity = max(severity, 1.0)
-        notes.append(f"{wind:.0f}mph wind forecast")
-    elif wind >= WIND_NOTABLE_MPH:
-        severity = max(severity, 0.5)
-        notes.append(f"{wind:.0f}mph wind forecast")
+    if wind is not None:
+        if wind >= WIND_SEVERE_MPH:
+            severity = max(severity, 1.0)
+            notes.append(f"{wind:.0f}mph wind forecast")
+        elif wind >= WIND_NOTABLE_MPH:
+            severity = max(severity, 0.5)
+            notes.append(f"{wind:.0f}mph wind forecast")
 
-    cold_notable = cold <= COLD_NOTABLE_F
-    if cold <= COLD_SEVERE_F:
-        severity = max(severity, 1.0)
-        notes.append(f"{cold:.0f}°F forecast low")
-    elif cold_notable:
-        severity = max(severity, 0.4)
-        notes.append(f"{cold:.0f}°F forecast low")
+    # Stays False when the temperature is unknown, deliberately: cold_notable
+    # feeds the away-team cold-acclimation bonus in compute_weather_adjustment,
+    # and an unknown temperature must not hand out that penalty.
+    cold_notable = cold is not None and cold <= COLD_NOTABLE_F
+    if cold is not None:
+        if cold <= COLD_SEVERE_F:
+            severity = max(severity, 1.0)
+            notes.append(f"{cold:.0f}°F forecast low")
+        elif cold_notable:
+            severity = max(severity, 0.4)
+            notes.append(f"{cold:.0f}°F forecast low")
 
     if severity <= 0:
         return None

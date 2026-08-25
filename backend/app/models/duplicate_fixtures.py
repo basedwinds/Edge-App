@@ -343,10 +343,28 @@ def canonical_race_event_ids(session: Session) -> dict[int, int]:
     # therefore exactly the previous result. Found 2026-08-20 on the Dutch GP,
     # the first sprint weekend since the qualifying grid gate shipped.
     from app.clients.kalshi_racing_client import is_sprint_event
+    from app.clients.espn_racing_schedule import _race_ordinal
 
     by_series: dict[tuple, list] = {}
     for r in rows:
-        by_series.setdefault((r.series or "", is_sprint_event(r.event_ticker)), []).append(r)
+        # PARTITION ON THE DOUBLEHEADER LEG TOO, for exactly the reason the
+        # sprint partition above exists. IndyCar runs "Race 1" and "Race 2" at
+        # one venue on consecutive days; their names tokenise identically once
+        # digits are stripped, so both legs landed in ONE group and
+        # reconcile_canonical_race_dates handed the whole group the EARLIEST
+        # start_time -- silently dragging Race 2 back onto Race 1's day.
+        #
+        # Caught 2026-08-23 in the act: events 89/90 were correctly re-dated
+        # from 08-29 15:00 to 08-30 17:00, and the reconciler moved them
+        # straight back. Fixing the resolver was necessary and NOT sufficient;
+        # the grouping had to know the legs are different races.
+        #
+        # A single-race weekend yields ordinal None for every member, so its
+        # partition is unchanged and the algorithm below is byte-identical.
+        by_series.setdefault(
+            (r.series or "", is_sprint_event(r.event_ticker), _race_ordinal(r.name or "")),
+            [],
+        ).append(r)
 
     out: dict[int, int] = {}
     for _series, evs in by_series.items():

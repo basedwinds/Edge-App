@@ -87,6 +87,26 @@ const SPORT_LABEL: Record<string, string> = {
 };
 const SOURCE_LABEL: Record<string, string> = { kalshi: "Kalshi", polymarket: "Polymarket" };
 
+/** A sprint is a DIFFERENT RACE from the grand prix it shares a weekend and a
+ *  name with -- own grid, own result, own markets. Two sources say so and
+ *  either alone is enough: `is_sprint`, derived server-side from the linked
+ *  RaceEvent (so it is right for the 18 racing bets placed before this
+ *  existed), and a "(Sprint)" suffix written into the label at placement (so it
+ *  survives even if the race link is ever missing, and makes the row findable
+ *  by typing "sprint" in the filter). Rendered as a pill, with the suffix
+ *  stripped from the text so it never appears twice. */
+function isSprintBet(b: { is_sprint?: boolean; label: string }): boolean {
+  return Boolean(b.is_sprint) || /\(sprint\)/i.test(b.label);
+}
+function sprintlessLabel(label: string): string {
+  return label.replace(/\s*\(Sprint\)\s*$/i, "");
+}
+const SPRINT_PILL = (
+  <span className="ml-1.5 align-middle inline-block text-[10px] px-1.5 py-0.5 rounded-full border border-[var(--color-border)] text-[var(--color-text-dim)]">
+    Sprint
+  </span>
+);
+
 function money(n: number): string {
   const sign = n > 0 ? "+" : n < 0 ? "-" : "";
   return `${sign}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -355,7 +375,7 @@ function OpenPositions({ bets, onExplain, emptyText }: { bets: OpenBetPayload[];
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  <div className="text-[var(--color-text)]">{b.label}</div>
+                  <div className="text-[var(--color-text)]">{sprintlessLabel(b.label)}{isSprintBet(b) ? SPRINT_PILL : null}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
                     {betPickLabel(b)}
                   </div>
@@ -447,7 +467,7 @@ function CompletedBets({ bets, onExplain }: { bets: SettledBetPayload[]; onExpla
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  <div className="text-[var(--color-text)]">{b.label}</div>
+                  <div className="text-[var(--color-text)]">{sprintlessLabel(b.label)}{isSprintBet(b) ? SPRINT_PILL : null}</div>
                   <div className="text-[11px] text-[var(--color-text-muted)]">
                     {betPickLabel(b)}{b.stake_pool === "futures" ? " · futures" : ""}
                   </div>
@@ -787,7 +807,9 @@ export function Tracker() {
     if (!q) return () => true;
     const terms = q.split(/\s+/);
     return (b: { team: string | null; label: string; league?: string | null; sport: string }) => {
-      const hay = `${b.team ?? ""} ${b.label} ${b.league ?? ""} ${b.sport}`.toLowerCase();
+      // "sprint" appended from the derived flag, not just the label, so typing
+      // it also finds racing bets placed before the label carried the suffix.
+      const hay = `${b.team ?? ""} ${b.label} ${b.league ?? ""} ${b.sport}${isSprintBet(b) ? " sprint" : ""}`.toLowerCase();
       return terms.every((t) => hay.includes(t));
     };
   }, [q]);

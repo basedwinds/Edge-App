@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -278,7 +279,25 @@ def capacity(session: Session, bankroll: float, futures_pct: float, game_pct: fl
 # fine. It is NOT a substitute for checking real exposure before actually
 # placing money.
 _snapshot: dict[str, float] = {}
+# WHEN the snapshot was last refreshed, so its absence or staleness can be
+# ALARMED ON rather than silently tolerated. remaining_for_unit_scale returns
+# None (= uncapped) with no snapshot, which is the right default for a cold
+# process but means the hard cap goes quiet if refresh ever stops running, with
+# nothing to notice. See health.py::_check_exposure_snapshot.
+_snapshot_at: float | None = None
 _lock = threading.Lock()
+
+
+def snapshot_status() -> tuple[int, float | None]:
+    """(number of cap entries, age in seconds) -- age is None if never refreshed.
+
+    Read under the same lock the refresh writes under, so the count and the
+    timestamp can never disagree.
+    """
+    with _lock:
+        if _snapshot_at is None:
+            return len(_snapshot), None
+        return len(_snapshot), max(0.0, time.time() - _snapshot_at)
 
 
 def refresh_snapshot(session: Session, bankroll: float, futures_pct: float, game_pct: float) -> dict[str, float]:
@@ -286,9 +305,11 @@ def refresh_snapshot(session: Session, bankroll: float, futures_pct: float, game
     # holds for every caller, including tests and any future refresh path.
     futures_pct, game_pct = enforce_total(futures_pct, game_pct)
     caps = capacity(session, bankroll, futures_pct, game_pct)
+    global _snapshot_at
     with _lock:
         _snapshot.clear()
         _snapshot.update(caps)
+        _snapshot_at = time.time()
     return caps
 
 

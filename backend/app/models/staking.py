@@ -396,6 +396,8 @@ def kelly_fraction(
         return None
     if market_price <= 0.0 or market_price >= 1.0:
         return None
+    if market_price < MIN_MARKET_PRICE_TO_BET:
+        return None
     if not has_traded:
         return None
 
@@ -723,6 +725,44 @@ FUTURES_UNIT_SCALE = 0.25
 #   - Being wrong locks capital for months, and it costs 4 rows.
 # Game bets have none of those: they settle in hours, they carry the bulk of the
 # validation, and the biggest sub-10c sample in them is positive.
+# LONGSHOT FLOOR FOR GAME MARKETS, mirroring FUTURES_MIN_MARKET_PRICE below.
+#
+# Placed in kelly_fraction rather than in each router on purpose: every sport
+# calls that one function, so the rule cannot end up "wired for 4 of 13" -- the
+# failure that has now bitten this app three times in two days.
+#
+# MEASURED 2026-08-22 on 23,390 deduped settled bets, restricted to the ones
+# clearing the 20pp gate (the population actually bet), phantom rows with no book
+# excluded. ROI per unit, bootstrapped:
+#
+#     band      n     ROI      95% CI                 real book
+#     <3%      18   +1.222   [-1.000, +5.667]         1 bet,  0 won
+#     3-5%     13   +1.564   [-1.000, +6.692]         1 bet,  0 won
+#     5-10%    50   +0.168   [-0.750, +1.149]        17 bets, 0 won
+#     10-15%  123   +0.274   [-0.232, +0.807]        32 bets, 6 won  +0.534
+#     15-30%  564   +0.442   [+0.270, +0.612]   <- first band excluding zero
+#     30-50% 1001   +0.257   [+0.178, +0.336]
+#     >50%    507   +0.278   [+0.204, +0.347]
+#
+# THE PAPER NUMBERS ARGUE AGAINST THIS FLOOR AND IT SHIPS ANYWAY. Removing the
+# sub-10% rows lowers paper ROI slightly (0.322 -> 0.311), because those bands
+# carry one or two huge-priced winners. But their intervals run from -100% to
+# +567% on 13-50 bets: that is not evidence, it is noise with a sign. Against it,
+# real money went 0 for 19 below 10%, and every band whose interval actually
+# excludes zero is 15%+ across 2,000+ bets. Paper also never pays the ask, which
+# hurts a 3c bet far more than a 40c one.
+#
+# The deciding argument was the user's, and it is a product principle rather than
+# a statistical one: THE BOARD IS THE DECISION. A recommendation the user is
+# separately advised to skip means the board is wrong, not the user. Holding a
+# mental rulebook alongside the app defeats the app.
+#
+# EXPECTED TO BE TEMPORARY. The real defect is calibration -- overstatement runs
+# 6.3x below 5c and 1.1x above 65c, so an honest model collapses these edges by
+# itself, smoothly, with no cliff. Revisit this constant once the calibration
+# work lands; a floor is a blunt stand-in for a gradient.
+MIN_MARKET_PRICE_TO_BET = 0.10
+
 FUTURES_MIN_MARKET_PRICE = 0.10
 
 # WIDEST BID/ASK A FUTURES BET MAY BE STAKED INTO (2026-08-13).

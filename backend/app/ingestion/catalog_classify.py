@@ -86,6 +86,79 @@ _MATCH_KW = (
 )
 
 
+# Tokens that mean SOCCER specifically, used only to sharpen the human note on a
+# catch-all entry -- never to change its sport or category.
+#
+# WHY THIS EXISTS. The catch-all is the exact COMPLEMENT of the wired sport
+# matchers, so a league this app does not ingest lands in "other" correctly. But
+# it then gets _UNTRACKED_MATCH_NOTE, which says "review it as a new-SPORT
+# build" -- and that is wrong for a new LEAGUE in a sport we already model. The
+# wrong framing has real cost: 45 KXNCAAF series were once bulk-dismissed as
+# untracked sports, SIX of which this app now actively prices.
+#
+# Measured 2026-08-23: the catch-all held KXISRPLBTTS/SPREAD/TOTAL (Israeli
+# Premier League), KXEGYPLBTTS/SPREAD/TOTAL (Egyptian), KXTACAPORTGAME/ADVANCE
+# (Taca de Portugal) and KXGERSC1H* (German Supercup) -- complete, priceable
+# market sets for leagues that are simply unwired, sitting under a note telling
+# a reader to treat them as a different sport.
+#
+# Deliberately soccer-only and token-based: these strings are league and cup
+# names that do not appear in the other sports this app tracks. It costs nothing
+# to be wrong (the note is advisory) and the alternative -- inferring the sport
+# itself -- would be a guess with consequences.
+_SOCCER_HINT_KW = (
+    "btts", "taca", "copa", "coppa", "pokal", "liga", "serie", "eredivisie",
+    "bundesliga", "ligue", "epl", "efl", "futbol", "calcio", "allsvenskan",
+    "superlig", "primeira", "eliteserien", "brasileiro", "concacaf", "conmebol",
+)
+
+# SOCCER SEASON FUTURES. _SOCCER_HINT_KW above is a list of LEAGUE names, which
+# does not scale: the New Markets backlog on 2026-08-24 held 96+ soccer entries
+# across 36+ leagues -- Chance Liga (Czechia), Bolivia LFPB, Besta deild karla,
+# Morocco Botola Pro, Premium Liiga (Estonia) -- and every keyword sweep I wrote
+# under-counted, missing Spanish "primera" while having Portuguese "primeira".
+# Chasing the world's league names is not a strategy.
+#
+# The PROPOSITIONS are the reliable signal instead. "Teams relegated", "Team
+# promoted to", "most clean sheets", "qualify for the UEFA Champions League" are
+# soccer regardless of which country's league is in front of them.
+#
+# SPLIT BY WHETHER A MODEL EXISTS, because that is the only thing the reader
+# actually needs to decide. Half of that backlog is blocked purely on a league
+# not being wired; the other half has no model at any league.
+_SOCCER_MODELLED_KW = (
+    "relegat", "champions league", "europa league", "conference league",
+)
+_SOCCER_UNMODELLED_KW = (
+    "clean sheet", "place finish", "relegation survivor", "promoted to", "promotion",
+    "golden boot", "top scorer",
+)
+
+_SOCCER_FUTURES_MODELLED_NOTE = (
+    "SOCCER season futures for a league this app may not ingest yet. The proposition "
+    "itself IS modelled (relegation / league winner / UEFA qualification map onto the "
+    "existing soccer futures pricing), so the only blockers are the league's series in "
+    "kalshi_soccer_client or the Polymarket event slug, ratings history, and an ESPN "
+    "settlement feed. Do NOT dismiss this as an untracked sport."
+)
+
+_SOCCER_FUTURES_UNMODELLED_NOTE = (
+    "SOCCER season futures using a proposition this app has NO model for -- most clean "
+    "sheets, Nth-place finish, and promotion are not derivable from the current season "
+    "sim, and the promoted-club bridge was measured and REJECTED (an oracle rating was "
+    "still 0.09 Brier worse than market). Wiring the league would not make this "
+    "priceable. Dismiss unless the proposition itself gets built."
+)
+
+_UNWIRED_LEAGUE_NOTE = (
+    "Looks like a match-level SOCCER market for a league this app does not ingest yet. "
+    "This is a new LEAGUE in a sport already modelled -- not a new sport. The pricing "
+    "already exists (moneyline/spread/total/btts); what is missing is the league's series "
+    "in kalshi_soccer_client, plus ratings history and an ESPN settlement feed. Do NOT "
+    "dismiss it as an untracked sport."
+)
+
+
 def _hay(identifier: str, title: str) -> str:
     return f"{identifier or ''} || {title or ''}".lower()
 
@@ -100,11 +173,35 @@ def classify(identifier: str, title: str, sport: str) -> tuple[str, str]:
     if any(k in hay for k in _STAT_KW):
         return STAT_LEADER, _NOTES[STAT_LEADER]
     if any(k in hay for k in _FUTURES_KW):
+        # SOCCER FUTURES GET A SOCCER NOTE. This branch used to swallow them all:
+        # the soccer hint below is unreachable for anything matching _FUTURES_KW,
+        # which is the SAME short-circuit already documented further down for the
+        # match-outcome branch -- written once, and then re-introduced here.
+        # Measured 2026-08-24: 96+ of the 200 unclassified "other" entries were
+        # soccer season futures reading as generic futures.
+        if any(k in hay for k in _SOCCER_UNMODELLED_KW):
+            return FUTURES, _SOCCER_FUTURES_UNMODELLED_NOTE
+        if any(k in hay for k in _SOCCER_MODELLED_KW):
+            return FUTURES, _SOCCER_FUTURES_MODELLED_NOTE
         return FUTURES, _NOTES[FUTURES]
+    soccer_hint = sport in UNTRACKED_SPORTS and any(k in hay for k in _SOCCER_HINT_KW)
     if any(k in hay for k in _MATCH_KW):
         if sport in UNTRACKED_SPORTS:
+            if soccer_hint:
+                return REVIEW, _UNWIRED_LEAGUE_NOTE
             return REVIEW, _UNTRACKED_MATCH_NOTE
         return MATCH_OUTCOME, _NOTES[MATCH_OUTCOME]
+    # ALSO on the plain-review fallback, not only inside the match-outcome
+    # branch. The clearest cases never reach that branch: "BTTS" and "Taca de
+    # Portugal Game" match no _MATCH_KW at all, so a first cut of this hint sat
+    # in a branch those entries could not get to and changed nothing for exactly
+    # the rows it was written for.
+    if any(k in hay for k in _SOCCER_UNMODELLED_KW):
+        return REVIEW, _SOCCER_FUTURES_UNMODELLED_NOTE
+    if any(k in hay for k in _SOCCER_MODELLED_KW):
+        return REVIEW, _SOCCER_FUTURES_MODELLED_NOTE
+    if soccer_hint:
+        return REVIEW, _UNWIRED_LEAGUE_NOTE
     return REVIEW, _NOTES[REVIEW]
 
 

@@ -178,7 +178,13 @@ function guardF<T>(key: string, p: Promise<T>, fallback: T, ms = 18000): Promise
  * after the start-time window, or "Today" degenerates into "whichever of the
  * global top-N happen to start today" -- which is how a day with 69 qualified
  * tennis candidates rendered zero of them (user-reported 2026-08-04). */
-type SportPlan = { ranked: RecommendedBetRow[]; ceilings: Record<"weekly" | "futures", number> };
+type SportPlan = {
+  ranked: RecommendedBetRow[];
+  ceilings: Record<"weekly" | "futures", number>;
+  /** How far this sport may spend when it draws on IDLE global capacity, over
+   *  and above its guaranteed `ceilings.weekly`. See SPORT_DRAW_SHARE. */
+  drawCeilingWeekly: number;
+};
 
 /** Total live exposure allowed across ALL sports, as a share of bankroll.
  *
@@ -210,6 +216,40 @@ type SportPlan = { ranked: RecommendedBetRow[]; ceilings: Record<"weekly" | "fut
  * If you change the appetite, change BOTH or the looser one silently does
  * nothing. */
 const GLOBAL_CAP_PCT = { weekly: 0.30, futures: 0.10 } as const;
+
+/** Ceiling on what ONE sport may hold once it starts drawing on capacity no
+ *  other sport is using, as a share of the global weekly pool. 0.25 of
+ *  bankroll x 30% is $150 on a $2,000 bankroll -- 15 concurrent $10 bets.
+ *
+ * WHY A DRAW EXISTS AT ALL. Each sport is guaranteed 6% of bankroll, which at a
+ * $10 unit is FIVE concurrent bets. Thirteen sports x $56 = $728 against a $600
+ * global cap, so the slices never all fit anyway -- yet they cannot lend to each
+ * other. Measured 2026-08-22: $250 committed against the $600 ceiling, 58% of
+ * the pool idle, while tennis sat full at $50/$56 and turned away five
+ * qualifying bets.
+ *
+ * WHY 15 AND NOT MORE. Measured on 23,358 deduped settled paper bets (1.66x
+ * duplication removed first), ranked within each sport-day by edge, scored as
+ * win rate MINUS the market's own implied probability:
+ *
+ *     rank 1-5   (funded before this change)  +11.5pp   ROI +0.252
+ *     rank 6-10  (the first ones cut)         +13.5pp   ROI +0.220
+ *     rank 11-20                               +7.6pp   ROI +0.114
+ *     rank 21+                                 +2.9pp   ROI -0.013
+ *
+ * The bets the old cap rejected first are NOT worse than the ones it funded --
+ * 6-10 matches or beats 1-5 with overlapping CIs. The signal does die, but at
+ * rank 21+, four times further out than the cut. Stopping at 15 rather than 20
+ * is deliberate: paper bets are priced at the QUOTE, and real fills pay the ask.
+ * A 4c spread on a 50c contract eats 8pp, which would erase most of rank 11-20's
+ * edge -- so the expansion stops short of where the paper data alone would allow.
+ *
+ * This is NOT a per-sport performance judgement. Every sport's own CI still
+ * spans zero and the same share applies to all of them; the draw is structural,
+ * fixing that a daily sport recycles its slice ~7x a week while CFB gets 1-3x.
+ * Monopolisation is still prevented: one sport can reach 25% of the pool, not
+ * all of it, and the global cap in PASS 3 remains the binding safety stop. */
+const SPORT_DRAW_SHARE = 0.25;
 
 type CombinedPlan = { plans: SportPlan[]; globalCeilings: Record<"weekly" | "futures", number> };
 
@@ -273,14 +313,72 @@ async function loadCombined(): Promise<CombinedPlan> {
     return !(gid && placedKeys.has(`game:${gid}`));
   };
 
+  // DERIVE THE GUARANTEES FROM THE GLOBAL CAP INSTEAD OF LETTING THEM
+  // OVERSUBSCRIBE IT.
+  //
+  // Every sport carries its own `<sport>_weekly_pool_dollars`, all $93.60 today,
+  // giving each a $56.16 guarantee after PORTFOLIO_CEILING_PCT. Thirteen of
+  // those sum to $730 against a $600 global weekly cap -- 22% oversubscribed
+  // ALREADY, and worse with every sport added. It only works because sports are
+  // rarely all busy at once; on a crowded autumn Saturday the global cap binds
+  // first and the "guarantee" quietly degrades into edge-ranked triage.
+  //
+  // Scaling is proportional, so a user who deliberately gives one sport a bigger
+  // slice in Settings keeps that relative weight -- their intent is preserved,
+  // only the total is bounded.
+  //
+  // ONLY EVER SCALES DOWN (Math.min(1, ...)). When the active sports fit inside
+  // the cap this is a no-op and the board is untouched; it engages solely to
+  // stop the sum exceeding what actually exists. Loosening ceilings when few
+  // sports are live would be a real behaviour change and is NOT what this fixes.
+  //
+  // ACTIVE sports only -- one with no candidates today is not holding a
+  // reservation, so counting it would shrink everyone else for nothing. An
+  // out-of-season sport therefore costs nothing, and a NEW sport coming online
+  // resizes everybody automatically instead of needing 13 settings edited by
+  // hand.
+  const hasCandidates = (arr: unknown[]) =>
+    arr.some((m) => (m as { suggested_stake_dollars?: number | null }).suggested_stake_dollars);
+  const marketsBySport: Array<[string, unknown[]]> = [
+    ["nfl", nflM], ["nba", nbaM], ["wnba", wnbaM], ["cfb", cfbM], ["mlb", mlbM],
+    ["mma", mmaM], ["tennis", tenM], ["soccer", socM], ["valorant", valM],
+    ["cs2", cs2M], ["lol", lolM], ["cod", codM], ["f1", racingM],
+  ];
+  const activeCeilingSum = marketsBySport
+    .filter(([, arr]) => hasCandidates(arr))
+    .reduce((t, [sp]) => t + (weeklyPoolFor(sp, s) ?? 0) * PORTFOLIO_CEILING_PCT, 0);
+  const globalWeekly = s.bankroll_dollars * GLOBAL_CAP_PCT.weekly;
+  const poolScale = activeCeilingSum > 0 ? Math.min(1, globalWeekly / activeCeilingSum) : 1;
+
   const plan = (sport: string, ranked: RecommendedBetRow[], weeklyPool: number, futuresPool = 0): SportPlan => {
     const l = locked.get(sport) ?? { weekly: 0, futures: 0 };
+    // FAIL CLOSED ON A MISSING POOL. Every sport here reads its allowance from a
+    // settings key (`<sport>_weekly_pool_dollars`). Wire a NEW sport into the
+    // list below without adding its key and that value is `undefined`, so the
+    // ceiling is NaN -- and the funding test is `spent + stake > ceiling`, which
+    // is FALSE for every comparison against NaN. The guard would silently pass
+    // on every candidate and that one sport would fund an UNBOUNDED number of
+    // bets, checked only by the global cap three passes later.
+    //
+    // A misconfigured sport must get nothing, never everything. Coercing to 0
+    // makes the mistake visible as an empty sport rather than as a blown pool,
+    // and this is a fail-open bug in the exact place a new league gets added.
+    const safeWeekly = Number.isFinite(weeklyPool) ? weeklyPool : 0;
+    const safeFutures = Number.isFinite(futuresPool) ? futuresPool : 0;
+    const safeBankroll = Number.isFinite(s.bankroll_dollars) ? s.bankroll_dollars : 0;
     return {
       ranked: ranked.filter(notPlaced),
       ceilings: {
-        weekly: Math.max(0, weeklyPool * PORTFOLIO_CEILING_PCT - l.weekly),
-        futures: Math.max(0, futuresPool * PORTFOLIO_CEILING_PCT - l.futures),
+        weekly: Math.max(0, safeWeekly * PORTFOLIO_CEILING_PCT * poolScale - l.weekly),
+        futures: Math.max(0, safeFutures * PORTFOLIO_CEILING_PCT - l.futures),
       },
+      // Nets off the same locked capital as the guaranteed ceiling, so a sport
+      // already deep in its allowance cannot draw its way back up to the full
+      // share. Never below the guarantee -- the draw only ever adds room.
+      drawCeilingWeekly: Math.max(
+        Math.max(0, safeWeekly * PORTFOLIO_CEILING_PCT * poolScale - l.weekly),
+        safeBankroll * GLOBAL_CAP_PCT.weekly * SPORT_DRAW_SHARE - l.weekly,
+      ),
     };
   };
   // Global ceilings net off EVERYTHING already committed, same as the
@@ -485,7 +583,25 @@ const SPORT_SHORT: Record<string, string> = {
  * visible rather than enforcing it: hiding bets as you place them is exactly
  * the vanishing-row behaviour that made this list confusing in the first place.
  *
- * Interim. Real enforcement belongs in the staking layer, not a warning strip.
+ * NO LONGER INTERIM, and the old note here was wrong in a way that misleads.
+ * Real enforcement DOES live in the staking layer: settings.get_staking_params()
+ * refreshes an exposure snapshot on every pricing request (it is called from 22
+ * places), and staking.size_stake_dollars reads it, so a bet is refused once
+ * exposure.py's caps are hit whether or not any router opted in.
+ *
+ * THERE ARE TWO DIFFERENT NUMBERS AND BOTH ARE CORRECT:
+ *   - exposure.py  40% game / 20% futures (60% total invariant) = the HARD cap,
+ *     enforced backend-side and reachable from any page.
+ *   - GLOBAL_CAP_PCT 30% / 10% here = a TIGHTER ceiling on what this LIST will
+ *     suggest at once. Deliberately conservative: a recommendation list should
+ *     stop well short of the safety stop behind it.
+ * Measured 2026-08-23: $240 weekly and $67.50 futures outstanding, against $800
+ * and $400 hard. Neither is close to binding.
+ *
+ * So exceeding the 30% number by placing from per-sport pages is EXPECTED, not a
+ * breach -- which is why the strip below shows it rather than enforcing it.
+ * ($625 settling in one day on 2026-08-02 was cited as proof the cap did not
+ * bind; it was under the real $800 cap the entire time.)
  */
 function weeklyPoolFor(sport: string, s: SettingsPayload): number | null {
   const rec = s as unknown as Record<string, number | undefined>;
@@ -504,7 +620,11 @@ function PoolExposure({ settings }: { settings: SettingsPayload }) {
       .map(([sport, committed]) => {
         const pool = weeklyPoolFor(sport, settings);
         const ceiling = pool === null ? null : pool * PORTFOLIO_CEILING_PCT;
-        return { sport, committed, ceiling, pct: ceiling ? committed / ceiling : null };
+        // Tone against the DRAW ceiling, not the guarantee: since the draw
+        // shipped, sitting above your guaranteed slice is normal and expected,
+        // and colouring it red would flag healthy sports as a problem.
+        const drawMax = settings.bankroll_dollars * GLOBAL_CAP_PCT.weekly * SPORT_DRAW_SHARE;
+        return { sport, committed, ceiling, drawMax, pct: drawMax ? committed / drawMax : null };
       })
       .filter((r) => r.ceiling !== null)
       .sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0));
@@ -514,7 +634,7 @@ function PoolExposure({ settings }: { settings: SettingsPayload }) {
   const over = rows.filter((r) => (r.pct ?? 0) > 1).length;
   return (
     <div className="mt-3 text-[11px] text-[var(--color-text-muted)]">
-      <span className="mr-2">Pool already committed to open bets:</span>
+      <span className="mr-2">Committed to open bets, against each sport's guaranteed slice:</span>
       {rows.map((r) => {
         const pct = r.pct ?? 0;
         const tone = pct > 1 ? "text-[var(--color-critical)]"
@@ -525,10 +645,21 @@ function PoolExposure({ settings }: { settings: SettingsPayload }) {
           </span>
         );
       })}
+      <span className="block mt-1">
+        These are suggestion ceilings, not your limit. The hard stop is enforced
+        when a bet is sized (40% of bankroll on game bets, 20% on futures); this
+        list deliberately stops short of it.
+      </span>
+      <span className="block mt-1">
+        The slice is a floor, not a limit: a sport that fills it can draw up to $
+        {Math.round(settings.bankroll_dollars * GLOBAL_CAP_PCT.weekly * SPORT_DRAW_SHARE)} from
+        capacity no other sport is using. Bets funded that way are tagged{" "}
+        <span className="text-[var(--color-text-dim)]">drawn</span> below.
+      </span>
       {over > 0 && (
         <span className="block mt-1">
-          {over} {over === 1 ? "sport is" : "sports are"} past the ceiling the recommendations size
-          against — the list won't stop you, so treat those as full.
+          {over} {over === 1 ? "sport is" : "sports are"} past even the draw ceiling — the list won't
+          stop you, so treat those as full.
         </span>
       )}
     </div>
@@ -660,18 +791,58 @@ export function Combined() {
     // top 20 by raw edge contained zero MLB despite 21 qualifying candidates).
     let cut = 0;                 // qualified and upcoming, but a ceiling was full
     const picked: RecommendedBetRow[] = [];
-    for (const p of plans) {
+    // Per-sport running total, carried into PASS 2 so a draw cannot re-spend
+    // what the guarantee already committed.
+    const spentBySport: { weekly: number; futures: number }[] = [];
+    // Rows the guarantee could not fit, kept WITH their sport so PASS 2 knows
+    // whose allowance to charge them to.
+    const deferred: { row: RecommendedBetRow; planIdx: number }[] = [];
+    // Rows that exist ONLY because of the draw. Surfaced in the table so the
+    // marginal bets are identifiable rather than blended in with the ones a
+    // sport's guaranteed slice paid for.
+    const drawnKeys = new Set<string>();
+    plans.forEach((p, planIdx) => {
       const spent = { weekly: 0, futures: 0 };
       for (const row of p.ranked) {
         if (!isUpcoming(row)) continue;
         const pool = row.stakePool;
-        if (spent[pool] + row.suggestedStakeDollars > p.ceilings[pool]) { cut++; continue; }
+        if (spent[pool] + row.suggestedStakeDollars > p.ceilings[pool]) {
+          deferred.push({ row, planIdx });
+          continue;
+        }
         spent[pool] += row.suggestedStakeDollars;
         picked.push(row);
       }
+      spentBySport.push(spent);
+    });
+
+    // PASS 2 -- DRAW ON IDLE CAPACITY. The guarantee above deliberately stops at
+    // five bets a sport, but the pool as a whole is usually far from full: $250
+    // of $600 committed when this was written, with tennis turning away
+    // qualifying bets. Sports that still have candidates may now spend past
+    // their guarantee, up to SPORT_DRAW_SHARE of the pool (see that constant for
+    // the measurement that justifies it).
+    //
+    // Ordered by edge ACROSS sports, not per sport, so the idle capacity goes to
+    // the best remaining bets anywhere rather than to whichever sport is
+    // iterated first. Futures are excluded: they were never the constraint being
+    // measured, and season-long capital behaves differently from a slate that
+    // recycles in a day.
+    //
+    // This cannot starve anyone: every sport already took its guarantee in
+    // PASS 1, and PASS 3's global cap still bounds the total.
+    deferred.sort((a, b) => (b.row.edge ?? 0) - (a.row.edge ?? 0));
+    for (const d of deferred) {
+      if (d.row.stakePool !== "weekly") { cut++; continue; }
+      const spent = spentBySport[d.planIdx];
+      const room = plans[d.planIdx].drawCeilingWeekly;
+      if (spent.weekly + d.row.suggestedStakeDollars > room) { cut++; continue; }
+      spent.weekly += d.row.suggestedStakeDollars;
+      drawnKeys.add(d.row.key);
+      picked.push(d.row);
     }
 
-    // PASS 2 -- the GLOBAL cap, the only thing bounding total risk. Ranked by
+    // PASS 3 -- the GLOBAL cap, the only thing bounding total risk. Ranked by
     // edge so that when a weekend stacks (CFB + NFL + MMA + racing at once) the
     // best bets across every sport win the remaining room, rather than whichever
     // sport happens to be iterated first.
@@ -687,7 +858,7 @@ export function Combined() {
     // The window now filters the FUNDED set rather than feeding the allocation,
     // so switching tabs can only ever remove rows, never change what a row says.
     const funded = out.sort((a, b) => b.suggestedStakeDollars - a.suggestedStakeDollars);
-    return { rows: funded.filter(inWindow), funded, cut };
+    return { rows: funded.filter(inWindow), funded, cut, drawnKeys };
   }, [plans, combined, win]);
   const rows = windowed.rows.filter((r) => !isRowNotReady(r, readinessQuery.data));
   const cutByPool = windowed.cut;
@@ -890,7 +1061,7 @@ export function Combined() {
             <CrossSportFuturesTable rows={futuresRows} />
           ) : (
             <>
-              <RecommendedBetsTable rows={rows} onMarkPlaced={handleMarkPlaced} onShowReasoning={setReasoningRow} placedMarketIds={placedMarketIds} showSport />
+              <RecommendedBetsTable rows={rows} onMarkPlaced={handleMarkPlaced} onShowReasoning={setReasoningRow} placedMarketIds={placedMarketIds} showSport drawnKeys={windowed.drawnKeys} />
               {/* Two different reasons a bet you expected is absent, kept apart:
                   it starts outside this view, or the pool had no room for it. */}
               {laterCount > 0 && (
@@ -902,7 +1073,7 @@ export function Combined() {
               {cutByPool > 0 && (
                 <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
                   {cutByPool} more {cutByPool === 1 ? "bet qualifies" : "bets qualify"} but
-                  {" "}{cutByPool === 1 ? "has" : "have"} no room — the pool is fully allocated to higher
+                  {" "}{cutByPool === 1 ? "has" : "have"} no room — every sport has taken its slice and drawn what idle capacity there was, and the rest went to higher
                   edges. Raise a sport&rsquo;s pool in Settings to fund more.
                 </p>
               )}
@@ -925,11 +1096,14 @@ export function Combined() {
           </>
         ) : (
           <>
-            Every sport's recommended bets in one place, each sized against its own bankroll slice (see Settings)
-            and sorted by suggested stake. Same rules as the per-sport pages: quarter-Kelly, capped per position,
-            3pp minimum edge, model_validated: false everywhere. Each sport's ceiling nets off the capital
-            already committed to its pending bets, so a sport that is full stops suggesting until something
-            settles. Weekly and futures are separate sub-pools and are tracked apart.
+            Every sport's recommended bets in one place. Same rules as the per-sport pages: quarter-Kelly,
+            capped per position, 3pp minimum edge, model_validated: false everywhere. Funding runs in three
+            steps. First each sport spends its own guaranteed slice (see Settings), which is what keeps a
+            quiet sport on the board at all. Then whatever the slices could not fit competes for capacity no
+            sport is using, best edge first across every sport — those rows are tagged <em>drawn</em>, and a
+            single sport can reach 25% of the weekly pool this way, not all of it. Finally the global cap
+            bounds total live exposure. Every step nets off capital already committed to pending bets.
+            Weekly and futures are separate sub-pools and are tracked apart.
           </>
         )}
       </p>

@@ -66,6 +66,20 @@ class RacingMarketOut(BaseModel):
     volume: float | None
     close_time: str | None
     model_note: str | None = None
+    # Set when this row's race has a published grid but the rated field is
+    # missing a materially-priced entrant, so the sim's normalisation handed
+    # that entrant's share to everyone else. Decided in _price_event (which is
+    # where the field lives) and consumed by the staking gate in the route --
+    # see racing_markets.INCOMPLETE_FIELD_NOTE.
+    field_incomplete: bool = False
+    # A sprint is a SEPARATE RACE on the same weekend, with its own grid, its own
+    # result and its own markets -- but it carries the grand prix's name ("Dutch
+    # Grand Prix"), so on the board and in the tracker a sprint bet was
+    # indistinguishable from a grand prix bet on the same driver and market type.
+    # Derived from the SAME is_sprint_event() predicate the pricer uses to choose
+    # which qualifying session supplies the grid, so a row can never be labelled
+    # one way and priced the other.
+    is_sprint: bool = False
     kelly_fraction: float | None = None
     suggested_stake_dollars: float | None = None
     suggested_stake_units: float | None = None
@@ -88,6 +102,18 @@ class FuturesMarketOut(BaseModel):
     # defaulted, so the other sports' futures routes (where the sport IS the
     # league, and _league_for_row deliberately returns None) are unaffected.
     league: str | None = None
+    # CANONICAL cross-platform identity for this proposition, when the route can
+    # supply one. The frontend's own crossPlatformKey() is built from the RAW
+    # team label, so two books spelling one club differently produce two keys and
+    # a bet you already placed is offered again on the other book -- reported
+    # 2026-08-22: "Eindhoven" (Kalshi, placed) vs "PSV Eindhoven" (Polymarket,
+    # re-recommended). Only the backend can canonicalise, because the club alias
+    # map lives here and is far too large to mirror in TypeScript.
+    #
+    # Optional by design. Where it is None the frontend falls back to computing
+    # the key exactly as before, so a route that has not adopted this behaves
+    # identically rather than silently losing its placed-detection.
+    cross_key: str | None = None
     # The sport key this row belongs to, when the ROUTE serves more than one.
     # Only /racing/futures sets it: that one endpoint covers f1, irl and nascar,
     # and the cross-sport page needs the real series per row to route its
@@ -246,6 +272,14 @@ class SoccerMarketOut(BaseModel):
     news_adjustment_pct: float | None = None  # moneyline_3way only -- injury + motivation blend, see soccer_markets.py
     correct_score_home: int | None = None  # correct_score only
     correct_score_away: int | None = None  # correct_score only
+    # Canonical cross-platform identity, same mechanism the futures rows above
+    # use and for the same reason -- the two books spell clubs differently
+    # ("Fulham" on Kalshi, "Fulham FC" on Polymarket) and the frontend keys game
+    # rows off the RAW label, so one proposition became two. Measured on the live
+    # board 2026-08-24: 483 duplicate rows over 130 fixtures in 7 leagues, all of
+    # them cross-platform. Built by app.api.cross_key.soccer_game_cross_key, which
+    # placed_bets._cross_platform_key also uses so the two agree by construction.
+    cross_key: str | None = None
 
 
 class ValorantMarketOut(BaseModel):

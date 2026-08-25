@@ -5,9 +5,9 @@ pipeline. Network fetch happens BEFORE the DB write lock (same anti-QueuePool-
 exhaustion pattern as every other poller)."""
 import logging
 
-from app.clients.kalshi_racing_client import fetch_racing_markets
+from app.clients.kalshi_racing_client import fetch_racing_markets, is_sprint_event
 from app.clients.polymarket_racing_client import fetch_polymarket_racing, fetch_polymarket_racing_futures
-from app.clients.espn_racing_schedule import fetch_race_dates, resolve_race_date
+from app.clients.espn_racing_schedule import fetch_race_dates_by_session, resolve_race_date_for_session
 from app.db.database import SessionLocal
 from app.ingestion.market_catalog_racing import upsert_race_event, upsert_racing_market
 from app.ingestion.poller_lock import db_write_lock
@@ -57,7 +57,7 @@ def refresh_racing_markets():
     # Real race dates from ESPN's season calendar (Kalshi close_time is an
     # unreliable settlement deadline) -- fetched once per cycle, before the lock.
     try:
-        race_dates = fetch_race_dates()
+        race_dates = fetch_race_dates_by_session()
     except Exception:
         log.exception("espn race-date fetch failed -- falling back to close_time")
         race_dates = {}
@@ -70,7 +70,17 @@ def refresh_racing_markets():
                 if not et:
                     continue
                 if et not in event_ids:
-                    real_start = resolve_race_date(r["series"], r.get("event_title") or et, race_dates)
+                    # A SPRINT MUST BE DATED FROM ITS OWN SESSION. The sprint
+                    # and the grand prix share one ESPN event and one name, so
+                    # token matching alone resolved every sprint market to the
+                    # GRAND PRIX's date -- the Dutch GP sprint ran Saturday
+                    # 08-22 10:00Z and read Sunday 08-23 13:00Z, so every
+                    # start-time gate (has-it-started, alert window, CLV cutoff)
+                    # was a day out and the market stayed "upcoming" after the
+                    # sprint had been run. Same failure shape as the tennis
+                    # suspended-match bug.
+                    real_start = resolve_race_date_for_session(
+                        r["series"], r.get("event_title") or et, race_dates, is_sprint_event(et))
                     event_ids[et] = upsert_race_event(session, r["series"], et, r.get("event_title"), r.get("close_time"), real_start)
                 upsert_racing_market(session, r, event_ids[et])
             session.commit()
@@ -284,11 +294,36 @@ def _entrants_for_event(session, race_event_id) -> set[str]:
     from app.db.models import Market
     from app.models.baseline import racing_ratings
     out = set()
-    for (team,) in session.query(Market.team).filter(
-            Market.race_event_id == race_event_id,
-            Market.market_type.in_(("race_winner", "top_n"))).distinct().all():
+    # h2h INCLUDED, and its absence was a silent hole. An event holding ONLY
+    # head-to-head markets (F1 files them as their own event, e.g. "Dutch Grand
+    # Prix: Head-to-Head") produced an EMPTY entrant set, so
+    # _grid_matches_entrants returned False on its `not entrants` branch --
+    # which logs nothing -- and no grid was ever cached for it. That is why
+    # wiring the grid into _h2h_model_prob changed nothing on first try: the
+    # pricing was asking for a grid that the poller had never stored.
+    #
+    # h2h labels are "A vs B", so they need splitting before they resolve.
+    rows = session.query(Market.team, Market.market_type).filter(
+        Market.race_event_id == race_event_id,
+        Market.market_type.in_(("race_winner", "top_n", "h2h"))).distinct().all()
+    # (name, loose) -- h2h labels are SURNAME-ONLY ("Hamilton vs Russell"), so
+    # they need resolve_driver_loose, exactly as _h2h_model_prob uses. Resolving
+    # them with the exact matcher returns nothing and puts us straight back to an
+    # empty entrant set. Full-name markets keep the EXACT matcher on purpose:
+    # loose matching is surname-based and would be a needless collision risk
+    # where the full name is already available.
+    names: list[tuple[str, bool]] = []
+    for team, mtype in rows:
+        if mtype == "h2h":
+            pair = racing_ratings.split_h2h_label(team or "")
+            if pair:
+                names.extend((p, True) for p in pair)
+        else:
+            names.append((team or "", False))
+    for team, loose in names:
         for series in ("nascar", "nascar_xfinity", "nascar_truck", "irl", "f1"):
-            d = racing_ratings.resolve_driver_id(series, team or "")
+            d = (racing_ratings.resolve_driver_loose(series, team or "") if loose
+                 else racing_ratings.resolve_driver_id(series, team or ""))
             if d:
                 out.add(d)
                 break

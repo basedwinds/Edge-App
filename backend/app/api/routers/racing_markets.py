@@ -13,7 +13,10 @@ model_validated=False; forward CLV is the judge (racing can't be historically
 backtested -- thin retention).
 """
 import re
+import datetime
 from collections import defaultdict
+
+from app.clients.kalshi_racing_client import is_sprint_event
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -69,6 +72,20 @@ TRACKING_NOTE = (
     "(pole). Pre-qualifying prices use driver+constructor (no grid yet); they "
     "sharpen at the race weekend. Validated forward by CLV, not backtested."
 )
+# See _h2h_model_prob for the measurement behind this.
+H2H_GAP_SHRINK = 0.40
+
+RACE_STARTED_NOTE = (
+    "Priced but not staked: this race has already started. The market may still be quoted, but the "
+    "model prices it from a PRE-RACE grid and rating, so anything it reports now is stale by "
+    "definition."
+)
+INCOMPLETE_FIELD_NOTE = (
+    "Priced but not staked: a driver on the published starting grid has a market here but could not "
+    "be rated, so the field the model simulated is missing a real entrant. The sim normalises over "
+    "the drivers it was given, so that entrant's share is handed to everyone else and every price "
+    "in the race reads high. Stakeable again once the whole grid can be rated."
+)
 PRE_QUALIFYING_NOTE = (
     "Priced but not staked: qualifying hasn't run, so there is no starting grid and the model is "
     "pricing on driver and constructor form alone. Measured across every series' race history, the "
@@ -106,10 +123,64 @@ def _norm_con(name: str) -> str:
     return (name or "").lower().replace("racing", "").replace("revolut", "").strip()
 
 
-def _h2h_model_prob(series: str, label: str, cc: dict) -> "float | None":
+def _grid_pos(grid: dict | None, driver_id: str) -> "int | None":
+    """Starting position for a driver, or the BACK OF THE GRID when a grid exists
+    and does not list them.
+
+    THE RULE THIS REPLACES, and why it had to change. Excluding a driver absent
+    from the grid was written 2026-08-21 for a real bug: Kalshi listed Isack
+    Hadjar for the Dutch GP, ESPN listed 22 athletes across all five sessions
+    WITHOUT him, and `grid.get(d)` returning None meant strength() priced him
+    with no grid penalty inside a field where everyone else had been sharpened by
+    their real starting position -- 62.1% to finish top 5 against a 0.5% market.
+    A flat rating in a sharp field is the most inflating state available.
+
+    But excluding assumes a published grid covers the whole entry list, and it
+    does not. Measured 2026-08-22 on the NASCAR Truck race at New Hampshire:
+    ESPN's event carried **41 competitors with startOrder on only 36**. Four real,
+    rateable drivers -- Sutton (43 starts), Massey (18), Baldwin (9), White (4) --
+    were dropped purely for lacking a published slot, which then made the field
+    incomplete and suppressed all 163 rows of that race.
+
+    Back-of-grid resolves both. A real entrant with no published slot gets a
+    pessimistic position instead of vanishing; a driver who is not racing at all
+    prices at roughly zero, which is harmless because the model will not bet a
+    driver it thinks has no chance. Either way the field stays COMPLETE, so the
+    completeness gate stops firing on legitimate races. And it is the OPPOSITE of
+    the flat rating that caused the original bug: back-of-grid is the most
+    pessimistic position available, not the most optimistic."""
+    if not grid:
+        return None
+    pos = grid.get(driver_id)
+    if pos is not None:
+        return pos
+    try:
+        return max(grid.values()) + 1
+    except ValueError:
+        return None
+
+
+def _h2h_model_prob(series: str, label: str, cc: dict, grid: dict | None = None) -> "float | None":
     """'A vs B' -> P(A finishes ahead of B) from race (driver+constructor)
     strength, closed-form Bradley-Terry. Surname-only labels resolve via
-    resolve_driver_loose; an unknown driver leaves it unpriced."""
+    resolve_driver_loose; an unknown driver leaves it unpriced.
+
+    USES THE GRID when one is published. This passed grid=None unconditionally
+    from the day it was written, because at that point nothing could supply a
+    grid at all -- the whole cache that fills it did not exist. Grids now arrive
+    reliably (F1 sprint 2026-08-21, F1 grand prix and NASCAR Cup 2026-08-22), and
+    a head-to-head is precisely the question a starting position answers best:
+    "who finishes ahead of whom" between two cars is mostly decided by where they
+    start. Measured on the Dutch GP board before this change: 24 h2h rows, all
+    still priced on season-long form hours after qualifying had set the grid.
+
+    STILL EXEMPT from the pre-qualifying staking gate, and that is deliberate
+    rather than an oversight left in place. That gate exists because
+    racing_sim.simulate NORMALISES over a field, so a flat 20-driver field hands
+    every backmarker a plausible-looking share. A head-to-head is a closed-form
+    two-way with no normalisation and no tail, so the failure mode the gate was
+    built for cannot occur here; a flat h2h is simply a weaker prior, not an
+    inflated one. Grid sharpens it, its absence does not corrupt it."""
     pair = racing_ratings.split_h2h_label(label)
     if pair is None:
         return None
@@ -117,10 +188,55 @@ def _h2h_model_prob(series: str, label: str, cc: dict) -> "float | None":
     b = racing_ratings.resolve_driver_loose(series, pair[1])
     if not a or not b:
         return None
-    sa = racing_ratings.strength(series, a, cc.get(a), None)
-    sb = racing_ratings.strength(series, b, cc.get(b), None)
+    g = grid or {}
+    # SAME grid-membership rule as _build_field and the topn_field loop, and it
+    # has to be here too. Wiring the grid in without it reproduced the exact bug
+    # the rule was written for, measured on this board 2026-08-22:
+    # "Verstappen vs Hadjar" priced at 0.022 against a 0.968 market -- a 94.6pp
+    # phantom edge on the NO side of a market with real volume. Hadjar is not
+    # entered, so he has no grid slot, so he kept a FLAT rating while Verstappen
+    # carried a grid penalty, and the flat driver duly "beat" the gridded one.
+    # An unpriceable pair must go unpriced, never priced on half the information.
+    sa = racing_ratings.strength(series, a, cc.get(a), _grid_pos(g, a))
+    sb = racing_ratings.strength(series, b, cc.get(b), _grid_pos(g, b))
     if sa is None or sb is None:
         return None
+    # SHRINK THE GAP, NOT THE PROBABILITY.
+    #
+    # h2h_prob is closed-form Bradley-Terry, so its log-odds are exactly LINEAR
+    # in (sa - sb): scaling the gap by k scales the log-odds by k. Shrinking the
+    # rating difference is therefore the clean lever, and it is the same shape as
+    # the esports Elo gap shrink (see project_cs2_elo_gap_shrink) -- shrink the
+    # DIFFERENCE, never the output probability.
+    #
+    # WHY IT IS NEEDED. Wiring the grid into h2h on 2026-08-23 made these
+    # confident for the first time, and immediately too confident. Measured on
+    # 47 live h2h rows carrying a real market price:
+    #     model  log-odds stdev  1.820
+    #     market log-odds stdev  0.666      -> model is 2.73x too dispersed
+    #     model at >=0.95 or <=0.05: 11% of rows; the market: 2%
+    # In plain terms it was calling head-to-heads at 0.960 against a 0.445
+    # market, and one at exactly 1.000. A grid gap should make a pairing
+    # lopsided, not certain -- cars retire, and the sim's own top_n path already
+    # carries an attrition term that this closed-form two-way does not.
+    #
+    # WHY 0.40 SPECIFICALLY, from two independent directions that agree:
+    #   * dispersion: 1.820 x 0.40 = 0.728 against the market's 0.666, i.e. 1.09x
+    #     rather than 2.73x -- close to the market's spread without collapsing
+    #     onto it, so genuine disagreement survives.
+    #   * calibration: the walk-forward study measured the model deserves w=0.40
+    #     weight against the market on the PLACEABLE population
+    #     (project_calibration_measured), from settled outcomes rather than from
+    #     market prices. Landing on the same number by a different route is the
+    #     reason to trust it.
+    #
+    # NOT fitted to h2h outcomes, because there are almost none settled -- this
+    # is a dispersion sanity constraint, not an outcome fit. Revisit when the
+    # general calibration layer lands; this constant should then be re-derived
+    # or removed rather than left duplicating it.
+    _mid = (sa + sb) / 2.0
+    sa = _mid + H2H_GAP_SHRINK * (sa - _mid)
+    sb = _mid + H2H_GAP_SHRINK * (sb - _mid)
     return racing_sim.h2h_prob(sa, sb)
 
 
@@ -168,7 +284,31 @@ def _build_field(series: str, markets: list[Market],
                 # qualifying; still None (and so still pre-quali pricing) until
                 # ESPN publishes the field.
                 g = (grid_by_event or {}).get(m.race_event_id) or {}
-                s = racing_ratings.strength(series, d, cc.get(d), g.get(d))
+                # ONCE A GRID EXISTS IT IS THE ENTRANT LIST, so a driver absent
+                # from it does not belong in the field at all.
+                #
+                # Without this, `g.get(d)` returns None for such a driver and
+                # strength() prices them exactly as it does before qualifying --
+                # driver+constructor, with no grid penalty -- INSIDE a field
+                # where every other driver has been sharpened by their real
+                # starting position. They inherit a flat rating in a sharp field,
+                # which is the single most inflating state available.
+                #
+                # Measured 2026-08-21, Dutch GP sprint: Kalshi listed Isack
+                # Hadjar, but ESPN lists 22 athletes across ALL FIVE sessions of
+                # that event (FP1, SS, SR, Qual, Race) and Hadjar is not among
+                # them -- Yuki Tsunoda is, and qualified P12. The exchange's
+                # driver list was simply stale. Hadjar priced at 68.4% to finish
+                # top 5 and 22.3% to WIN the sprint against a 0.5% market (44.6x,
+                # blocked only by implausible_disagreement).
+                #
+                # Deliberately conditional on `g` being non-empty: before
+                # qualifying there is no grid, every driver is priced flat, and
+                # the field is uniformly un-sharpened -- which is the state the
+                # pre-qualifying staking gate below already handles. This rule
+                # only bites once a grid is published, which is exactly when a
+                # missing driver becomes anomalous rather than normal.
+                s = racing_ratings.strength(series, d, cc.get(d), _grid_pos(g, d))
                 if s is not None:
                     race_field[d] = s
     coverage = (len(race_field) / len(entrants)) if entrants else 1.0
@@ -255,6 +395,46 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
     def did(name: str):
         return racing_ratings.resolve_driver_id(rating_series, name)
 
+    # EVENTS WHOSE RATED FIELD IS MATERIALLY INCOMPLETE -- see
+    # INCOMPLETE_FIELD_NOTE for the case this was built from.
+    #
+    # Measured as MARKET MASS, not as a count of drivers, and the first version
+    # of this check got that wrong in an instructive way: it looked for drivers
+    # who were on the grid but absent from the field, keyed by resolved driver
+    # id. That is circular. The failure mode IS that the name does not resolve,
+    # so the offending driver has no id to key on and never entered the set --
+    # the check passed cleanly on the exact board that produced the bad bet.
+    #
+    # What CAN be seen without resolving the name is the market row itself: we
+    # have a price for a driver we could not rate. The test is whether those
+    # rows are negligible, and "negligible" has a natural scale-free definition
+    # here -- ONE AVERAGE ENTRANT'S WORTH of probability (book total / number of
+    # entrants). No constant to fit, and it works on any market type: a top-5
+    # book totals ~5 and a winner book ~1, but the per-entrant share scales with
+    # it. On the Dutch GP sprint top 5 that is 4.495/22 = 0.204 against 0.425 of
+    # unrated mass, so it fires; a single unresolved NASCAR backmarker at 0.005
+    # against a 1.0/37 = 0.027 share does not.
+    #
+    # Only applies where a grid exists. Before qualifying the whole field is
+    # un-sharpened and the pre-qualifying gate below already refuses to stake it.
+    _incomplete_field_events: set = set()
+    _mass: dict = defaultdict(lambda: [0.0, 0.0, 0])   # event -> [unrated, total, entrants]
+    for _m in markets:
+        if _m.market_type not in ("race_winner", "top_n"):
+            continue
+        if not ((grid_by_event or {}).get(_m.race_event_id) or {}):
+            continue
+        _p = implied_by_id.get(_m.id) or 0.0
+        _agg = _mass[_m.race_event_id]
+        _agg[1] += _p
+        _agg[2] += 1
+        _d = did(_m.team or "")
+        if not _d or _d not in race_field:
+            _agg[0] += _p
+    for _eid, (_unrated, _total, _n) in _mass.items():
+        if _n and _total > 0 and _unrated > (_total / _n):
+            _incomplete_field_events.add(_eid)
+
     # FIELD COVERAGE GATE. racing_sim normalises win probability across the
     # drivers it was GIVEN, so an under-covered field does not merely lose the
     # missing drivers -- it hands their share to the ones we did rate, inflating
@@ -307,7 +487,15 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
             dd = racing_ratings.resolve_driver_id(rating_series, mk.team or "")
             if dd and dd not in topn_field:
                 g = (grid_by_event or {}).get(mk.race_event_id) or {}
-                s = racing_ratings.topn_strength(rating_series, dd, cc.get(dd), g.get(dd),
+                # SAME grid-membership rule as _build_field -- see the long
+                # comment there. This field is built by its own loop because
+                # top_n needs topn_strength's separate parameters, and putting
+                # the rule in only one of the two builders is precisely how a
+                # fix reads as shipped while half the board still carries the
+                # bug: with the rule in _build_field alone, Isack Hadjar was
+                # correctly dropped from the race_winner field and still priced
+                # at 0.621 to finish top 5 off a market of 0.005.
+                s = racing_ratings.topn_strength(rating_series, dd, cc.get(dd), _grid_pos(g, dd),
                                                  pack=is_pack)
                 if s is not None:
                     topn_field[dd] = s
@@ -362,7 +550,8 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
             mp = racing_championship.constructor_championship_prob(series, m.team or "")
         elif m.market_type == "h2h":
             # "A vs B" -> P(A finishes ahead of B), closed-form from race strength.
-            mp = _h2h_model_prob(rating_series, m.team or "", cc)
+            mp = _h2h_model_prob(rating_series, m.team or "", cc,
+                                 (grid_by_event or {}).get(m.race_event_id))
         elif m.market_type == "constructor_pole":
             mp = constructor_pole_p.get(_norm_con(m.team or ""))
         elif d:
@@ -398,6 +587,8 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
             close_time=((race_start_by_event or {}).get(m.race_event_id).isoformat() + "Z")
             if (race_start_by_event or {}).get(m.race_event_id) else None,
             model_note=note if mp is not None else None,
+            field_incomplete=m.race_event_id in _incomplete_field_events,
+            is_sprint=is_sprint_event(m.source_event_id or ""),
         ))
     return out
 
@@ -519,19 +710,85 @@ def list_racing_markets(session: Session = Depends(get_session)):
             # SCOPE. Only race_winner and top_n, the two that consume the grid
             # term. Pole is exempt because quali_strength is a different model
             # AND a pole market resolves AT qualifying -- gating it on
-            # qualifying would mean never pricing it. h2h is exempt because
-            # _h2h_model_prob passes grid=None unconditionally, so it is always
-            # in this state and gating it would block it permanently.
+            # qualifying would mean never pricing it. h2h is exempt for a
+            # DIFFERENT reason, and the old one here is now stale: it used to be
+            # "h2h passes grid=None unconditionally so it is always in this
+            # state". Since 2026-08-22 h2h DOES use the grid. It stays exempt
+            # because this gate guards against FIELD NORMALISATION -- simulate()
+            # spreads a fixed total across the drivers it was given, so a flat
+            # field inflates every backmarker. A head-to-head is closed-form and
+            # two-way; nothing is normalised and there is no tail, so a flat h2h
+            # is a weaker prior rather than a corrupted one.
             # Championships have no grid concept at all.
             #
             # Priced, visible, tracked, not staked -- the same posture as map
             # markets. The row keeps its model number and edge so it still
             # accrues forward CLV, which is how this gate gets judged.
-            if (row.market_type in ("race_winner", "top_n")
+            # THE RACE HAS ALREADY RUN. Checked FIRST, and it applies to EVERY
+            # market type including h2h and pole -- unlike the grid gates below,
+            # which are about how a race is priced rather than whether it is
+            # still bettable.
+            #
+            # Found live 2026-08-23, 10pm: two head-to-heads on the Dutch Grand
+            # Prix (event 73, start 13:00 UTC that morning) were being
+            # recommended at $10 each, EIGHT HOURS AFTER THE RACE FINISHED --
+            # Bortoleto vs Hulkenberg at 0.960 against a 0.445 market, Norris vs
+            # Hamilton at 0.952 against 0.565. Both on markets still carrying
+            # real volume. Nothing in the racing path had ever checked start
+            # time, because until h2h began using the grid it priced everything
+            # flat near 0.50 and never cleared the edge gate, so the hole could
+            # not surface.
+            #
+            # Same shape as the tennis suspended-match bug: a market that is
+            # still QUOTED is not the same as an event that has not STARTED.
+            _start = (race_start_by_event or {}).get(row.race_event_id)
+            if _start is not None and _start <= datetime.datetime.utcnow():
+                stake = None
+                kelly = None
+                row.model_note = f"{row.model_note or ''} {RACE_STARTED_NOTE}".strip()
+
+            elif (row.market_type in ("race_winner", "top_n")
                     and not (grid_by_event or {}).get(row.race_event_id)):
                 stake = None
                 kelly = None
                 row.model_note = f"{row.model_note or ''} {PRE_QUALIFYING_NOTE}".strip()
+
+            # INCOMPLETE FIELD GATE -- the post-qualifying twin of the gate above.
+            #
+            # Once a grid is published we know the entrant list exactly, which
+            # makes an identity available that needs no threshold: a driver who
+            # is ON the grid and HAS a market row must be rateable. If one is
+            # not, the field racing_sim normalised over is missing a real
+            # entrant, and that driver's probability mass was silently
+            # redistributed across everyone we did rate.
+            #
+            # THE CASE THIS WAS BUILT FROM (2026-08-21, Dutch GP sprint, the
+            # first race ever priced off a real grid). Kalshi spells two drivers
+            # with an extra name part -- "Andrea Kimi Antonelli" and "Carlos
+            # Sainz Jr." -- and neither resolved. Antonelli starts P5 and the
+            # market prices him at 40.5% to finish top 5. The top-5 sim
+            # normalises to exactly 5.000, so his mass went to the survivors and
+            # George Russell came out at 83.4% against a 57.0% market: a +26pp
+            # edge, staked at $10.
+            #
+            # WHY NOT A COVERAGE OR MASS THRESHOLD. Count coverage was 20 of 22
+            # = 90.9%, comfortably over MIN_FIELD_COVERAGE, so that gate could
+            # not see it. A missing-mass fraction cannot either: 0.425 of a
+            # top-5 book totalling 4.495 is 9.5%, which slips under any round
+            # bar you would pick. Measured across all 36 live racing events,
+            # missing mass is median 0.0% and every event with a real hole
+            # (NASCAR lower series, 51-100% missing) is ALREADY blocked by the
+            # count gate at 28% coverage -- zero events clear the count gate
+            # while leaking over 10% of mass. There was nothing to calibrate a
+            # threshold against; the identity is the check.
+            #
+            # Same posture as the pre-qualifying gate: priced, visible, tracked,
+            # not staked, so the rows keep accruing forward CLV and the gate can
+            # be judged on outcomes rather than on argument.
+            elif row.market_type in ("race_winner", "top_n") and row.field_incomplete:
+                stake = None
+                kelly = None
+                row.model_note = f"{row.model_note or ''} {INCOMPLETE_FIELD_NOTE}".strip()
 
             # TOP-N HELD OFF STAKING, 2026-08-07. Separate from the gate above,
             # and it fires even WITH a grid -- which is the whole point. The

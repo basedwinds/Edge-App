@@ -53,6 +53,7 @@ from app.db.models import Market, MarketSnapshot, PlacedBet, SoccerMatch, Soccer
 from app.ingestion import soccer_data
 from app.ingestion.market_catalog_soccer import get_soccer_news_adjustment_cache, soccer_news_cache_to_pydantic
 from app.ingestion.market_matcher_soccer import canonical_team_key, team_names_match
+from app.api.cross_key import soccer_game_cross_key
 from app.models.baseline.soccer_pool_resolver import resolve_to_pool
 from app.models.baseline import elo_service_soccer
 from app.models.cup_match import predict_cup_tie
@@ -1121,6 +1122,9 @@ def list_soccer_markets(session: Session = Depends(get_session)):
                 line=m.line,
                 match_label=f"{match.home_team} vs {match.away_team}" if match else None,
                 soccer_match_id=m.soccer_match_id,
+                cross_key=soccer_game_cross_key(
+                    m.soccer_match_id, m.market_type, m.team, m.line, m.side
+                ) or None,
                 league=match.league if match else None,
                 season=match.season if match else None,
                 match_date=match.match_date if match else None,
@@ -1488,6 +1492,11 @@ def list_soccer_futures(session: Session = Depends(get_session)):
                 market_type=m.market_type,
                 source=m.source,
                 team=m.team,
+                # Same shape as placed_bets._cross_platform_key's futures branch
+                # (sport|market_type|team) but with the club name canonicalised,
+                # so Kalshi's "Eindhoven" and Polymarket's "PSV Eindhoven" are
+                # one proposition rather than two.
+                cross_key=f"soccer|{m.market_type or ''}|{canonical_team_key(m.team or '')}",
                 group_label=m.group_label,
                 # Division code; paper_logger maps it to a readable name. The MLS
                 # bracket markets have no division (by design -- see

@@ -14,7 +14,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import get_session
-from app.db.models import Market, MarketSnapshot, RaceEvent
+from app.db.models import (
+    Cs2Match, CodMatch, LolMatch, Market, MarketSnapshot, MmaFight, RaceEvent,
+    SoccerMatch, TennisMatch, ValorantMatch,
+)
 
 log = logging.getLogger("health")
 router = APIRouter(prefix="/health-check", tags=["health"])
@@ -51,6 +54,212 @@ _RACING = {"f1", "nascar", "irl"}
 # quote before "prices are stale" means a stalled poller (see the stale_poller
 # check). Measured: cs2 100% = real stall, nascar 9% = just-not-quoted-yet.
 _STALL_MIN_PRICED_FRACTION = 0.25
+
+
+# STARTED-EVENT CHECK. Maps each of Market's link columns to the table holding
+# that event's real start instant and its result fields.
+#
+# WHAT THIS CATCHES, narrowly on purpose: an event whose STORED start is
+# comfortably past, that has no result recorded, and that still carries active
+# markets. That combination is always wrong -- the event either resolved or a
+# poller is stuck, and until one is true its last price sits frozen where it can
+# be compared against a live model probability.
+#
+# IT DELIBERATELY DOES NOT GUESS WHETHER PLAY HAS BEGUN. Koyama vs Ichikawa
+# (2026-08-24) started on the 23rd, was suspended at 5-4, and carried a
+# RESUMPTION time on the 25th -- so its stored start was in the FUTURE, every
+# timestamp check correctly read it as not-yet-begun, and the model priced it
+# from 0-0 against a market that already knew the score. The obvious tell,
+# match_date sitting days before the start, was measured before being trusted
+# and REFUTED: a >=2 day gap covers 773 tennis matches, 133 of them with live
+# markets, nearly all ordinary fixtures whose match_date is just the round
+# listing. Building on it would hide 133 real matches to catch one -- the
+# false-alarm failure the comments above already warn about. Knowing a match is
+# suspended needs a feed that says so; tennis_markets.py has that guard, and its
+# limit is COVERAGE (neither player appeared among its 182 started pairs), not
+# logic.
+#
+# So this finds the PERSISTENT form -- a resumed match trips it once its
+# resumption time is also safely past with no result -- instead of pretending to
+# catch the live one.
+_STARTED_GRACE_HOURS = 6
+
+_EVENT_SOURCES = {
+    "tennis_match_id": (TennisMatch, "estimated_start_time", ("winner_key",)),
+    "soccer_match_id": (SoccerMatch, "estimated_start_time", ("result_ft",)),
+    "valorant_match_id": (ValorantMatch, "estimated_start_time", ("winner",)),
+    "cs2_match_id": (Cs2Match, "estimated_start_time", ("winner",)),
+    "lol_match_id": (LolMatch, "estimated_start_time", ("winner",)),
+    "cod_match_id": (CodMatch, "estimated_start_time", ("winner",)),
+    "mma_fight_id": (MmaFight, "estimated_start_time", ("winner_id",)),
+    "race_event_id": (RaceEvent, "start_time", ("result_json",)),
+}
+
+# NFL/NBA/WNBA/CFB/MLB ARE DELIBERATELY ABSENT, and the coverage warning below
+# reports them every run rather than letting the gap go quiet.
+#
+# Those five store gameday + gametime, and gametime is LOCAL TO THE HOME TEAM's
+# ballpark -- mlb_markets resolves it through TEAM_TZ and _game_kickoff_local,
+# and NFL/NBA have their own separate TZ maps. Composing the two fields into a
+# naive UTC instant, which is what the first version of this check did, shifts
+# every game by up to 10 hours and invents "started" events that have not begun.
+# Re-deriving that here would be a second, drifting copy of five timezone
+# mappings; the check would be reporting its own arithmetic.
+#
+# So they are reported as uncovered instead. Wiring them properly means lifting
+# the per-sport kickoff resolution into a shared helper both the routes and this
+# check call -- worth doing, but it is a refactor, not a health check.
+_GAMEDAY_SPORTS_UNCOVERED = {
+    "nfl_game_id", "nba_game_id", "wnba_game_id", "cfb_game_id", "mlb_game_id",
+}
+
+
+def _parse_instant(value):
+    """A start instant as naive UTC, or None when it cannot be trusted."""
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+
+def _event_start(row, spec):
+    """Start instant for one event row. Every covered table stores a real ISO
+    instant; see _GAMEDAY_SPORTS_UNCOVERED for the ones that do not."""
+    return _parse_instant(getattr(row, spec, None))
+
+
+# THE HARD EXPOSURE CAP CAN GO SILENT, and nothing noticed.
+#
+# exposure.remaining_for_unit_scale returns None -- meaning UNCAPPED -- when no
+# snapshot has been taken. That is correct for a cold process, but it makes the
+# failure mode of the refresh path INVISIBLE: if settings.get_staking_params
+# ever stopped refreshing, every sizing call would quietly go uncapped and the
+# board would look completely normal.
+#
+# THRESHOLD, reasoned rather than picked. The snapshot is refreshed by
+# get_staking_params, which runs on essentially every pricing request from ~22
+# routers -- so during any period the app is actually being used it is seconds
+# old, not minutes. An idle app is a different matter and NOT a problem: no
+# pricing is happening, so no sizing is being done uncapped. That asymmetry is
+# why the two states get different severities:
+#
+#   MISSING  -> warning. Sizing in this process is uncapped right now.
+#   STALE    -> info.    Almost always just an idle app; worth seeing, not worth
+#                        alarming, and a false alarm here would train the reader
+#                        to skim past the missing case sitting next to it.
+_EXPOSURE_SNAPSHOT_STALE_SECONDS = 3600
+
+
+def _check_exposure_snapshot(issues):
+    """Assert the exposure cap is actually armed in this process."""
+    try:
+        from app.models import exposure
+    except Exception:
+        log.exception("exposure import failed")
+        return
+    try:
+        entries, age = exposure.snapshot_status()
+    except Exception:
+        log.exception("exposure snapshot status failed")
+        return
+
+    if age is None or not entries:
+        _issue(issues, "warning", "exposure_snapshot", None,
+               "Exposure cap is NOT armed in this process -- no snapshot has been "
+               "refreshed, so remaining_for_unit_scale returns None and every stake "
+               "is sized UNCAPPED. Normal immediately after a restart and cleared by "
+               "the first pricing request; persistent means settings.get_staking_params "
+               "has stopped running.")
+        return
+    if age > _EXPOSURE_SNAPSHOT_STALE_SECONDS:
+        _issue(issues, "info", "exposure_snapshot", None,
+               f"Exposure snapshot is {age / 3600.0:.1f}h old ({entries} cap entries). "
+               "Expected when the app has simply been idle -- it refreshes on any "
+               "pricing request. Only meaningful if the board is being used.")
+
+
+def _check_started_events(session, issues, now):
+    """Active markets on events that started long ago and never resolved."""
+    # DERIVED, not retyped: a sport added to Market with no entry here is
+    # REPORTED rather than silently skipped. That drift made this file
+    # mis-report CFB for weeks, and bit paper_logger and scheduler too.
+    uncovered = [f for f in _LINK_FIELDS if f not in _EVENT_SOURCES]
+    known = sorted(f for f in uncovered if f in _GAMEDAY_SPORTS_UNCOVERED)
+    unexpected = sorted(f for f in uncovered if f not in _GAMEDAY_SPORTS_UNCOVERED)
+    if known:
+        _issue(issues, "info", "started_event_coverage", None,
+               "Started-event check does not cover " + ", ".join(known)
+               + " -- their kickoff is home-team-local and resolving it here would "
+                 "duplicate five timezone maps. See _GAMEDAY_SPORTS_UNCOVERED.")
+    if unexpected:
+        _issue(issues, "warning", "started_event_coverage", None,
+               "No started-event check for: " + ", ".join(unexpected)
+               + " -- add them to _EVENT_SOURCES.")
+
+    cutoff = now - datetime.timedelta(hours=_STARTED_GRACE_HOURS)
+    for field in _EVENT_SOURCES:
+        model, start_spec, result_attrs = _EVENT_SOURCES[field]
+        col = getattr(Market, field, None)
+        if col is None:
+            continue
+        try:
+            linked = (session.query(col, func.count(Market.id))
+                      .filter(Market.status == "active")
+                      .filter(col.isnot(None))
+                      .group_by(col).all())
+        except Exception:
+            log.exception("started-event query failed for %s", field)
+            continue
+        if not linked:
+            continue
+        counts = {key: n for key, n in linked}
+        try:
+            rows = session.query(model).filter(model.id.in_(list(counts))).all()
+        except Exception:
+            log.exception("started-event lookup failed for %s", field)
+            continue
+        stale = []
+        for row in rows:
+            if any(getattr(row, a, None) not in (None, "") for a in result_attrs):
+                continue  # resolved -- that is settlement's problem, not this check's
+            start = _event_start(row, start_spec)
+            if start is None or start >= cutoff:
+                continue
+            stale.append((start, counts.get(row.id, 0)))
+        if not stale:
+            continue
+        stale.sort()
+        sport = (field.replace("_match_id", "").replace("_game_id", "")
+                      .replace("_fight_id", "").replace("_event_id", ""))
+        total = sum(n for _, n in stale)
+        oldest = stale[0][0]
+        age_h = (now - oldest).total_seconds() / 3600.0
+        # WORDING IS DELIBERATELY FACTUAL. An earlier draft asserted these prices
+        # "can be priced against a live model probability", which was checked and
+        # was false for two of the three sports it fired on: 0 of 177 stale tennis
+        # markets and 0 of 154 soccer ones reached their board, because those
+        # routes already drop a started event. Whether a flagged row is visible
+        # depends on that sport's own gate; what is certainly wrong is the event
+        # having no result long after it began while its markets stay open.
+        _issue(issues, "warning", "started_event", sport,
+               str(len(stale)) + " " + sport + " event(s) began >"
+               + str(_STARTED_GRACE_HOURS) + "h ago with no result recorded, while "
+               + str(total) + " of their market(s) are still active; oldest began "
+               + oldest.isoformat() + "Z (" + format(age_h, ".0f") + "h). Indicates a "
+               "settlement or result-ingestion gap. Whether these also reach the board "
+               "depends on that sport's own started-event gate.")
 
 
 def _issue(issues, severity, category, sport, detail):
@@ -207,13 +416,37 @@ def health_check(session: Session = Depends(get_session)):
     # 5) Racing date sanity: RaceEvent.start_time vs ESPN's real calendar date.
     #    This is the check that guards the exact bug where a race showed weeks off.
     try:
-        from app.clients.espn_racing_schedule import fetch_race_dates, resolve_race_date
-        race_dates = fetch_race_dates()
+        # Session-aware, or this check itself becomes the bug: a sprint dated
+        # correctly to its own Saturday session would read as 1 day off the
+        # grand prix and warn on every sprint weekend, while a sprint wrongly
+        # carrying the grand prix's date would look CLEAN.
+        from app.clients.espn_racing_schedule import (
+            fetch_race_dates_by_session, resolve_race_date_for_session,
+        )
+        from app.clients.kalshi_racing_client import is_sprint_event
+        race_dates = fetch_race_dates_by_session()
         for ev in session.query(RaceEvent).all():
-            real = resolve_race_date(ev.series, ev.name or ev.event_ticker, race_dates)
-            if real and ev.start_time and abs((real - ev.start_time).days) > 3:
+            real = resolve_race_date_for_session(
+                ev.series, ev.name or ev.event_ticker, race_dates,
+                is_sprint_event(ev.event_ticker or ""))
+            # TOLERANCE IS PER SERIES, and the old flat "> 3 days" was too loose
+            # to be a check at all. Every F1 sprint carried the GRAND PRIX's date
+            # for weeks -- a ONE DAY error, so this never fired once. Measured
+            # 2026-08-21 across all 58 upcoming race events: 32 of the 38 that
+            # resolve match ESPN to the MINUTE, so a couple of hours is a real
+            # signal, not noise.
+            #
+            # NASCAR keeps the loose bar on purpose. Kalshi files Cup, Xfinity
+            # and Truck under one ticker while ESPN's feed here is CUP ONLY, so
+            # a Truck race legitimately resolves to the Cup race's date and
+            # would warn every week (measured: 4 events, 23.5h "off"). NASCAR
+            # dates are owned by reconcile_nascar_dates_from_feed, which runs
+            # after the canonical pass precisely because it is authoritative.
+            tol_minutes = 3 * 24 * 60 if ev.series == "nascar" else 120
+            if real and ev.start_time and abs((real - ev.start_time).total_seconds()) / 60.0 > tol_minutes:
                 _issue(issues, "warning", "race_date_mismatch", ev.series,
-                       f"{ev.name or ev.event_ticker}: stored date {ev.start_time:%Y-%m-%d} vs real race {real:%Y-%m-%d} — CLV cutoff/display would be wrong.")
+                       f"{ev.name or ev.event_ticker}: stored {ev.start_time:%Y-%m-%d %H:%M} vs real race "
+                       f"{real:%Y-%m-%d %H:%M} — CLV cutoff/display would be wrong.")
     except Exception:
         log.exception("racing date sanity check failed")
 
@@ -282,6 +515,16 @@ def health_check(session: Session = Depends(get_session)):
                                         f"{row.get('sum')} but only {row.get('expected')} can happen.")
     except Exception:
         log.exception("integrity checks failed")
+
+    try:
+        _check_started_events(session, issues, now)
+    except Exception:
+        log.exception("started-event check failed")
+
+    try:
+        _check_exposure_snapshot(issues)
+    except Exception:
+        log.exception("exposure snapshot check failed")
 
     order = {"error": 0, "warning": 1, "info": 2}
     issues.sort(key=lambda i: order.get(i["severity"], 3))

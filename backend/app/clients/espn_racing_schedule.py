@@ -19,6 +19,31 @@ from app.clients.base import get_json
 # dependency on the results client.
 RACE_SESSION = "Race"
 
+_RACE_ORDINAL = re.compile("race[ ]*([0-9]+)", re.I)
+
+
+def _race_ordinal(name: str) -> "int | None":
+    """The 'Race 2' in a doubleheader name, or None.
+
+    A DOUBLEHEADER IS TWO RACES UNDER ONE NAME, the same problem shape a sprint
+    weekend has. IndyCar runs both on the same weekend at one venue, and
+    `_tokens` strips digits, so "Snap-on Milwaukee Mile 250 Race 1" and
+    "... Race 2" both reduce to {"milwaukee"} and are indistinguishable to the
+    token matcher. Measured 2026-08-21: RaceEvents 89/90 ("Race 2") were stored
+    as 2026-08-29 15:00 when ESPN has Race 1 at 08-29 18:30 and Race 2 at
+    08-30 17:00 -- a full day early, so every start-time gate was wrong for them.
+
+    The ordinal is deliberately read from the ORIGINAL name rather than from
+    tokens, because tokenisation is exactly what destroys it."""
+    m = _RACE_ORDINAL.search(name or "")
+    return int(m.group(1)) if m else None
+# The SPRINT race's own session. A sprint weekend holds two races -- the sprint
+# on Saturday and the grand prix on Sunday -- inside ONE ESPN event whose name
+# is the grand prix's ("Heineken Dutch Grand Prix"). Token matching therefore
+# resolves a sprint to the GRAND PRIX date by construction, which is why every
+# sprint market read Sunday while the sprint ran Saturday.
+SPRINT_SESSION = "SR"
+
 log = logging.getLogger("espn_racing_schedule")
 
 _ESPN = {
@@ -109,8 +134,9 @@ def _fetch_event_starts(series: str, url: str) -> list[tuple[set[str], datetime.
         data = get_json(f"{url}?dates={rng}")
     except Exception:
         log.exception("espn racing scoreboard fetch failed for %s", series)
-        return []
+        return [], []
     out: list[tuple[set[str], datetime.datetime]] = []
+    sprints: list[tuple[set[str], datetime.datetime]] = []
     for e in data.get("events") or []:
         if not isinstance(e, dict):
             continue
@@ -126,7 +152,19 @@ def _fetch_event_starts(series: str, url: str) -> list[tuple[set[str], datetime.
         toks = _tokens(e.get("name") or e.get("shortName"))
         if dt and toks:
             out.append((toks, dt))
-    return out
+        # The sprint is a SEPARATE RACE sharing this event and this name, and
+        # ESPN dates it properly on its own competition -- measured on the 2026
+        # Dutch GP: SR 08-22T10:00Z against Race 08-23T13:00Z, a full day apart.
+        # Collected into its own bucket rather than appended above, because a
+        # sprint must never be returned to a caller asking for the grand prix
+        # (it would win the token match just as often -- the tokens are
+        # IDENTICAL -- and drag the GP onto Saturday).
+        sprint = next((c for c in comps
+                       if ((c.get("type") or {}).get("abbreviation") or "") == SPRINT_SESSION), None)
+        sdt = _parse(sprint.get("date")) if sprint else None
+        if sdt and toks:
+            sprints.append((toks, sdt))
+    return out, sprints
 
 
 def fetch_race_dates() -> dict[str, list[tuple[set[str], datetime.datetime]]]:
@@ -141,25 +179,111 @@ def fetch_race_dates() -> dict[str, list[tuple[set[str], datetime.datetime]]]:
     scan (`n > best_n`) keeps the real start when both sources match a name
     equally well.
     """
-    out: dict[str, list[tuple[set[str], datetime.datetime]]] = {}
+    return {series: v["main"] for series, v in fetch_race_dates_by_session().items()}
+
+
+def fetch_race_dates_by_session() -> dict[str, dict[str, list[tuple[set[str], datetime.datetime]]]]:
+    """{series: {"main": [(tokens, start)], "sprint": [(tokens, start)]}}.
+
+    Same data as fetch_race_dates, split by which RACE the date belongs to. A
+    sprint weekend is two races under one event name, so the name tokens are
+    identical and only the session tells them apart.
+
+    The season-calendar fallback feeds "main" ONLY. Its entries are weekend
+    markers (and run ~3h late, see _fetch_event_starts), so they describe the
+    grand prix; letting one answer a sprint lookup would hand the sprint the
+    grand prix's date, which is the entire bug this split exists to fix. A
+    sprint with no scoreboard entry therefore resolves to None and the caller
+    keeps its existing fallback -- no worse than before, and never silently
+    wrong.
+    """
+    out: dict[str, dict[str, list[tuple[set[str], datetime.datetime]]]] = {}
     for series, url in _ESPN.items():
-        races = _fetch_event_starts(series, url)
+        races, sprints = _fetch_event_starts(series, url)
         try:
             data = get_json(url)
         except Exception:
             log.exception("espn racing calendar fetch failed for %s", series)
-            out[series] = races
+            out[series] = {"main": races, "sprint": sprints, "ordinals": [], "scoreboard": list(races)}
             continue
         lg = (data.get("leagues") or [{}])[0]
+        # ORDINAL-BEARING CALENDAR ENTRIES, kept apart from `races`.
+        #
+        # The scoreboard has the RIGHT TIMES but its event names carry no
+        # ordinal at all (both Milwaukee entries tokenise to just {"milwaukee"}).
+        # The calendar has the ordinal in its label ("Grand Prix of Milwaukee
+        # Race 2") but its times run ~3h late. Neither source alone can date a
+        # doubleheader leg, so pair them: the calendar answers WHICH DAY, then
+        # the scoreboard entry on that day supplies the real start time.
+        # Scoreboard-only snapshot, taken BEFORE the calendar entries are
+        # appended to `races` below. The pairing needs to know which entries
+        # carry REAL start times (scoreboard) versus weekend markers running ~3h
+        # late (calendar).
+        scoreboard = list(races)
+        ordinals: list[tuple[set[str], int, datetime.datetime]] = []
         for c in lg.get("calendar") or []:
             if not isinstance(c, dict):
                 continue
+            label = c.get("label") or ""
             dt = _parse(c.get("endDate") or c.get("startDate"))
-            toks = _tokens(c.get("label"))
+            toks = _tokens(label)
             if dt and toks:
                 races.append((toks, dt))
-        out[series] = races
+                n = _race_ordinal(label)
+                if n is not None:
+                    ordinals.append((toks, n, dt))
+        out[series] = {"main": races, "sprint": sprints, "ordinals": ordinals, "scoreboard": scoreboard}
     return out
+
+
+def resolve_race_date_for_session(series: str, name: str,
+                                  by_session: dict, is_sprint: bool) -> datetime.datetime | None:
+    """resolve_race_date, but asking for the SPRINT's date when the event is a
+    sprint. Returns None rather than falling back to the grand prix -- see
+    fetch_race_dates_by_session."""
+    entry = by_session.get(series) or {}
+    bucket = entry.get("sprint" if is_sprint else "main", [])
+    want = _tokens(name)
+    if not want:
+        return None
+
+    # DOUBLEHEADER LEG: pair the two sources before falling through to plain
+    # token matching. Neither can date a leg alone -- the SCOREBOARD has the real
+    # start times but its names carry no ordinal (both Milwaukee entries tokenise
+    # to just {"milwaukee"}), while the CALENDAR labels carry "Race 1"/"Race 2"
+    # but their times run ~3h late. So: use the calendar to learn WHICH DAY this
+    # leg runs, then take the scoreboard entry on that day for the real time.
+    #
+    # Falls through silently when there is no ordinal, no matching calendar
+    # entry, or no scoreboard entry on that day -- a single-race weekend is
+    # untouched, and a doubleheader we cannot pair is no worse than before.
+    ordinal = _race_ordinal(name)
+    if ordinal is not None and not is_sprint:
+        day = None
+        best_n = 0
+        for toks, n, dt in entry.get("ordinals", []):
+            if n != ordinal:
+                continue
+            overlap = len(want & toks)
+            if overlap > best_n:
+                day, best_n = dt.date(), overlap
+        if day is not None:
+            best, best_n2 = None, 0
+            for toks, dt in entry.get("scoreboard", []):
+                if dt.date() != day:
+                    continue
+                overlap = len(want & toks)
+                if overlap > best_n2:
+                    best, best_n2 = dt, overlap
+            if best is not None:
+                return best
+    best: datetime.datetime | None = None
+    best_n = 0
+    for toks, dt in bucket:
+        n = len(want & toks)
+        if n > best_n:
+            best, best_n = dt, n
+    return best if best_n >= 1 else None
 
 
 def resolve_race_date(series: str, name: str,

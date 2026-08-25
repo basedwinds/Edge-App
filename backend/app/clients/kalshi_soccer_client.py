@@ -183,6 +183,33 @@ MONEYLINE_SERIES = {
 }
 
 SPREAD_SERIES = {
+    # FOUND BY THE CATALOG SCAN, not guessed (2026-08-23). Both series were
+    # sitting in the New Markets backlog tagged auto_priceable/"unclassified":
+    # the app already prices `game_spread` and already ingests BOTH leagues for
+    # moneyline, so the only thing missing was this line. Measured at the time:
+    # MONEYLINE_SERIES carried 40 leagues, SPREAD_SERIES 30 -- the per-market-type
+    # maps had drifted apart, so leagues we happily price moneyline for had their
+    # spread inventory silently invisible.
+    #
+    # The other 8 in that gap (E4, ECU1, MYS1, N2, NWSL, PAR1, PER1, URU1) are
+    # DELIBERATELY not added: the scan has seen no spread series for them, and
+    # inventing a ticker by pattern is how dead config gets written. Same rule
+    # the E3 note below already states.
+    #
+    # BOTH SERIES HAD **ZERO OPEN MARKETS** WHEN WIRED -- checked live against
+    # Kalshi the same minute (KXEPLSPREAD returned 40 open on the same query, so
+    # the check itself was sound). They are wired anyway, and the distinction
+    # from the E3 case below matters: E3 is a ticker nobody has ever seen, while
+    # these two were returned by Kalshi's own series list in the catalog scan on
+    # 2026-08-20/21. A confirmed series with no fixtures right now is a season
+    # between matchdays, not a guess. Ingestion simply fetches nothing until it
+    # populates.
+    #
+    # SO DO NOT READ THESE AS VALIDATED INVENTORY. If they are still returning
+    # zero open a few weeks into the Serie B / Greek Super League seasons, they
+    # are wrong and should come out.
+    "G1": "KXSLGREECESPREAD",
+    "I2": "KXSERIEBSPREAD",
     "E0": "KXEPLSPREAD",
     "SP1": "KXLALIGASPREAD",
     "I1": "KXSERIEASPREAD",
