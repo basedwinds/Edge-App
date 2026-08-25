@@ -39,6 +39,7 @@ def main():
     state = TennisEloState()
 
     total_games_xs, total_games_ys = [], []  # elo_diff (a-b) magnitude irrelevant to sign for totals -> use |diff|; y = total games
+    total_games_by_bo: dict[int, tuple[list, list]] = {}  # best_of -> (xs, ys)
     game_diff_xs, game_diff_ys = [], []  # x = elo_diff (a-b, signed); y = games_a - games_b
     set_win_xs, set_win_ys = [], []  # x = elo_diff; y = 1 if a won that set
 
@@ -59,6 +60,17 @@ def main():
 
         games_a = sum(s[0] for s in sets)
         games_b = sum(s[1] for s in sets)
+        # SPLIT BY FORMAT. A Bo5 averages ~36 games against a Bo3's ~21.5, so a
+        # pooled fit sits between the two and is wrong for both -- and this
+        # script previously pooled them while the model it feeds
+        # (game_lines_tennis.TOTAL_GAMES_PARAMS) carries a separate entry per
+        # format. Re-running it would have silently collapsed that split.
+        # Verified 2026-08-25 that fitting per format reproduces the shipped
+        # constants: Bo3 22.7183/-0.009421 vs 22.7119/-0.009336 on 478,786
+        # matches, Bo5 38.9656/-0.014090 vs 38.9577/-0.014288 on 12,960.
+        total_games_by_bo.setdefault(m.get("best_of") or 3, ([], []))
+        total_games_by_bo[m.get("best_of") or 3][0].append(abs(elo_diff))
+        total_games_by_bo[m.get("best_of") or 3][1].append(games_a + games_b)
         total_games_xs.append(abs(elo_diff))
         total_games_ys.append(games_a + games_b)
         game_diff_xs.append(elo_diff)
@@ -86,7 +98,19 @@ def main():
     print()
 
     slope_tg, intercept_tg, std_tg = ols(total_games_xs, total_games_ys)
-    print(f"TOTAL GAMES vs |Elo diff|: slope={slope_tg:.6f}, intercept={intercept_tg:.4f}, resid_std={std_tg:.4f}")
+    print(f"TOTAL GAMES vs |Elo diff| (POOLED -- do NOT paste this into "
+          f"TOTAL_GAMES_PARAMS): slope={slope_tg:.6f}, intercept={intercept_tg:.4f}, "
+          f"resid_std={std_tg:.4f}")
+    print("TOTAL GAMES vs |Elo diff|, PER FORMAT -- these are the numbers "
+          "game_lines_tennis.TOTAL_GAMES_PARAMS wants:")
+    for bo in sorted(total_games_by_bo):
+        xs, ys = total_games_by_bo[bo]
+        if len(xs) < 200:
+            print(f"    best_of={bo}: n={len(xs)} -- too few to fit, left alone")
+            continue
+        sl, ic, sd = ols(xs, ys)
+        print(f"    best_of={bo}: n={len(xs)} slope={sl:.6f}, intercept={ic:.4f}, "
+              f"resid_std={sd:.4f}   (mean actual {sum(ys)/len(ys):.2f} games)")
 
     slope_gd, intercept_gd, std_gd = ols(game_diff_xs, game_diff_ys)
     print(f"GAME DIFF (a-b) vs Elo diff (a-b): slope={slope_gd:.6f}, intercept={intercept_gd:.4f}, resid_std={std_gd:.4f}")
