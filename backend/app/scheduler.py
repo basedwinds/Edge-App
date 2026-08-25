@@ -6,7 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app import db_backup
 from app import sports as app_sports
 from app.db.database import SessionLocal
-from app.ingestion import market_rules
+from app.ingestion import market_rules, tennis_best_of
 from app.ingestion.catalog_scan import scan_catalog, wake_dormant_sports
 from app.ingestion.poller import run_full_refresh
 from app.ingestion.poller_soccer import refresh_mls_playoff_sim
@@ -410,6 +410,18 @@ JOB_STAGGER_SECONDS = 20
 
 
 
+
+def _refresh_tennis_best_of_job():
+    """Session wrapper for tennis_best_of.refresh_best_of."""
+    session = SessionLocal()
+    try:
+        tennis_best_of.refresh_best_of(session)
+    except Exception:
+        log.exception("tennis_best_of job failed")
+    finally:
+        session.close()
+
+
 def _refresh_market_rules_job():
     """Session wrapper for market_rules.refresh_market_rules."""
     session = SessionLocal()
@@ -462,6 +474,24 @@ def start():
     # of 100 tickers, so once the backlog clears a run is a single query. New
     # markets arrive continuously, which is why it repeats rather than being a
     # one-off backfill.
+    # TENNIS FORMAT (app/ingestion/tennis_best_of.py). Derives best-of-3 vs
+    # best-of-5 from the BOOK'S OWN inventory, because no metadata field carries
+    # it -- Kalshi labels a Slam qualifying match identically to the main draw.
+    # Guessing it from the tournament name flagged 80 qualifiers as Bo5 and moved
+    # expected total games from ~22 to ~38, which manufactured +48 to +72pp of
+    # edge and staked 36 bets against liquid books.
+    #
+    # HOURLY because the inventory arrives with the markets: a match listed
+    # before its total_sets/exact_score rungs appear stays undecided (and so
+    # keeps the safe Bo3 default) until they do.
+    scheduler.add_job(
+        _refresh_tennis_best_of_job,
+        "interval",
+        hours=1,
+        id="tennis_best_of",
+        next_run_time=base_tick + timedelta(seconds=14 * JOB_STAGGER_SECONDS),
+        replace_existing=True,
+    )
     scheduler.add_job(
         _refresh_market_rules_job,
         "interval",
