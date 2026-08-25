@@ -129,9 +129,27 @@ _SOCCER_HINT_KW = (
 _SOCCER_MODELLED_KW = (
     "relegat", "champions league", "europa league", "conference league",
 )
+# DERIVABLE FROM THE SIM WE ALREADY RUN, just not computed yet. Checked in
+# season_sim_soccer.simulate_season rather than assumed (2026-08-25): every
+# iteration already does
+#     ranked = sorted(results.values(), key=lambda r: (-r.points, -r.goal_diff, ...))
+# to produce champion/top2/top4/top_half/relegation, and accumulates
+# `goals_against` per team per match. So an Nth-place market needs a position
+# histogram off that existing `ranked` list, and a clean-sheets market needs a
+# zero-conceded counter in the match loop. Neither is a new model.
+#
+# This distinction matters because the previous note called all of these "NO
+# model" and told the reader to dismiss them -- which would have thrown away 75
+# live markets across 30+ leagues on the strength of a wrong label.
+_SOCCER_DERIVABLE_KW = (
+    "clean sheet", "place finish", "relegation survivor", "last place",
+)
+# Genuinely unmodelled: promotion needs the SECOND TIER simulated, and the
+# promoted-club rating bridge was measured and REJECTED (an oracle rating was
+# still 0.09 Brier worse than market). Top-scorer needs player-level data the
+# soccer model does not carry at all.
 _SOCCER_UNMODELLED_KW = (
-    "clean sheet", "place finish", "relegation survivor", "promoted to", "promotion",
-    "golden boot", "top scorer",
+    "promoted to", "promotion", "golden boot", "top scorer",
 )
 
 _SOCCER_FUTURES_MODELLED_NOTE = (
@@ -142,12 +160,21 @@ _SOCCER_FUTURES_MODELLED_NOTE = (
     "settlement feed. Do NOT dismiss this as an untracked sport."
 )
 
+_SOCCER_FUTURES_DERIVABLE_NOTE = (
+    "SOCCER season futures the existing sim can ALREADY answer -- it ranks the full "
+    "final table every iteration (that is where relegation and top4 come from) and "
+    "tracks goals conceded per match. An Nth-place market needs a position histogram "
+    "off that ranking; a clean-sheets market needs a zero-conceded counter. Do NOT "
+    "dismiss these as unmodelled: the blocker is a small addition to "
+    "season_sim_soccer, plus the league being wired, not a missing model."
+)
+
 _SOCCER_FUTURES_UNMODELLED_NOTE = (
-    "SOCCER season futures using a proposition this app has NO model for -- most clean "
-    "sheets, Nth-place finish, and promotion are not derivable from the current season "
-    "sim, and the promoted-club bridge was measured and REJECTED (an oracle rating was "
-    "still 0.09 Brier worse than market). Wiring the league would not make this "
-    "priceable. Dismiss unless the proposition itself gets built."
+    "SOCCER season futures this app genuinely cannot price. Promotion needs the SECOND "
+    "TIER simulated and the promoted-club rating bridge was measured and REJECTED (an "
+    "oracle rating was still 0.09 Brier worse than market); top-scorer needs "
+    "player-level data the soccer model does not carry. Wiring the league would not "
+    "make these priceable."
 )
 
 _UNWIRED_LEAGUE_NOTE = (
@@ -181,6 +208,8 @@ def classify(identifier: str, title: str, sport: str) -> tuple[str, str]:
         # soccer season futures reading as generic futures.
         if any(k in hay for k in _SOCCER_UNMODELLED_KW):
             return FUTURES, _SOCCER_FUTURES_UNMODELLED_NOTE
+        if any(k in hay for k in _SOCCER_DERIVABLE_KW):
+            return FUTURES, _SOCCER_FUTURES_DERIVABLE_NOTE
         if any(k in hay for k in _SOCCER_MODELLED_KW):
             return FUTURES, _SOCCER_FUTURES_MODELLED_NOTE
         return FUTURES, _NOTES[FUTURES]
@@ -198,6 +227,8 @@ def classify(identifier: str, title: str, sport: str) -> tuple[str, str]:
     # the rows it was written for.
     if any(k in hay for k in _SOCCER_UNMODELLED_KW):
         return REVIEW, _SOCCER_FUTURES_UNMODELLED_NOTE
+    if any(k in hay for k in _SOCCER_DERIVABLE_KW):
+        return REVIEW, _SOCCER_FUTURES_DERIVABLE_NOTE
     if any(k in hay for k in _SOCCER_MODELLED_KW):
         return REVIEW, _SOCCER_FUTURES_MODELLED_NOTE
     if soccer_hint:
