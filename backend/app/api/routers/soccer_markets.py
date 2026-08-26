@@ -343,7 +343,14 @@ CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total", "cup_sprea
 # stat-projection futures (see PLAYER_STAT_TRACKING_ONLY in routers/markets.py):
 # the stake is zeroed AFTER it is computed, so model_prob and edge still surface
 # and the row keeps accruing forward evidence.
-TRACKING_ONLY_MARKET_TYPES = {"cup_advance"}
+# leagues_cup_advance added 2026-08-26. It is the SAME market shape as
+# cup_advance -- who progressed, which for a Leagues Cup knockout can turn on a
+# penalty shootout no column here records -- and it has no grader either. It was
+# left out of this set when the Leagues Cup markets went in, so it was priced,
+# stakeable and unsettleable: precisely the trap the comment above describes.
+# Found by asking which types the staking path FUNDS that nothing can grade;
+# it had 4 funded rows and no real money on it yet.
+TRACKING_ONLY_MARKET_TYPES = {"cup_advance", "leagues_cup_advance"}
 
 
 def _cup_prediction(match: SoccerMatch | None):

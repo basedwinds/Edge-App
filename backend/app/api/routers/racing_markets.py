@@ -29,6 +29,7 @@ import logging
 from app.db.database import get_session
 from app.db.models import Market, RaceEvent
 from app.models import racing_sim
+from app.models.clv_selection import bucket_clv_stats, gate_kelly
 from app.models.baseline import racing_ratings, racing_championship
 from app.models.staking import (
     FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, apply_duplicate_listing_cap, has_real_trading,
@@ -596,10 +597,23 @@ def _price_event(series: str, markets: list[Market], implied_by_id: dict[int, fl
 @router.get("/markets", response_model=list[RacingMarketOut])
 def list_racing_markets(session: Session = Depends(get_session)):
     markets = session.query(Market).filter(Market.sport.in_(RACING_SPORTS), Market.status == "active").all()
+    # Racing was the ONE router with no gate_kelly at all -- so every gate that
+    # helper applies (CLV suppression, tracking-only, ungradeable cells) has
+    # always been a no-op here, and nobody would have noticed until a rule was
+    # added that racing needed. None of them bites racing today; wiring it now
+    # is so a future one is not silently skipped for a fourteenth sport. Cheap:
+    # bucket_clv_stats is TTL-cached and never blocks on a cold cache.
+    clv_stats = bucket_clv_stats(session)
     snaps = _batch_latest_snapshots(session, [m.id for m in markets])
     implied_by_id = {m.id: _implied_prob(snaps.get(m.id)) for m in markets}
     vol_by_id = {m.id: (snaps.get(m.id).volume if snaps.get(m.id) else None) for m in markets}
     src_by_id = {m.id: m.source for m in markets}
+    # The REAL sport (f1/irl/nascar), not the "racing" umbrella. RacingMarketOut
+    # exposes `series`, not `sport`, and the CLV buckets are keyed per sport --
+    # pooling the three would hide that nascar and irl behave nothing alike on
+    # real money. Same reason observation_logger resolves racing rows to their
+    # own sport rather than logging them all as "racing".
+    sport_by_id = {m.id: m.sport for m in markets}
 
     # Racing is now STAKED (paper) like every other sport -- size each edged
     # market off the racing pool via the shared staking layer. model_validated
@@ -644,7 +658,11 @@ def list_racing_markets(session: Session = Depends(get_session)):
             row.volume = vol_by_id.get(row.id)
             snap = snaps.get(row.id)
             has_traded = has_real_trading(src_by_id.get(row.id), snap.volume if snap else None, snap.last_price if snap else None)
-            kelly = kelly_fraction(row.model_prob, row.implied_prob, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None)
+            kelly = gate_kelly(
+                kelly_fraction(row.model_prob, row.implied_prob, fractional_kelly,
+                               max_stake_fraction, min_edge_to_bet, has_traded,
+                               snap.yes_ask if snap else None),
+                clv_stats, sport_by_id.get(row.id, "racing"), row.market_type)
             # A season title is a FUTURES position and has to be sized like one.
             # This whole block used to size every racing row identically and
             # then hardcode stake_pool="weekly", so a drivers'/constructors'

@@ -59,6 +59,7 @@ AUTO_SETTLE_MARKET_TYPES = {
     # which is the same "stays pending" outcome they have today.
     "first_half_spread", "second_half_spread",
     "first_half_team_total", "second_half_team_total", "second_half_btts",
+    "first_half_btts",
     # ftts needs SoccerMatch.first_scorer (ESPN scoring plays); its grader
     # returns None when that is unknown, so those bets stay pending.
     "ftts",
@@ -471,11 +472,25 @@ def _grade_soccer_half_spread(bet: PlacedBet, game: SoccerMatch, half: int) -> "
     return "won" if margin > bet.line else "lost"
 
 
-def _grade_soccer_second_half_btts(bet: PlacedBet, game: SoccerMatch) -> "str | None":
-    g = _soccer_half_goals(game, 2)
+def _grade_soccer_half_btts(bet: PlacedBet, game: SoccerMatch, half: int) -> "str | None":
+    """Both teams scored in the Nth half.
+
+    second_half_btts has been graded since the halves went in; FIRST half was
+    simply never wired, and an unmapped soccer type fails silently, so nothing
+    surfaced it. Found 2026-08-26 by asking which market types the staking path
+    FUNDS that no grader can settle.
+
+    No push and no "no" side, same as the full-time btts -- the market's side is
+    always "yes" (168 active rows, all side="yes").
+    """
+    g = _soccer_half_goals(game, half)
     if g is None:
         return None
     return "won" if (g[0] >= 1 and g[1] >= 1) else "lost"
+
+
+def _grade_soccer_second_half_btts(bet: PlacedBet, game: SoccerMatch) -> "str | None":
+    return _grade_soccer_half_btts(bet, game, 2)
 
 
 def _grade_soccer_btts(bet: PlacedBet, game: SoccerMatch) -> str:
@@ -1100,6 +1115,7 @@ _SOCCER_GRADERS = {
     "second_half_team_total": lambda b, g: _grade_soccer_half_team_total(b, g, 2),
     "first_half_spread": lambda b, g: _grade_soccer_half_spread(b, g, 1),
     "second_half_spread": lambda b, g: _grade_soccer_half_spread(b, g, 2),
+    "first_half_btts": lambda b, g: _grade_soccer_half_btts(b, g, 1),
     "second_half_btts": _grade_soccer_second_half_btts,
     # Graded off first_scorer, NOT the final score -- see the grader.
     "ftts": _grade_soccer_ftts,

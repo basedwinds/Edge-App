@@ -415,11 +415,19 @@ def list_wnba_markets(session: Session = Depends(get_session)):
                 model_prob = _quarter_model_prob(m, game, scoring)
 
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
-        kelly = kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction, min_edge_to_bet, has_traded, snap.yes_ask if snap else None)
-        # Suppress the whole bucket if forward CLV says it doesn't work (no-op
-        # until the bucket is well-sampled -- see clv_selection.py).
-        if kelly is not None and not is_bucket_enabled(clv_stats, "wnba", m.market_type):
-            kelly = None
+        # gate_kelly, NOT an inlined is_bucket_enabled check. This site used to
+        # hand-roll only the CLV half, which silently skipped the OTHER two gates
+        # gate_kelly applies -- and one of them was live: `total` is
+        # tracking-only app-wide on measured evidence (1 win from 13; the model
+        # landed five times further from the truth than the market), yet the WNBA
+        # board was still funding it. Caught 2026-08-26 with three `over` rows
+        # staked at $30, which is exactly the upward lean that suppression
+        # documents. Routing through the shared helper is the fix; a second
+        # bypass is how the first one survived.
+        kelly = gate_kelly(
+            kelly_fraction(model_prob, implied, fractional_kelly, max_stake_fraction,
+                           min_edge_to_bet, has_traded, snap.yes_ask if snap else None),
+            clv_stats, "wnba", m.market_type)
         _is_futures = m.market_type in SEASON_MARKET_TYPES
         stake_dollars = size_stake_dollars(
             staking_mode, kelly, futures_pool if _is_futures else weekly_pool,

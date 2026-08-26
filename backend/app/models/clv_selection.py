@@ -272,14 +272,50 @@ def is_bucket_enabled(
 # fix behind an abstention.
 TRACKING_ONLY_MARKET_TYPES = frozenset({"total"})
 
+# SPORT-SCOPED tracking-only, for cells nothing can GRADE.
+#
+# Separate from the set above on purpose. That one is a MODEL judgement ("this
+# type's prices are wrong") and is deliberately league-blind. This one is a
+# PLUMBING fact ("no settlement path exists for this cell"), and plumbing is
+# per-sport: wnba first_half_winner is ungradeable because WnbaGame stores no
+# period scores, while soccer's first_half_winner grades fine off the half-time
+# linescore. Putting a sport-scoped fact in a league-blind table is how a soccer
+# alias once rewrote FC Barcelona, so these stay keyed by (sport, market_type).
+#
+# MEASURED 2026-08-26. WnbaGame has 13 columns and MlbGame 18, and NEITHER has
+# any quarter/half/inning column -- compare NflGame, which carries
+# home_score_1h/away_score_1h and is why the NFL's winner_1h grades. So there is
+# no data to write a grader against; this is not a missing mapping, it is a
+# missing fetch. Real money had already landed on three of these four cells
+# ($60 across 6 bets), and the staking path was still funding them.
+#
+# REVERSIBLE, and the condition is concrete: fetch period scores for these
+# sports (the WNBA ones are on ESPN's linescore, same shape as the soccer
+# half-time fetch), wire the graders, and delete the cell from this set. The
+# stake is zeroed AFTER it is computed, so model_prob and edge still surface and
+# the row keeps accruing forward evidence in the meantime.
+UNGRADEABLE_CELLS = frozenset({
+    ("wnba", "first_half_winner"), ("wnba", "first_half_total"),
+    ("wnba", "first_half_spread"), ("wnba", "second_half_winner"),
+    ("wnba", "second_half_total"), ("wnba", "second_half_spread"),
+    ("wnba", "q1_winner"), ("wnba", "q1_total"), ("wnba", "q1_spread"),
+    ("wnba", "q2_winner"), ("wnba", "q2_total"), ("wnba", "q2_spread"),
+    ("wnba", "q3_winner"), ("wnba", "q3_total"), ("wnba", "q3_spread"),
+    ("wnba", "q4_winner"), ("wnba", "q4_total"), ("wnba", "q4_spread"),
+    ("mlb", "f5"),
+})
+
 
 def gate_kelly(kelly, clv_stats: dict, sport: str, market_type: str):
     """Zero out a computed kelly fraction if its (sport, market_type) bucket is
-    CLV-suppressed, or if the market type is tracking-only. One-liner used at
+    CLV-suppressed, if the market type is tracking-only, or if the cell has no
+    settlement path at all. One-liner used at
     each router's kelly call site so the gate rolls out uniformly -- 24 call
     sites, which is why the rule lives HERE rather than in any single router.
     The CLV half is still a no-op for every bucket; see SUPPRESSION_ENABLED."""
     if kelly is not None and market_type in TRACKING_ONLY_MARKET_TYPES:
+        return None
+    if kelly is not None and (sport, market_type) in UNGRADEABLE_CELLS:
         return None
     if kelly is not None and not is_bucket_enabled(clv_stats, sport, market_type):
         return None
