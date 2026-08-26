@@ -620,6 +620,17 @@ def start():
         next_run_time=base_tick + timedelta(minutes=8),
         replace_existing=True,
     )
+    # Polymarket half of the same gap. Staggered 4 minutes off the Kalshi one so
+    # the two never contend for the same worker in a thread pool that is already
+    # the app's tightest resource.
+    scheduler.add_job(
+        observation_logger.settle_from_polymarket,
+        "interval",
+        hours=4,
+        id="observation_settle_polymarket",
+        next_run_time=base_tick + timedelta(minutes=12),
+        replace_existing=True,
+    )
     scheduler.add_job(
         run_full_refresh,
         "interval",

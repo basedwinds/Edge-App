@@ -524,6 +524,133 @@ def _settle_from_kalshi_resolution(session) -> int:
     return settled
 
 
+# Distinct Polymarket conditionIds one pass may ask Gamma about. A condition
+# covers ALL outcomes of a market, so this buys far more rows than the same
+# number of Kalshi tickers does -- one condition can back a dozen observations.
+_POLY_OBS_CONDITION_CAP = 6000
+
+
+def _settle_from_polymarket_resolution(session) -> int:
+    """Grade pending observations from Polymarket's own resolution.
+
+    The other half of the bet-vs-observation asymmetry. Closing the Kalshi side
+    took forward coverage 42.0% -> 54.8%, and left 45,398 Polymarket rows pending
+    with **30,660 of them on events that have already finished** -- tennis alone
+    22,495. A Polymarket BET has had an authoritative path since
+    ingestion/polymarket_settlement.py was built; the observation behind it got
+    neither that nor the per-sport graders.
+
+    DELEGATES THE HARD PART rather than re-deriving it. That module's `grade()`
+    is pure -- stored side plus one Gamma row in, a status out -- and it encodes
+    three guards found by probing 2,804 real pending bets:
+
+      * outcome names rarely match exactly (214 of 1,500 matched Gamma's list
+        verbatim), so matching is tiered and REFUSES an ambiguous hit
+      * Yes/No markets carry their subject in the question, not the outcomes, so
+        a market whose stored side is a team code is left pending
+      * "resolved" can mean a 50/50 refund, which maps to void rather than being
+        read as a win by max(prices)
+
+    Re-implementing any of that here would be three chances to grade the wrong
+    thing on 30k rows. Anything the shared grader will not commit to stays
+    pending, and the reasons are counted and logged so a growing skip class is
+    visible rather than silent.
+
+    Observations have no `position` column, so there is no NO side to invert.
+    Never raises.
+    """
+    from app.db.models import Market
+
+    try:
+        from app.ingestion.polymarket_resolution import condition_id
+        from app.ingestion.polymarket_settlement import (
+            fetch_closed_markets, grade, stored_side)
+    except Exception:
+        log.exception("polymarket resolution settler unavailable; skipping")
+        return 0
+
+    settled = 0
+    try:
+        now = dt.datetime.utcnow()
+        pending = (
+            session.query(ModelObservation.id, Market.source_ticker)
+            .join(Market, ModelObservation.market_id == Market.id)
+            .filter(ModelObservation.status == "pending",
+                    Market.source == "polymarket",
+                    Market.source_ticker.isnot(None),
+                    sa.or_(ModelObservation.event_start.is_(None),
+                           ModelObservation.event_start < now))
+            .order_by(ModelObservation.event_start.asc().nullslast())
+            .all()
+        )
+        if not pending:
+            return 0
+
+        cids: list[str] = []
+        seen = set()
+        for _oid, ticker in pending:
+            c = condition_id(ticker)
+            if c and c not in seen:
+                seen.add(c)
+                cids.append(c)
+                if len(cids) >= _POLY_OBS_CONDITION_CAP:
+                    break
+        if not cids:
+            return 0
+
+        gamma = fetch_closed_markets(cids)
+        if not gamma:
+            return 0
+
+        skipped: dict[str, int] = {}
+        for oid, ticker in pending:
+            c = condition_id(ticker)
+            if c not in seen:
+                continue
+            g = gamma.get(c or "")
+            if g is None:
+                continue  # not resolved yet -- normal
+            status, reason = grade(stored_side(ticker), g)
+            if status is None:
+                k = reason.split(" -- ")[0][:40]
+                skipped[k] = skipped.get(k, 0) + 1
+                continue
+            obs = session.get(ModelObservation, oid)
+            if obs is None or obs.status != "pending":
+                continue
+            obs.status = status
+            obs.settled_at = now
+            obs.settlement_note = f"auto-settled from Polymarket resolution ({reason})"
+            settled += 1
+        if settled:
+            log.info("observations: %d settled from Polymarket resolution "
+                     "(%d conditions queried)", settled, len(cids))
+        if skipped:
+            log.info("polymarket observation settlement left rows pending: %s", skipped)
+    except Exception:
+        log.exception("polymarket resolution settlement of observations failed")
+    return settled
+
+
+def settle_from_polymarket() -> int:
+    """Scheduler entry point for the Polymarket-resolution pass. Never raises."""
+    session = SessionLocal()
+    try:
+        n = _settle_from_polymarket_resolution(session)
+        if n:
+            session.commit()
+        return n
+    except Exception:
+        log.exception("polymarket observation settlement job failed")
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        session.close()
+
+
 def settle_from_kalshi() -> int:
     """Scheduler entry point for the Kalshi-resolution pass. Never raises.
 
