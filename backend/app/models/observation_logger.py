@@ -40,6 +40,7 @@ building now rather than when it is next needed.
 from __future__ import annotations
 
 import datetime as dt
+import sqlalchemy as sa
 import logging
 
 from app.db.database import SessionLocal
@@ -410,6 +411,112 @@ def _settle_season_futures(session) -> int:
     return settled
 
 
+# How many DISTINCT tickers one pass may ask Kalshi about. Each batch is 100
+# tickers in one request, so this is 40 requests -- enough to drain the backlog
+# over a handful of poller cycles without any single cycle stalling on ~160
+# sequential HTTP calls. The bet-side settler has no cap because the bet log is
+# small; the forward log is 117k rows with 67k pending, which is a different
+# problem.
+_KALSHI_OBS_TICKER_CAP = 4000
+
+
+def _settle_from_kalshi_resolution(session) -> int:
+    """Grade pending observations from Kalshi's own market resolution.
+
+    WHY THIS EXISTS. Bets and observations were being graded by DIFFERENT paths,
+    and the forward log had the worse one. A PlacedBet gets
+    market_resolution_settlement.settle_from_kalshi_resolution(), which grades
+    every Kalshi market that finalizes with no market_type filter at all -- its
+    own docstring calls it "the authoritative, 100%-coverage settlement path". A
+    ModelObservation got only AUTO_SETTLE_MARKET_TYPES plus a per-sport grader,
+    which needs our own results data and a type we happen to have wired.
+
+    The gap was not subtle: cup_advance had 41 BETS settled from Kalshi and all
+    70 of its OBSERVATIONS pending. Overall only 42.4% of the forward log was
+    graded, with 45,551 rows stale-pending (event long finished) -- 15,653 of
+    them on Kalshi markets this path can settle today.
+
+    That matters more than any individual grader, because the forward log is the
+    ONLY instrument that can measure a blocked bet. Every staking gate works by
+    zeroing the stake, which stops the row becoming a paper bet (paper_logger
+    gates on suggested_stake_dollars), so the bet log structurally cannot say
+    whether blocking was right. Half the instrument was dark.
+
+    Reuses the bet-side fetch and result normalisation rather than reimplementing
+    them, so the scalar-means-refund handling cannot drift between the two.
+
+    Observations are always YES-frame -- ModelObservation has no `position`
+    column, so there is no NO side to invert. Never raises.
+    """
+    from app.db.models import Market
+
+    settled = 0
+    try:
+        from app.ingestion.market_resolution_settlement import _fetch_resolutions
+    except Exception:
+        log.exception("kalshi resolution settler unavailable; skipping")
+        return 0
+    try:
+        now = dt.datetime.utcnow()
+        # Oldest event first: a market whose event finished long ago is the most
+        # likely to have resolved, and ordering this way stops a permanently
+        # unresolved ticker from crowding out newer ones every pass. event_start
+        # is legitimately NULL on season-long futures, which are included -- they
+        # resolve too, just later.
+        pending = (
+            session.query(ModelObservation)
+            .join(Market, ModelObservation.market_id == Market.id)
+            .filter(ModelObservation.status == "pending",
+                    Market.source == "kalshi",
+                    Market.source_ticker.isnot(None),
+                    sa.or_(ModelObservation.event_start.is_(None),
+                           ModelObservation.event_start < now))
+            .order_by(ModelObservation.event_start.asc().nullslast())
+            .all()
+        )
+        if not pending:
+            return 0
+
+        ticker_by_market = dict(
+            session.query(Market.id, Market.source_ticker)
+            .filter(Market.id.in_({o.market_id for o in pending})).all()
+        )
+        seen: list[str] = []
+        for o in pending:
+            tk = ticker_by_market.get(o.market_id)
+            if tk and tk not in seen:
+                seen.append(tk)
+                if len(seen) >= _KALSHI_OBS_TICKER_CAP:
+                    break
+
+        resolution = _fetch_resolutions(seen)
+        if not resolution:
+            return 0
+        wanted = set(seen)
+        for o in pending:
+            tk = ticker_by_market.get(o.market_id)
+            if tk not in wanted:
+                continue
+            r = resolution.get(tk)
+            if r is None:
+                continue  # not finalized yet
+            status = ("won" if r == "yes" else "lost" if r == "no"
+                      else "void" if r in ("void", "") else None)
+            if status is None:
+                continue
+            o.status = status
+            o.settled_at = now
+            o.settlement_note = f"auto-settled from Kalshi market resolution (result={r or 'void'})"
+            settled += 1
+        if settled:
+            log.info("observations: %d settled from Kalshi market resolution "
+                     "(%d tickers queried, %d still pending)",
+                     settled, len(seen), len(pending) - settled)
+    except Exception:
+        log.exception("kalshi resolution settlement of observations failed")
+    return settled
+
+
 def settle() -> int:
     """Grade pending observations whose event has finished, reusing
     bet_settlement's graders unchanged -- an observation exposes the same
@@ -445,6 +552,11 @@ def settle() -> int:
             except Exception:
                 continue  # one bad row must not stop the rest
         settled += _settle_season_futures(session)
+        # LAST, and deliberately: the two passes above cost nothing but a local
+        # query, while this one makes network calls. Anything they could grade is
+        # already graded by the time it runs, so it only pays for the remainder.
+        # Same ordering principle the bet side uses for its Kalshi fallback.
+        settled += _settle_from_kalshi_resolution(session)
         session.commit()
         log.info("observation logger: %d observations settled", settled)
     except Exception:
