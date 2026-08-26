@@ -1347,6 +1347,14 @@ def create_placed_bet(body: PlacedBetIn, session: Session = Depends(get_session)
     start_dt, _ = _resolve_bet_start(session, row)
     if start_dt is not None:
         row.original_start_time = start_dt.isoformat() + "Z"
+    # FORWARD-LOG COVERAGE. The hourly sweep misses markets that are listed, bet
+    # and started inside one window -- 28% of settled tennis moneyline bets had
+    # no observation row, and those performed far better than the logged ones,
+    # which biased every conclusion drawn from the log. Writing one here closes
+    # that hole with no added scheduled load. Flagged so calibration work can
+    # exclude it; see ModelObservation.logged_at_placement. Never raises.
+    from app.models import observation_logger as _obs_log
+    _obs_log.ensure_observation_for_bet(session, row)
     session.commit()
     session.refresh(row)
     return _to_out(session, row)

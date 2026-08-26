@@ -1107,6 +1107,28 @@ class ModelObservation(Base):
     # `would_stake_dollars` is the size the board offered (NULL = declined), so a
     # later analysis can filter to the STAKED population exactly rather than
     # re-deriving a rule that lives in thirteen routers.
+    # 1 when this row was created BECAUSE A BET WAS PLACED on a market the
+    # hourly logger had not yet seen, rather than by the logger's own sweep.
+    #
+    # WHY IT EXISTS. The logger runs hourly, and fast markets (tennis, esports)
+    # can be listed, bet and started inside one window. Measured 2026-08-25: 66
+    # of 232 settled real tennis moneyline bets had NO observation row, and those
+    # 66 returned +35.9% against +4.2% for the logged ones. The log's tennis
+    # verdict was therefore measuring a subset that systematically excluded the
+    # best bets -- a coverage bias, not a finding.
+    #
+    # THESE ROWS ARE NOT INTERCHANGEABLE WITH SWEPT ONES, and two analyses must
+    # treat them differently:
+    #   * UNSELECTED-POPULATION work (calibration, "does the model beat the
+    #     market") MUST EXCLUDE them. They exist only because a bet was placed,
+    #     which is exactly the selection the forward log was built to avoid.
+    #   * INSTRUMENT-AGREEMENT work must not read a price match on them as
+    #     evidence: model_prob/market_prob here are copied from the bet's own
+    #     snapshot, which came from the same route, so they agree by
+    #     construction. A mirror is not evidence.
+    # They ARE the right rows for outcome coverage -- "how did the bets we
+    # actually made turn out" -- which is what the gap was costing.
+    logged_at_placement = Column(Integer, default=0)
     would_stake_dollars = Column(Float)
     yes_bid = Column(Float)
     yes_ask = Column(Float)

@@ -59,6 +59,7 @@ _MISSING_COLUMNS_BY_TABLE = {
     # models against outcomes was simply dead, and silently, because nothing
     # reads it on a normal request path.
     "model_observations": [
+        ("logged_at_placement", "INTEGER"),
         ("would_stake_dollars", "FLOAT"),
         ("yes_bid", "FLOAT"),
         ("yes_ask", "FLOAT"),("cod_match_id", "VARCHAR")],

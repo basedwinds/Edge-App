@@ -252,6 +252,93 @@ def refresh() -> int:
     return written
 
 
+def ensure_observation_for_bet(session, bet) -> bool:
+    """Create an observation row for a market the hourly sweep never saw.
+
+    THE GAP THIS CLOSES. refresh() runs hourly. Tennis and esports markets get
+    listed, bet and started inside one window, so a bet can exist for a market
+    with no pre-event row at all. Measured 2026-08-25: 66 of 232 settled real
+    tennis moneyline bets had no observation, and those 66 returned +35.9%
+    against +4.2% for the logged ones -- so the log's tennis verdict was
+    measuring a subset that excluded the best bets. That is a coverage bias
+    masquerading as a finding, and it is why the log could not arbitrate against
+    the tracker.
+
+    Chosen over raising the logger's cadence deliberately: this adds no
+    scheduled work at all, and the app has a history of degrading under extra
+    periodic load.
+
+    The row is flagged logged_at_placement=1 -- see ModelObservation's own
+    comment for the two analyses that must treat these rows differently. In
+    short: exclude them from unselected-population calibration (they exist
+    BECAUSE of a bet), and never read their price agreement as evidence (it is
+    copied from the bet's own snapshot).
+
+    Returns True if a row was written. Never raises: a logging failure must not
+    cost the user a bet.
+    """
+    try:
+        if bet is None or bet.market_id is None:
+            return False
+        existing = (session.query(ModelObservation)
+                    .filter(ModelObservation.market_id == bet.market_id).first())
+        if existing is not None:
+            return False
+        now = dt.datetime.utcnow()
+        obs = ModelObservation(
+            market_id=bet.market_id,
+            sport=getattr(bet, "sport", None),
+            market_type=getattr(bet, "market_type", None),
+            source=getattr(bet, "source", None),
+            team=getattr(bet, "team", None),
+            side=getattr(bet, "side", None),
+            line=getattr(bet, "line", None),
+            model_prob=getattr(bet, "model_prob_at_placement", None),
+            market_prob=getattr(bet, "market_prob_at_placement", None),
+            edge=getattr(bet, "edge_at_placement", None),
+            would_stake_dollars=getattr(bet, "stake_dollars", None),
+            logged_at_placement=1,
+            first_seen_at=now,
+            observed_at=now,
+            status="pending",
+        )
+        for f in ENTITY_FIELDS:
+            v = getattr(bet, f, None)
+            if v is not None:
+                setattr(obs, f, v)
+        # VOLUME AND QUOTE FROM THE MARKET'S OWN LATEST SNAPSHOT, not from the
+        # bet. Without this the row carries volume=None and can never pass the
+        # `volume > 0` filter that every serious analysis applies -- which would
+        # make the coverage fix useless for exactly the liquid-arm questions it
+        # was built to unblock.
+        #
+        # Read from MarketSnapshot rather than assumed: it is TRUE that the app
+        # only stakes markets clearing has_real_trading, so these are liquid by
+        # construction, but encoding that as an implicit "flagged rows count as
+        # liquid" rule would break silently the first time the staking path
+        # changed.
+        try:
+            from app.db.models import MarketSnapshot
+            snap = (session.query(MarketSnapshot)
+                    .filter(MarketSnapshot.market_id == bet.market_id)
+                    .order_by(MarketSnapshot.ts.desc()).first())
+            if snap is not None:
+                obs.volume = snap.volume
+                obs.yes_bid = snap.yes_bid
+                obs.yes_ask = snap.yes_ask
+        except Exception:
+            log.exception("snapshot lookup failed for market %s", bet.market_id)
+        start = _parse_dt(getattr(bet, "original_start_time", None))
+        if start is not None:
+            obs.event_start = start
+        session.add(obs)
+        return True
+    except Exception:
+        log.exception("placement-time observation failed for market %s",
+                      getattr(bet, "market_id", None))
+        return False
+
+
 def settle() -> int:
     """Grade pending observations whose event has finished, reusing
     bet_settlement's graders unchanged -- an observation exposes the same
