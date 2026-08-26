@@ -349,6 +349,72 @@ def ensure_observation_for_bet(session, bet) -> bool:
         return False
 
 
+def _settle_season_futures(session) -> int:
+    """Grade season-long futures, which the loop below structurally cannot.
+
+    That loop resolves ONE event via bet_settlement._get_game and skips anything
+    it cannot find. A league title has no single event, so every futures row was
+    skipped forever -- the mechanical reason most of the ungradeable forward log
+    is ungradeable.
+
+    A SEPARATE PASS, and these types are deliberately NOT added to
+    AUTO_SETTLE_MARKET_TYPES. That set is shared with bet_settlement, so adding
+    them would also let this grade REAL BETS, and it must not: the underlying
+    bottom-N rule is ~98% right in the modern era (validated against next
+    season's participant list, 134/141 all-time, 2 misses since 2005), which is
+    fine for scoring a model and not fine for paying one. Real bets keep settling
+    on the platform's own resolution.
+
+    Never raises, and grades nothing it is unsure of -- an unfinished season, an
+    unmapped ticker or a club absent from the table all return None.
+    """
+    from app.db.models import Market
+    from app.models import season_futures as SF
+
+    settled = 0
+    try:
+        pending = (
+            session.query(ModelObservation)
+            .filter(ModelObservation.status == "pending",
+                    ModelObservation.market_type.in_(
+                        sorted(SF.SEASON_FUTURES_MARKET_TYPES)))
+            .all()
+        )
+        if not pending:
+            return 0
+        # One Market lookup per market_id, and standings computed once per
+        # (division, season): load_matches parses a 122 MB cache, so doing it
+        # per ROW would be thousands of passes over the same data.
+        market_by_id = {}
+        for mid in {o.market_id for o in pending if o.market_id is not None}:
+            market_by_id[mid] = session.get(Market, mid)
+        standings_cache: dict = {}
+        for obs in pending:
+            try:
+                market = market_by_id.get(obs.market_id)
+                division, season_start = SF.resolve_division_and_season(market)
+                if division is None or season_start is None:
+                    continue
+                key = (division, season_start)
+                if key not in standings_cache:
+                    standings_cache[key] = SF.final_standings(division, season_start)
+                if not standings_cache[key]:
+                    continue
+                result = SF.grade(session, obs, market=market)
+                if result not in ("won", "lost", "push"):
+                    continue
+                obs.status = result
+                obs.settled_at = dt.datetime.utcnow()
+                settled += 1
+            except Exception:
+                continue  # one bad row must not stop the rest
+        if settled:
+            log.info("season futures: %d observations settled", settled)
+    except Exception:
+        log.exception("season futures settlement failed")
+    return settled
+
+
 def settle() -> int:
     """Grade pending observations whose event has finished, reusing
     bet_settlement's graders unchanged -- an observation exposes the same
@@ -383,6 +449,7 @@ def settle() -> int:
                 settled += 1
             except Exception:
                 continue  # one bad row must not stop the rest
+        settled += _settle_season_futures(session)
         session.commit()
         log.info("observation logger: %d observations settled", settled)
     except Exception:
