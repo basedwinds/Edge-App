@@ -1501,8 +1501,27 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         # Labelled rather than hidden, matching the MLS-bracket and CFB posture:
         # the model number stays visible with a note saying why it is not backed
         # and when it will be.
-        _progress = progress_by_division.get(_futures_division(m), 0.0)
+        _div = _futures_division(m)
+        _progress = progress_by_division.get(_div, 0.0)
         if not season_progress_ok(m.market_type, _progress):
+            kelly = None
+        # UNRATED CLUB. Match pricing already refuses these -- get_match_distribution
+        # returns None when either side has no prior matches, enforced in the
+        # service so no caller can skip it. The season sim had no such rule: it
+        # hands an unrated club a placeholder rating and then NORMALISES over the
+        # field, which produced LASK at 78.5% against a 13% market and IK Sirius
+        # at 95.3%. 128 of 735 live rows (17%) are for such clubs.
+        #
+        # The season-progress gate hides this today, but it lifts on fixtures
+        # PLAYED, not on the club becoming rated -- so without this, an unrated
+        # club becomes stakeable the moment its league matures.
+        #
+        # Blocks only the unrated club's OWN row. The club stays IN the simulated
+        # field on purpose: simulate_season normalises over the teams it is
+        # given, so dropping one hands its share to everyone else and quietly
+        # corrupts the rated clubs' prices too -- the field-completeness failure
+        # the racing sim already had.
+        if _div and m.team and elo_service_soccer.get_team_match_count(_div, m.team) == 0:
             kelly = None
         stake_dollars = size_stake_dollars(staking_mode, kelly, futures_pool, model_prob, implied, unit_dollars, flat_marginal, flat_full, unit_scale=FUTURES_UNIT_SCALE, min_market_price=FUTURES_MIN_MARKET_PRICE, max_spread=FUTURES_MAX_SPREAD, yes_bid=snap.yes_bid if snap else None, yes_ask=snap.yes_ask if snap else None, sport="soccer", team=m.team)
         edge = round(model_prob - implied, 4) if (model_prob is not None and implied is not None) else None
@@ -1605,7 +1624,16 @@ def list_soccer_futures(session: Session = Depends(get_session)):
         if _div is None or row.model_prob is None:
             continue
         _prog = progress_by_division.get(_div, 0.0)
-        if row.suggested_stake_dollars is None and not season_progress_ok(row.market_type, _prog):
+        if row.suggested_stake_dollars is not None:
+            continue
+        if row.team and elo_service_soccer.get_team_match_count(_div, row.team) == 0:
+            row.model_note = (
+                f"{row.model_note or ''} Not staked: this club has no rated match "
+                f"history in {_div}, so its probability comes from a placeholder "
+                f"strength rather than a real estimate of this team. The same rule "
+                f"already blocks match pricing for unrated clubs."
+            ).strip()
+        elif not season_progress_ok(row.market_type, _prog):
             row.model_note = f"{row.model_note or ''} {season_progress_note(row.market_type, _prog)}".strip()
 
     out.sort(key=lambda m: (m.group_label or "", -(m.implied_prob or 0)))
