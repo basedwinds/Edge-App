@@ -104,6 +104,36 @@ _YES_MEANS_TEAM_WON = {
     # LAR vs our LA = Los Angeles R, JAC vs our JAX = Jacksonville). Neither is a
     # crossed side, and settlement does not read the abbreviation anyway.
     "h2h_wins",
+    # ADDED 2026-08-26 by RE-RUNNING the 2026-08-11 audit. That audit scanned
+    # markets ACTIVE THAT DAY, and college football was out of season while the
+    # NFL had not opened its season ladders -- so a type dormant at scan time
+    # could not be seen, and four more were sitting in exactly the same silent
+    # `continue`. THE LESSON IS THE AUDIT, NOT THE TYPES: a completeness check
+    # keyed on live inventory re-opens the same hole every off-season, so it has
+    # to be re-run per sport IN SEASON, not once.
+    #
+    # Each was read off the market's own stored rules text, not its name:
+    #
+    #   conference_qualifier  "If Arizona qualifies for the 2026 College Football
+    #                          Big 12 Championship Game, then ... Yes."
+    #                         Same shape as playoff_qualifier above. 55 active,
+    #                         0 missing a team.
+    #   conference_regtop     "If Boston College finishes in the top 3 in the
+    #                          Atlantic Coast Conference in the 2026 regular
+    #                          season, then ... Yes."
+    #                         Its stored `line` (3/4/5) is part of the QUESTION,
+    #                         like the 4 in top4 -- not a threshold the bet
+    #                         clears, so this is an outright and NOT a ladder.
+    #                         Kalshi lists all three rungs as separate tickers
+    #                         (49 teams x exactly 3 rungs, verified), and
+    #                         settlement resolves BY TICKER, so the line never
+    #                         needs to be read.
+    #   top2 / top_half       "If Arsenal is a top 2 finisher in the 2026-27 EPL
+    #                          season, then ... Yes." -- WORD FOR WORD the top4
+    #                         wording already trusted above, same series
+    #                         (KXEPLTOP-27TOP2/TOPHALF/TOP4), 20 active each.
+    "conference_qualifier", "conference_regtop",
+    "top2", "top_half",
 }
 
 # THRESHOLD LADDERS -- "yes" means the total CLEARED the line, not that a named
@@ -131,7 +161,25 @@ _YES_MEANS_TEAM_WON = {
 # `exact_win_total` is still excluded, and not for semantic reasons: it has ZERO
 # market rows in the book, so there is nothing to grade and nothing to verify a
 # grader against.
-_YES_MEANS_OVER_LINE = {"win_total", "division_wins"}
+# `wins_any` joins the LADDER set, not the outright set above, and the difference
+# is not cosmetic. Its rules read "If ANY Pro Football team wins 15+ games in the
+# 2026-27 regular season" -- there is no team (correctly 0 of 3 rows carry one),
+# and yes means a LEAGUE-WIDE count cleared the line. Putting it here rather than
+# in _YES_MEANS_TEAM_WON buys the _strike_is_at_least precondition, which is what
+# protects it: nothing about "wins_any" guarantees a rung is a floor rather than
+# a range or an exact count.
+#
+# The rung that could have gone wrong is the top one. KXNFLWINS-ANY-27-17 reads
+# "wins 17 games", an EQUALITY -- but Kalshi publishes it as strike_type=
+# "greater_or_equal", floor=17, cap=None, which is consistent because 17 is the
+# whole season and "17+" and "exactly 17" are the same event. Checked live
+# 2026-08-26 on all three rungs (15/16/17): greater_or_equal, floor matching our
+# stored line, no cap, 0 mismatches -- the same check the four sports above got.
+# Had any rung come back otherwise, the guard would have skipped it and left the
+# bet pending, which is the intended failure.
+#
+# Settlement never reads bet.team, so a teamless market grades normally here.
+_YES_MEANS_OVER_LINE = {"win_total", "division_wins", "wins_any"}
 
 # A bet on the NO side inverts the mapping below, so it must never reach it.
 # Nothing produces these today; the guard exists so that stays true.
