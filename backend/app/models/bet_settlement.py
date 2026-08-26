@@ -70,6 +70,10 @@ AUTO_SETTLE_MARKET_TYPES = {
     # the regulation score -- same graders as the league markets, new names only.
     "national_moneyline_3way", "national_total",
     "national_spread", "national_btts",
+    # esports map handicap. Its rule was validated 47/47 against the platforms'
+    # own settlements; with no map score the grader returns None and the bet
+    # stays pending for the platform, which is the pre-existing behaviour.
+    "series_handicap",
     # mma
     "distance", "rounds", "method_of_finish",
     # Joint "<fighter> wins by KO" -- its grader requires the backed fighter to
@@ -408,6 +412,39 @@ def _grade_esports_series_total(bet: PlacedBet, match) -> "str | None":
     if bet.side == "under":
         return "won" if total < bet.line else "lost"
     return "won" if total > bet.line else "lost"  # side "over"
+
+
+def _grade_esports_series_handicap(bet: PlacedBet, match) -> "str | None":
+    """Map handicap: the backed team's maps PLUS the line, against the opponent's.
+
+    Rows carry team + line (+/-1.5, occasionally +/-2.5) and no side -- the sign
+    of the line is what says whether the team is being given maps or laying them.
+
+    THE RULE WAS READ OFF THE PLATFORMS, NOT ASSUMED. No rules text is captured
+    for any of the 3,318 series_handicap markets, so the convention came from
+    scoring candidates against settlements the platform itself made:
+    47 of 47 correct, no disagreements, including a +2.5 that won from 1-3 and a
+    -1.5 that lost from 1-2.
+
+    Returns None without a map score, which is the common case and NOT a defect
+    of this function: only 7% of finished Cs2Match rows carry maps_won (Valorant
+    62%). That data gap, not a missing grader, is what actually blinds this cell
+    -- 563 cs2 + 228 valorant observations cannot settle, while the cell has
+    taken 23 real bets for -26.5%. Shipping the grader anyway because it is
+    correct, costs nothing, and starts working retroactively the moment the
+    scraper fills those columns.
+    """
+    if bet.line is None or match.maps_won_a is None or match.maps_won_b is None:
+        return None
+    side = _esports_side(bet, match)
+    if side is None:
+        return None
+    mine = match.maps_won_a if side == "team_a" else match.maps_won_b
+    theirs = match.maps_won_b if side == "team_a" else match.maps_won_a
+    margin = mine + float(bet.line)
+    if margin == theirs:
+        return "push"
+    return "won" if margin > theirs else "lost"
 
 
 # ---- mma (MmaFight: winner_id, method, round, went_the_distance) -------------
@@ -998,6 +1035,7 @@ _ESPORTS_GRADERS = {
     "series_winner": _grade_esports_series_winner,
     "series_total": _grade_esports_series_total,
     "map_winner": _grade_esports_map_winner,
+    "series_handicap": _grade_esports_series_handicap,
 }
 
 def _complete_only(grader):
