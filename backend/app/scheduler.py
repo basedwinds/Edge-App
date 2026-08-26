@@ -64,10 +64,43 @@ log = logging.getLogger("scheduler")
 # starve it again, and a generous misfire grace so a late fire still runs
 # instead of being dropped. max_instances stays at the default 1, so passes
 # still never overlap.
+# THE WARMER WAS RESCUED FROM MISFIRES; THE POLLERS WERE NOT. The lane above
+# fixed cache_warm, but every other job kept APScheduler's default
+# misfire_grace_time of ONE SECOND -- so a poller that cannot grab a slot within
+# a second of its due time is discarded silently, which is the same failure the
+# comment above describes, on 26 other jobs.
+#
+# Measured live 2026-08-25 from /health's own MISSED_RUNS counter:
+#     full_refresh_cod 30   full_refresh_cs2 26   full_refresh_racing 21
+#     paper_log 18   tennis_best_of 16   wnba_season_sim 16   ... 27 jobs total
+# On a 5-minute cadence, 26 misses is a large share of the day's runs.
+#
+# IT COSTS REAL DATA, not just tidiness. Liquipedia's CS2 page shows only
+# recently-decided matches, so a dropped full_refresh_cs2 does not merely delay a
+# result -- the match scrolls off the page and its map score is lost for good.
+# CS2 map scores are missing on 93% of finished matches, which blinds
+# series_handicap and series_total entirely.
+#
+# THIS DOES NOT RAISE CONCURRENCY. The pool is still capped at 10 and
+# max_instances is still 1, so nothing new runs in parallel; a late job WAITS for
+# a slot instead of being thrown away. Peak load is unchanged, utilisation is not.
+#
+# coalesce coalesces a backlog into ONE run rather than replaying every missed
+# fire -- a poller reads current state, so running it five times in a row would
+# just be five identical passes.
+#
+# 240s is deliberately under the 5-minute cadence of the busiest pollers: a run
+# that cannot start within four minutes is better dropped in favour of the next
+# fire than stacked behind it. The warmer keeps its own explicit 600 -- a per-job
+# value overrides these defaults.
 scheduler = BackgroundScheduler(
     executors={
         "default": ThreadPoolExecutor(max_workers=10),   # unchanged, explicit
         "warm": ThreadPoolExecutor(max_workers=1),
+    },
+    job_defaults={
+        "misfire_grace_time": 240,
+        "coalesce": True,
     },
 )
 
