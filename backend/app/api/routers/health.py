@@ -262,6 +262,83 @@ def _check_started_events(session, issues, now):
                "depends on that sport's own started-event gate.")
 
 
+# Esports match models. Results reach these two different ways, which is why the
+# check below does NOT key on `source`:
+#   * cs2 / valorant -- the scraper CREATES rows (source "liquipedia" / "vlr")
+#   * lol            -- gol.gg BACKFILLS onto existing market stubs, leaving
+#                       source as "live", so "no row from gol.gg" is by design
+_ESPORTS_MATCH_MODELS = [("cs2", "Cs2Match"), ("valorant", "ValorantMatch"),
+                         ("lol", "LolMatch")]
+
+# How far the newest match WITH A MAP SCORE may lag the newest finished match
+# before the results pipeline is treated as dead rather than merely quiet.
+_RESULTS_LAG_WARN_DAYS = 5
+_RESULTS_LAG_ERROR_DAYS = 14
+
+
+def _check_scraper_alive(session, issues):
+    """Flag an esports results pipeline that has silently stopped contributing.
+
+    THE OUTAGE THIS EXISTS FOR (2026-08-26). Liquipedia began answering the CS2
+    matches page with 403 behind a Cloudflare challenge. The poller ran every 5
+    minutes into that refusal for 25 DAYS and nothing noticed: fixtures kept
+    appearing (they are created on demand from Kalshi/Polymarket markets, not by
+    the scraper) and winners kept arriving (from platform resolution), so every
+    surface looked healthy. Only the DETAIL stopped -- map scores and event names
+    -- which is exactly the data nothing reads until you try to measure
+    something. Scraped CS2 matches stopped at 2026-08-01 while the table ran on.
+
+    "Rows are arriving" is therefore NOT evidence the pipeline works.
+
+    THE SIGNAL IS MAP SCORES, NOT `source`. An earlier version of this check
+    compared the newest row from a scraper SOURCE against the newest row overall,
+    and false-alarmed on LoL, whose results are backfilled onto market stubs and
+    never change `source` at all. Map coverage is what actually degrades in every
+    case, whichever way the data arrives.
+    """
+    from app.db import models as M
+
+    for sport, model_name in _ESPORTS_MATCH_MODELS:
+        model = getattr(M, model_name, None)
+        if model is None:
+            continue
+        try:
+            rows = session.query(model).all()
+        except Exception:
+            continue
+        done = [r for r in rows if getattr(r, "winner", None) is not None]
+        if len(done) < 20:
+            continue          # too few finished matches to say anything
+        scored = [r for r in done
+                  if r.maps_won_a is not None and r.maps_won_b is not None]
+        pct = 100.0 * len(scored) / len(done)
+        if not scored:
+            _issue(issues, "error", "results_pipeline", sport,
+                   f"NO finished {model_name} carries a map score ({len(done)} "
+                   f"finished matches) -- series_total and series_handicap cannot "
+                   f"be graded for this sport at all")
+            continue
+        newest_done = max((str(r.match_date or "") for r in done), default="")
+        newest_scored = max((str(r.match_date or "") for r in scored), default="")
+        if not newest_done or not newest_scored:
+            continue
+        try:
+            lag = (datetime.date.fromisoformat(newest_done[:10])
+                   - datetime.date.fromisoformat(newest_scored[:10])).days
+        except ValueError:
+            continue
+        if lag >= _RESULTS_LAG_WARN_DAYS:
+            _issue(issues,
+                   "error" if lag >= _RESULTS_LAG_ERROR_DAYS else "warning",
+                   "results_pipeline", sport,
+                   f"newest {model_name} with a map score is {newest_scored} but "
+                   f"finished matches run to {newest_done} -- {lag}d behind, and "
+                   f"only {pct:.0f}% of finished matches are scored. Fixtures keep "
+                   f"arriving as market stubs and winners keep arriving from "
+                   f"platform resolution, so this does NOT surface as missing "
+                   f"matches -- what stops is map scores and event names")
+
+
 def _issue(issues, severity, category, sport, detail):
     issues.append({"severity": severity, "category": category, "sport": sport, "detail": detail})
 
@@ -523,6 +600,7 @@ def health_check(session: Session = Depends(get_session)):
 
     try:
         _check_exposure_snapshot(issues)
+        _check_scraper_alive(session, issues)
     except Exception:
         log.exception("exposure snapshot check failed")
 
