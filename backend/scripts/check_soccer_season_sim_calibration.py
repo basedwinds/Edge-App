@@ -42,11 +42,13 @@ remainder of the season contributes nothing to the ratings that price it. Rating
 are built with predict_and_update and the production xG blend, so this scores the
 shipped model rather than a stand-in.
 
-ONE KNOWN GAP vs production: second_tier_state is not passed, so a promoted club
-with no top-flight history falls back to the placeholder rating rather than its
-real second-tier one. That makes the promoted sides slightly noisier here than
-live, which biases toward finding MORE error, not less -- acceptable for a
-go/no-go read, and worth closing before any fitted constant comes out of this.
+SECOND TIER INCLUDED. Production hands simulate_season the league's own
+promotion-source state (PROMOTION_SOURCE_DIVISION), so a club with no top-flight
+history is rated off the division it came up from rather than a placeholder. This
+builds the same state and advances it to the same CUTOFF DATE, so promoted sides
+are rated here exactly as they are live and no future second-tier result leaks in.
+Only the five leagues in that map are affected; every other league gets None in
+production too.
 
 READING IT. Look for the racing failure mode: favourites claiming more than they
 deliver and longshots less, with the error growing toward the extremes. A
@@ -71,6 +73,7 @@ from app.models.baseline.elo_soccer import (
     predict_and_update,
 )
 from app.models.baseline import elo_service_soccer, soccer_xg
+from app.clients.football_data_client import PROMOTION_SOURCE_DIVISION
 from app.models.season_sim_soccer import (
     CALENDAR_YEAR_LEAGUES,
     RELEGATION_ZONE_SIZE,
@@ -98,6 +101,11 @@ LEAGUES = ["E0", "SP1", "I1", "D1", "F1",        # already tested
            "N1", "P1", "BRA1",                   # the user's open positions
            "T1", "B1", "G1", "SC0",              # other European top flights
            "JPN1", "DNK1", "NOR1", "SWE1", "CHN1"]
+# Top flights that are SCORED, plus the second tiers they promote from. Only
+# the first set is measured; the second is rating input.
+_WANTED_DIVISIONS = set(LEAGUES) | {
+    d for lg, d in PROMOTION_SOURCE_DIVISION.items() if lg in LEAGUES
+}
 CUTOFFS = [0.0, 0.25, 0.50, 0.75]
 N_SIMULATIONS = 2000
 WARMUP_SEASONS = 3          # seasons of ratings before the first scored season
@@ -148,7 +156,10 @@ def main() -> int:
     raw = [m for m in soccer_data.load_matches() if not elo_service_soccer._is_exhibition(m)]
     by_league = defaultdict(list)
     for m in raw:
-        if m.get("league") not in set(LEAGUES):
+        # Second-tier divisions are loaded but never SCORED -- they exist only
+        # to build the promotion-source rating state that production passes
+        # into simulate_season.
+        if m.get("league") not in _WANTED_DIVISIONS:
             continue
         if m.get("home_goals_ft") is None:
             continue
@@ -204,6 +215,36 @@ def main() -> int:
             cs_leaders = {t for t, v in table.items() if v[3] == best_cs}
             pos_of = {t: i + 1 for i, t in enumerate(order)}
 
+            # PROMOTION SOURCE. Production hands simulate_season the second-tier
+            # state so a club with no top-flight history is rated off the division
+            # it came up from instead of a placeholder. Built here the same way and
+            # advanced to the same CUTOFF DATE, so it carries no future information
+            # -- a second-tier result from later in the season would leak exactly
+            # the kind of hindsight this harness exists to avoid.
+            second_div = PROMOTION_SOURCE_DIVISION.get(league)
+            second_matches = by_league.get(second_div, []) if second_div else []
+            second_state = (SoccerRatingState(home_log=home_advantage_for_league(second_div))
+                            if second_div else None)
+            second_fed = 0
+
+            def _advance_second(until_date):
+                """Feed second-tier matches strictly BEFORE until_date."""
+                nonlocal second_fed
+                if second_state is None:
+                    return
+                while (second_fed < len(second_matches)
+                       and second_matches[second_fed]["date"] < until_date):
+                    sm = second_matches[second_fed]
+                    scm = {"home_team": sm["home"], "away_team": sm["away"],
+                           "home_goals_ft": sm["hg"], "away_goals_ft": sm["ag"],
+                           "match_date": sm["raw_date"], "league": second_div}
+                    sxg = soccer_xg.lookup(second_div, sm["raw_date"],
+                                           sm["raw_home"], sm["raw_away"])
+                    if sxg is not None:
+                        scm["xg_h"], scm["xg_a"] = sxg
+                    predict_and_update(second_state, scm)
+                    second_fed += 1
+
             # Ratings from every earlier season of this league.
             state = SoccerRatingState(home_log=home_advantage_for_league(league))
             for y in sorted(seasons):
@@ -234,6 +275,11 @@ def main() -> int:
                     predict_and_update(state, cm)
                     fed += 1
 
+                # Second tier advanced to the cutoff's own date (season start
+                # when nothing has been played yet).
+                _advance_second(season_matches[fed]["date"] if fed < len(season_matches)
+                                else season_matches[-1]["date"])
+
                 played = season_matches[:target]
                 if played:
                     part, _ = final_table(played)
@@ -248,6 +294,8 @@ def main() -> int:
                 res = simulate_season(
                     copy.deepcopy(state), teams, league,
                     n_simulations=N_SIMULATIONS, seed=SEED,
+                    second_tier_state=(copy.deepcopy(second_state)
+                                       if second_state is not None else None),
                     starting_table=starting_table,
                     played_pairs=played_pairs,
                     starting_clean_sheets=starting_cs,
