@@ -314,7 +314,24 @@ def _soccer_bet_is_home(bet: PlacedBet, game: SoccerMatch) -> "bool | None":
         return True
     if bet.team == game.away_team:
         return False
-    from app.ingestion.market_matcher_soccer import canonical_team_key
+    # Imported inside the function, not at module scope, because
+    # market_matcher_soccer pulls in the pandas/ingestion stack and settlement is
+    # imported from places that must stay light.
+    #
+    # WRAPPED, because a grader that RAISES is worse than one that abstains:
+    # settle_finished_games grades every sport in one loop, and this app has
+    # already had a single soccer grader's exception abort settlement for ALL
+    # sports (the team_total/home_score crash, 2026-08-06). An import failure
+    # here should cost these bets a cycle, not everyone else's.
+    #
+    # Not hypothetical: a probe script named six.py on sys.path shadowed the
+    # `six` package, which broke pandas, which broke this import -- and the
+    # resolver went down with it.
+    try:
+        from app.ingestion.market_matcher_soccer import canonical_team_key
+    except Exception:
+        log.exception("soccer club resolver unavailable; leaving bet pending")
+        return None
 
     league = getattr(game, "league", None)
     kb = canonical_team_key(bet.team, league)
