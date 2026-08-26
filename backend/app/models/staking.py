@@ -475,13 +475,45 @@ def kelly_fraction(
 # NOT YET MEASURABLE, deliberately absent: cfb, nfl, racing, mma have ZERO
 # settled NO observations. Silence is not evidence either way -- revisit when
 # `calibration_report.py` has rows for them.
+# NARROWED TO ONE CELL, 2026-08-25. The evidence above was measured with a
+# bootstrap that resampled ROWS. That is wrong here, and the error is not small:
+# ONE real-world result decides MANY rows at once -- a single tennis match
+# settles its moneyline, set spread, set winner and game total simultaneously, so
+# fifteen correlated outcomes were being counted as fifteen independent pieces of
+# evidence. The intervals came out far too narrow.
+#
+# Re-scored resampling EVENTS (each sport's own match/fight id), liquid rows,
+# inside the real staking universe, control arm at |edge|<2pp reading +0.56pp on
+# 5,441 rows across 1,172 events:
+#
+#     cell                    rows  events  delivered   CI by ROW      CI by EVENT
+#     cs2/series_winner        131      76    +13.7pp  [+5.6,+22.2]  [ +2.5,+24.2]  HOLDS
+#     lol/series_winner         57      35     +3.3pp  [-7.7,+14.9]  [-11.2,+19.1]  gone
+#     tennis/set_spread         45      40     -0.3pp  [-13.9,+13.4] [-13.3,+13.8]  gone
+#     tennis/set_winner         31      18    -12.2pp  [-23.2, +0.7] [-24.8, +4.7]  NEGATIVE
+#     tennis/game_total         12       9    +13.5pp     n<20       [ -9.6,+35.5]  far too thin
+#     tennis/total_sets          0       0          --      --            --        no rows at all
+#
+# Only cs2/series_winner still clears its own admission bar. tennis/game_total
+# was admitted on NINE distinct matches. tennis/total_sets has no qualifying
+# rows at all and was on this list on nothing.
+#
+# THIS IS NOT PROOF THOSE CELLS LOSE. It is proof their admission evidence would
+# not be accepted today. The right response to "we do not actually know" is to
+# stop staking it, not to keep going -- and the real book agrees in direction:
+# 13 NO bets, $120 staked, -$61 (-51.2%), of which the four dropped cells are
+# -$44 of the loss.
+#
+# ANY CELL COMES BACK the moment it clears on EVENT-clustered evidence. Removing
+# is cheap and reversible; that is why it is the default when a measurement turns
+# out to have been wrong.
+#
+# THE UNCOMFORTABLE PART, on the record: cs2/series_winner is kept on forward-log
+# evidence while having the WORST real-money NO record of the six (4 bets,
+# -59.3%). Four bets is noise and the two readings do not conflict, but it is a
+# reason to keep that position small rather than lean on it.
 NO_SIDE_CELLS = {
-    ("tennis", "set_spread"),
-    ("tennis", "set_winner"),
-    ("tennis", "game_total"),
-    ("tennis", "total_sets"),
     ("cs2", "series_winner"),
-    ("lol", "series_winner"),
 }
 
 
