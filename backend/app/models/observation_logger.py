@@ -388,19 +388,14 @@ def _settle_season_futures(session) -> int:
         market_by_id = {}
         for mid in {o.market_id for o in pending if o.market_id is not None}:
             market_by_id[mid] = session.get(Market, mid)
-        standings_cache: dict = {}
+        # ONE cache for the whole pass, shared across sports: soccer standings
+        # parse a 122 MB file and the CFB win table is a full-season query, so
+        # both must be computed once per (sport, season), not once per row.
+        cache: dict = {}
         for obs in pending:
             try:
                 market = market_by_id.get(obs.market_id)
-                division, season_start = SF.resolve_division_and_season(market)
-                if division is None or season_start is None:
-                    continue
-                key = (division, season_start)
-                if key not in standings_cache:
-                    standings_cache[key] = SF.final_standings(division, season_start)
-                if not standings_cache[key]:
-                    continue
-                result = SF.grade(session, obs, market=market)
+                result = SF.grade(session, obs, market=market, cache=cache)
                 if result not in ("won", "lost", "push"):
                     continue
                 obs.status = result

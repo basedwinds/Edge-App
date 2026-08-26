@@ -52,7 +52,8 @@ log = logging.getLogger("season_futures")
 # Market types this module can settle. Anything outside it is left to the
 # ordinary event-based path, so adding a futures type here is an explicit act.
 SEASON_FUTURES_MARKET_TYPES = frozenset(
-    {"league_winner", "relegation", "top_half", "top4", "top2"}
+    {"league_winner", "relegation", "top_half", "top4", "top2",   # soccer
+     "win_total"}                                                 # cfb
 )
 
 # series ticker -> division, built from the SAME dicts the ingestion uses, so a
@@ -66,6 +67,11 @@ for _div, _series in TOP_N_SERIES.items():
     _SERIES_TO_DIVISION[_series] = _div
 
 _KALSHI_TICKER = re.compile(r"^([A-Z0-9]+?)-(\d{2})")
+# KXNCAAFWINS-26UCF -- season then team, no separator.
+_CFB_WINS_TICKER = re.compile(r"^KXNCAAFWINS-(\d{2})([A-Z0-9]+)$")
+# Polymarket puts a creation timestamp in the slug instead of a season:
+# ncaa-football-team-win-totals-20260731193847013
+_POLY_TIMESTAMP = re.compile(r"-(\d{4})(\d{2})(\d{2})\d*$")
 _POLY_SLUG_YEAR = re.compile(r"^(\d{4})-")
 
 
@@ -186,7 +192,89 @@ def _position(order: list[str], team: str | None) -> int | None:
         return None      # club not in this table -- never assume it finished last
 
 
-def grade(session, row, market=None) -> str | None:
+def cfb_season_from_market(market) -> int | None:
+    """Season year for a CFB win-total market, or None.
+
+    Kalshi states it: KXNCAAFWINS-26UCF is the 2026 season. Polymarket does not
+    -- its slug carries a CREATION TIMESTAMP
+    (ncaa-football-team-win-totals-20260731193847013), so the year is inferred
+    from when the market was made. Weaker than a stated season, which is why the
+    caller only trusts it if that season has real fixtures.
+    """
+    if market is None:
+        return None
+    event = (getattr(market, "source_event_id", None) or "").strip()
+    if not event:
+        return None
+    m = _CFB_WINS_TICKER.match(event)
+    if m:
+        return 2000 + int(m.group(1))
+    m = _POLY_TIMESTAMP.search(event)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def cfb_regular_season_wins(session, season: int) -> dict[str, int] | None:
+    """{team abbr: REG-season wins} for a COMPLETED season, or None.
+
+    Kalshi's own rules text, verbatim: "Only official regular season games count
+    towards the team's win total. Ties do not count as wins. Bowl games,
+    conference championship games, and college football playoff games do not
+    count." So this filters on CfbGame.game_type == "REG" -- ESPN's own
+    classification, not a date heuristic -- and counts strict wins only.
+
+    None until EVERY regular-season game of that season has a score. A win total
+    graded in October would settle a future half a season could still overturn.
+    """
+    from app.db.models import CfbGame
+
+    games = (session.query(CfbGame)
+             .filter(CfbGame.season == season, CfbGame.game_type == "REG").all())
+    # RE-FILTER IN PYTHON. The SQL predicate above is the fast path, but relying
+    # on it ALONE means the REG/POST distinction lives outside this function --
+    # any caller handing over unfiltered rows would silently count bowl and
+    # playoff games toward a regular-season win total. Caught by a test whose
+    # session stub ignored .filter(): the bowl game counted, and a 0-win team
+    # was credited with 1. The rules text is explicit that those do not count,
+    # so the rule belongs here as well.
+    games = [g for g in games
+             if getattr(g, "game_type", None) == "REG"
+             and getattr(g, "season", None) == season]
+    if not games:
+        return None
+    if any(g.home_score is None or g.away_score is None for g in games):
+        return None
+    wins: dict[str, int] = collections.defaultdict(int)
+    for g in games:
+        wins.setdefault(g.home_team, 0)
+        wins.setdefault(g.away_team, 0)
+        if g.home_score > g.away_score:
+            wins[g.home_team] += 1
+        elif g.away_score > g.home_score:
+            wins[g.away_team] += 1
+        # a tie adds nothing to either -- per the rules text above
+    return dict(wins)
+
+
+def _grade_cfb_win_total(session, row, market, cache) -> str | None:
+    season = cfb_season_from_market(market)
+    if season is None or getattr(row, "line", None) is None:
+        return None
+    key = ("cfb_wins", season)
+    if key not in cache:
+        cache[key] = cfb_regular_season_wins(session, season)
+    wins = cache[key]
+    if not wins:
+        return None
+    team = (getattr(row, "team", None) or "").strip()
+    if team not in wins:
+        return None      # unknown abbreviation -- never assume zero wins
+    # A RUNG, not an over/under: "at least N wins" resolves Yes at N or more.
+    return "won" if wins[team] >= float(row.line) else "lost"
+
+
+def grade(session, row, market=None, cache=None) -> str | None:
     """"won" / "lost" for a season future, or None to leave it pending.
 
     OBSERVATIONS ONLY. Real bets keep settling on the platform's own resolution,
@@ -197,6 +285,8 @@ def grade(session, row, market=None) -> str | None:
     Returns None -- never a guess -- when the division or season cannot be
     resolved, the season is unfinished, or the club is not in the table.
     """
+    if cache is None:
+        cache = {}
     try:
         market_type = getattr(row, "market_type", None)
         if market_type not in SEASON_FUTURES_MARKET_TYPES:
@@ -205,10 +295,21 @@ def grade(session, row, market=None) -> str | None:
             from app.db.models import Market
             mid = getattr(row, "market_id", None)
             market = session.get(Market, mid) if mid else None
+        if (getattr(row, "sport", None) or "") == "cfb":
+            if market_type != "win_total":
+                return None
+            return _grade_cfb_win_total(session, row, market, cache)
         division, season_start = resolve_division_and_season(market)
         if division is None or season_start is None:
             return None
-        order = final_standings(division, season_start)
+        # CACHED PER SETTLE PASS. final_standings parses the 122 MB match cache,
+        # so computing it per ROW would be thousands of passes over identical
+        # data -- the same mistake list_soccer_futures already had to hoist out
+        # of its own per-division loop.
+        key = ("soccer_table", division, season_start)
+        if key not in cache:
+            cache[key] = final_standings(division, season_start)
+        order = cache[key]
         if not order:
             return None
         pos = _position(order, getattr(row, "team", None))
