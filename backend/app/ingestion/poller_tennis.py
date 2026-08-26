@@ -76,6 +76,10 @@ def refresh_kalshi_tennis_markets():
                     # (KXATPCHALLENGERMATCH, KXITFWMATCH, ...), so this caller is
                     # allowed to correct a placeholder written by Polymarket.
                     authoritative_tier=True,
+                    # Passed at CREATION so match_date is the match's own day
+                    # rather than today's crawl date -- the same value handed to
+                    # update_match_estimated_start_time immediately below.
+                    start_time=event_rows[0].get("estimated_start_time"),
                 )
                 market_catalog_tennis.update_match_estimated_start_time(
                     match, event_rows[0].get("estimated_start_time"), source="kalshi")
@@ -172,6 +176,9 @@ def refresh_polymarket_tennis_markets():
                 match = market_catalog_tennis.find_or_create_upcoming_match(
                     session, tour, tier, names[0], names[1],
                     event_rows[0].get("event_title", ""),
+                    # Same reason as the Kalshi caller: match_date must be the
+                    # match's own day, not the crawl's.
+                    start_time=event_rows[0].get("estimated_start_time"),
                 )
                 market_catalog_tennis.update_match_estimated_start_time(
                     match, event_rows[0].get("estimated_start_time"), source="polymarket")

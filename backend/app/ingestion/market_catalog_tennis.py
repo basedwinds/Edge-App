@@ -129,9 +129,23 @@ def infer_tour_and_tier_from_text(title: str, default_tour: str) -> tuple[str, s
     return tour, tier
 
 
+def _date_from_start(start_time) -> str | None:
+    """Calendar day of a platform start instant, or None if unusable."""
+    if not start_time:
+        return None
+    try:
+        stamp = datetime.datetime.fromisoformat(str(start_time).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return stamp.date().isoformat()
+
+
 def find_or_create_upcoming_match(
     session: Session, tour: str, tier: str, player_a_name: str, player_b_name: str,
     tournament_text: str = "", authoritative_tier: bool = False,
+    start_time: str | None = None,
 ) -> TennisMatch | None:
     if not player_a_name or not player_b_name:
         return None
@@ -163,7 +177,34 @@ def find_or_create_upcoming_match(
         return existing
 
     slam = _infer_slam_attributes(tour, tournament_text)
-    resolved_date = datetime.date.today().isoformat()
+    # THE MATCH'S OWN DAY, NOT TODAY.
+    #
+    # This read `datetime.date.today()`, which made match_date the SCRAPE date --
+    # the third time this app has shipped that bug (esports and soccer were the
+    # first two). Measured 2026-08-26: 9,633 tennis fixtures carried only 33
+    # DISTINCT match_date values, each covering 3-10 different start days, and
+    # every one formed a contiguous block of ids -- the signature of one crawl,
+    # not one match day. 6,630 fixtures started AFTER their own match_date
+    # against 180 before.
+    #
+    # It corrupts TWO things, which is why one line caused two bugs:
+    #   * the stored date, so anything reasoning about when a match was played
+    #     is wrong -- poller_tennis already works around it in as many words
+    #     ("match_date is itself unreliable");
+    #   * the synthetic id below, which embeds this date. The same match seen on
+    #     two different crawl days got two DIFFERENT ids and became two fixtures.
+    #     215 such groups exist, 447 rows, and their scores appear mirrored
+    #     because the player order also flips between sources.
+    #
+    # The caller already holds the platform's own per-match start instant -- it
+    # passes it to update_match_estimated_start_time on the very next line. Using
+    # it here also SHARPENS the rematch distinction the id date exists for: two
+    # meetings on different days still differ, while one meeting seen twice no
+    # longer does.
+    #
+    # Falls back to today only when no start time is available, which is the old
+    # behaviour and the only thing there is to fall back to.
+    resolved_date = _date_from_start(start_time) or datetime.date.today().isoformat()
     # REAL BUG this fixes (hit live 2026-08-03): the synthetic id carried no date,
     # so once a live-created match FINISHED its row kept the key forever -- and the
     # existence check above only looks at UNFINISHED matches (winner_key is NULL).
