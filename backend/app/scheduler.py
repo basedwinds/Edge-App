@@ -603,6 +603,23 @@ def start():
         next_run_time=base_tick + timedelta(minutes=35),
         replace_existing=True,
     )
+    # Kalshi resolution for the forward log, on its OWN cadence. settle() above
+    # is daily because its local pass walks every pending observation; this one
+    # is cheap (~0.5s per 100-ticker batch) and time-sensitive, because a market
+    # resolves when its event ends and until this runs the forward log
+    # understates coverage.
+    #
+    # Four-hourly rather than daily is what actually drains the backlog: at one
+    # run a day the 23k pending rows would have taken six days. First run is
+    # early (8 min) so a restart starts closing the gap rather than waiting.
+    scheduler.add_job(
+        observation_logger.settle_from_kalshi,
+        "interval",
+        hours=4,
+        id="observation_settle_kalshi",
+        next_run_time=base_tick + timedelta(minutes=8),
+        replace_existing=True,
+    )
     scheduler.add_job(
         run_full_refresh,
         "interval",

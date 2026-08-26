@@ -411,13 +411,20 @@ def _settle_season_futures(session) -> int:
     return settled
 
 
-# How many DISTINCT tickers one pass may ask Kalshi about. Each batch is 100
-# tickers in one request, so this is 40 requests -- enough to drain the backlog
-# over a handful of poller cycles without any single cycle stalling on ~160
-# sequential HTTP calls. The bet-side settler has no cap because the bet log is
-# small; the forward log is 117k rows with 67k pending, which is a different
-# problem.
-_KALSHI_OBS_TICKER_CAP = 4000
+# How many DISTINCT tickers one pass may ask Kalshi about, in 100-ticker batched
+# requests.
+#
+# MEASURED rather than guessed, because the first value was wrong in a way that
+# mattered. 4,000 was chosen to keep a pass short, on the assumption it ran on a
+# frequent poller cycle -- but `observation_settle` runs every 24 HOURS, so a
+# 23,494-row backlog would have taken six days to clear.
+#
+# Timed against the live API: ~0.5s per 100-ticker batch, so 12,000 tickers is
+# ~60s of fetch. That is affordable for a job that owns its own schedule, and it
+# clears the entire settleable backlog in one pass -- only ~38% of pending
+# tickers come back finalized (the rest are genuinely future events), so 23,494
+# pending is really ~9,000 gradeable today.
+_KALSHI_OBS_TICKER_CAP = 12000
 
 
 def _settle_from_kalshi_resolution(session) -> int:
@@ -517,6 +524,37 @@ def _settle_from_kalshi_resolution(session) -> int:
     return settled
 
 
+def settle_from_kalshi() -> int:
+    """Scheduler entry point for the Kalshi-resolution pass. Never raises.
+
+    ITS OWN JOB, not a step inside settle(), for two reasons. settle() runs every
+    24 hours and does the local grading, which walks every pending observation --
+    running that four times as often to keep this current would multiply a cost
+    this pass does not incur. And this one is the opposite shape: cheap
+    (~0.5s per 100-ticker batch) but time-sensitive, since a market resolves the
+    moment its event ends and every hour it stays pending is an hour the forward
+    log understates coverage.
+
+    Separating them also means a failure here cannot take the local graders down
+    with it, and vice versa.
+    """
+    session = SessionLocal()
+    try:
+        n = _settle_from_kalshi_resolution(session)
+        if n:
+            session.commit()
+        return n
+    except Exception:
+        log.exception("kalshi observation settlement job failed")
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        session.close()
+
+
 def settle() -> int:
     """Grade pending observations whose event has finished, reusing
     bet_settlement's graders unchanged -- an observation exposes the same
@@ -552,11 +590,6 @@ def settle() -> int:
             except Exception:
                 continue  # one bad row must not stop the rest
         settled += _settle_season_futures(session)
-        # LAST, and deliberately: the two passes above cost nothing but a local
-        # query, while this one makes network calls. Anything they could grade is
-        # already graded by the time it runs, so it only pays for the remainder.
-        # Same ordering principle the bet side uses for its Kalshi fallback.
-        settled += _settle_from_kalshi_resolution(session)
         session.commit()
         log.info("observation logger: %d observations settled", settled)
     except Exception:
