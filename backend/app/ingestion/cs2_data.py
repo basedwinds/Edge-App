@@ -105,6 +105,33 @@ def _scores(match_info) -> tuple[int | None, int | None]:
     return (int(texts[0]) if texts[0].isdigit() else None, int(texts[1]) if texts[1].isdigit() else None)
 
 
+def _maps_from_scoreholder(a, b, best_of):
+    """Convert a best-of-1 scoreholder into MAPS WON.
+
+    THE FIELD MEANS TWO DIFFERENT THINGS AND ONLY ONE OF THEM IS MAPS. In a Bo3
+    the scoreholder reads 2-1 and those are maps. In a Bo1 there is only one map,
+    so Liquipedia puts the ROUND score there instead -- a real stored row reads
+    13-1. Both were written straight into maps_won_a/b, a column every grader
+    reads as maps.
+
+    Nothing had noticed because CS2 map scores were 93% missing anyway, so the
+    one poisoned row never met a grader. It would have: series_handicap on a Bo1
+    would compute a 12-map margin and clear any line, and series_total would call
+    a one-map match a 14-map series.
+
+    A Bo1 winner won 1 map to 0, always. Only rewrites when the value cannot be a
+    map count (max > 1); a scoreholder already reading 1-0 passes through
+    untouched, and an unknown best_of is left alone rather than guessed at.
+    """
+    if best_of != 1 or a is None or b is None:
+        return a, b
+    if max(a, b) <= 1:
+        return a, b
+    if a == b:
+        return None, None   # a tied round score decides no map -- say nothing
+    return (1, 0) if a > b else (0, 1)
+
+
 def _per_map_results(match_info) -> list[dict]:
     """Extracts real per-map results (map name + winner) from a bracket
     popup's own detailed score breakdown, when present -- confirmed live
@@ -178,7 +205,9 @@ def _parse_match_info(match_info, default_event_name: str = "", default_tourname
     event_name = tournament_link.get_text(strip=True) if tournament_link else default_event_name
     tournament_slug = _slug(tournament_link.get("href")) if tournament_link else default_tournament_slug
 
+    best_of = _best_of(match_info)
     score_a, score_b = _scores(match_info) if is_finished else (None, None)
+    score_a, score_b = _maps_from_scoreholder(score_a, score_b, best_of)
     winner = None
     if is_finished:
         winner_div = header.find("div", class_="match-info-header-winner")
@@ -197,7 +226,7 @@ def _parse_match_info(match_info, default_event_name: str = "", default_tourname
         "team_a_display": team_a["display_name"],
         "team_b": team_b["full_name"],
         "team_b_display": team_b["display_name"],
-        "best_of": _best_of(match_info),
+        "best_of": best_of,
         "maps_won_a": score_a,
         "maps_won_b": score_b,
         "winner": winner,
