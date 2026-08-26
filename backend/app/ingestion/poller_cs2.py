@@ -97,6 +97,25 @@ LIQUIPEDIA_COOLDOWN_KEY = "cs2_liquipedia_cooldown_until"
 COOLDOWN_HOURS = 6.0
 
 
+# Statuses that mean "the host is refusing us", not "this request was bad".
+#
+# 429 ALONE WAS NOT ENOUGH, and the gap cost 25 days of data. Liquipedia now
+# answers Liquipedia:Matches with 403 behind a Cloudflare challenge rather than
+# 429, so the cooldown never armed: the poller retried every 5 minutes into a
+# refusal, indefinitely. Measured 2026-08-26 -- liquipedia-sourced CS2 matches
+# stop dead at 2026-08-01 while the table runs to 2026-08-31, and the cooldown
+# deadline read None the whole time.
+#
+# That is the precise "retry-forever" behaviour whose own comment below says it
+# "is what turns a temporary block permanent" -- the app was doing it while
+# warning against it, because the warning only covered one status code.
+#
+# 403 (forbidden / bot challenge) and 503 (Cloudflare "service unavailable",
+# which is what their challenge pages often return) join 429. A 404 deliberately
+# does NOT: that is a bad URL, and standing down for six hours would hide it.
+_BLOCKED_STATUSES = frozenset({403, 429, 503})
+
+
 def _cooldown_until() -> dt.datetime | None:
     session = SessionLocal()
     try:
@@ -167,15 +186,16 @@ def refresh_cs2_matches():
     try:
         rows = cs2_data.fetch_matches()
     except httpx.HTTPStatusError as exc:
-        if exc.response is not None and exc.response.status_code == 429:
+        status = exc.response.status_code if exc.response is not None else None
+        if status in _BLOCKED_STATUSES:
             resume = now + dt.timedelta(hours=COOLDOWN_HOURS)
             _set_cooldown(resume)
             log.error(
-                "cs2 liquipedia fetch RATE-LIMITED (429). Standing down until %s (%.1fh) "
+                "cs2 liquipedia fetch BLOCKED (HTTP %s). Standing down until %s (%.1fh) "
                 "instead of retrying every poll -- retrying into a block is what turns a "
                 "temporary one permanent. CS2 fixture ingestion is PAUSED; Kalshi and "
                 "Polymarket CS2 market ingestion and pricing are unaffected.",
-                resume.isoformat(timespec="seconds"), COOLDOWN_HOURS)
+                status, resume.isoformat(timespec="seconds"), COOLDOWN_HOURS)
             return
         raise
 
