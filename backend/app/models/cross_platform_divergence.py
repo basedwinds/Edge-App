@@ -141,7 +141,32 @@ def find_divergences(session: Session, min_gap: float = 0.03, limit: int = 100) 
     from app.api.routers.markets import _batch_latest_snapshots, _implied_prob
     from app.models.duplicate_fixtures import canonical_race_event_ids
 
-    markets = session.query(Market).filter(Market.status != "settled").all()
+    # ACTIVE ONLY. This used to be `status != "settled"`, which loaded 277,013
+    # markets -- 166,713 `closed`, 53,516 `finalized`, 10,694 `inactive` -- to
+    # produce 33 rows, and then asked for a latest snapshot for every one of
+    # them against a 31.7M-row table.
+    #
+    # MEASURED 2026-08-26: that snapshot batch was 237.6s of the route's 246.1s
+    # (96.5%), it had grown 101s -> 240s as the tables did, and it was single-
+    # handedly pushing the cache-warm pass past its own 180s TTL -- so the route
+    # stopped being cached and every user request computed it live.
+    #
+    #   status != 'settled'   277,020 markets   165.3s   34 rows
+    #   status NOT IN _DEAD    48,341 markets    49.6s   32 rows
+    #   status == 'active'     37,646 markets    10.0s   32 rows   <- 16.6x
+    #
+    # THE TWO ROWS THIS DROPS ARE NOISE, checked individually rather than waved
+    # through. Both are sides of one ITF match (tennis:1723, Hudd/Tarvet): the
+    # Kalshi legs are `finalized` and the Polymarket legs `closed`, all four with
+    # snapshots 24 DAYS old from a match played on 2 August. They surface as
+    # "pregame" only because that fixture row's start time was later overwritten
+    # by a REMATCH between the same two players (fresh active markets exist on
+    # the same row) -- the borrowed-start-time bug, not an opportunity. An 8.5pp
+    # gap between two settled prices is not tradeable.
+    #
+    # A dead market cannot be a pregame arbitrage, which is the only thing this
+    # route reports, so excluding them costs nothing real.
+    markets = session.query(Market).filter(Market.status == "active").all()
     snaps = _batch_latest_snapshots(session, [m.id for m in markets])
     # Built once per scan, not per market -- it queries every RaceEvent.
     race_canon = canonical_race_event_ids(session)
