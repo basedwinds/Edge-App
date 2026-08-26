@@ -277,16 +277,27 @@ def ensure_observation_for_bet(session, bet) -> bool:
     Returns True if a row was written. Never raises: a logging failure must not
     cost the user a bet.
     """
+    # READ THE ID BEFORE THE MAIN TRY, IN ITS OWN GUARD. Attribute access on a
+    # detached or expired SQLAlchemy instance raises, and the handler below used
+    # `getattr(bet, "market_id", None)` for its log message -- getattr only
+    # swallows AttributeError, so anything else re-raised FROM THE ERROR
+    # HANDLER and escaped, defeating the whole "never raises" guarantee. Caught
+    # by a test that fed in an object whose every attribute raises.
     try:
-        if bet is None or bet.market_id is None:
-            return False
+        market_id = bet.market_id if bet is not None else None
+    except Exception:
+        log.exception("placement-time observation: bet row is unreadable")
+        return False
+    if market_id is None:
+        return False
+    try:
         existing = (session.query(ModelObservation)
-                    .filter(ModelObservation.market_id == bet.market_id).first())
+                    .filter(ModelObservation.market_id == market_id).first())
         if existing is not None:
             return False
         now = dt.datetime.utcnow()
         obs = ModelObservation(
-            market_id=bet.market_id,
+            market_id=market_id,
             sport=getattr(bet, "sport", None),
             market_type=getattr(bet, "market_type", None),
             source=getattr(bet, "source", None),
@@ -320,22 +331,21 @@ def ensure_observation_for_bet(session, bet) -> bool:
         try:
             from app.db.models import MarketSnapshot
             snap = (session.query(MarketSnapshot)
-                    .filter(MarketSnapshot.market_id == bet.market_id)
+                    .filter(MarketSnapshot.market_id == market_id)
                     .order_by(MarketSnapshot.ts.desc()).first())
             if snap is not None:
                 obs.volume = snap.volume
                 obs.yes_bid = snap.yes_bid
                 obs.yes_ask = snap.yes_ask
         except Exception:
-            log.exception("snapshot lookup failed for market %s", bet.market_id)
+            log.exception("snapshot lookup failed for market %s", market_id)
         start = _parse_dt(getattr(bet, "original_start_time", None))
         if start is not None:
             obs.event_start = start
         session.add(obs)
         return True
     except Exception:
-        log.exception("placement-time observation failed for market %s",
-                      getattr(bet, "market_id", None))
+        log.exception("placement-time observation failed for market %s", market_id)
         return False
 
 
