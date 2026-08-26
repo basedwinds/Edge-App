@@ -2,7 +2,7 @@ import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.db.database import get_session
 from app.db.models import PlacedBet, RaceEvent
@@ -757,6 +757,36 @@ def _parse_since(raw: str | None):
     return stamp
 
 
+def _current_event_start(bet: PlacedBet):
+    """The fixture's start time AS IT STANDS NOW, or None.
+
+    WHY THIS EXISTS. `original_start_time` is a SNAPSHOT frozen at placement, and
+    its stated purpose is to be the pre-reschedule value so that a move to a
+    different day is DETECTABLE in /open. Using it as the event time therefore
+    reads the one value guaranteed to be stale after a postponement.
+
+    User-reported 2026-08-26. Argyrokastriti vs Colmegna was scheduled for the
+    25th -- Kalshi expiry 16:00Z, Polymarket 12:00Z, the bet snapshot 15:05Z --
+    and actually played on the 26th at 10:10Z per flashscore. The tracker filed
+    the $10 loss under the 25th and showed "4-0 today" while the user watched it
+    resolve that morning. 27 real tennis bets carry a snapshot that disagrees
+    with their fixture's current start (25 by a day, 2 by two).
+
+    _resolve_bet_start is the same resolver /open and placement already use, so
+    "the current start" means one thing across the app. Session comes from the
+    instance, so callers need no new argument. Never raises: a lookup failure
+    falls through to the snapshot, which is the old behaviour.
+    """
+    sess = object_session(bet)
+    if sess is None:
+        return None
+    try:
+        start_dt, _ = _resolve_bet_start(sess, bet)
+        return start_dt
+    except Exception:
+        return None
+
+
 def _within_period(bet: PlacedBet, cutoff) -> bool:
     """Does this bet belong in the selected window?
 
@@ -791,6 +821,11 @@ def _bet_stamp(bet: PlacedBet):
     the real world, so each only a fallback. Matches _outcome_day exactly, which
     is the point: the window that SELECTS bets and the curve that PLOTS them now
     answer the same question."""
+    # CURRENT start first -- see _current_event_start on why the snapshot below
+    # is the wrong field to lead with once a match has been rescheduled.
+    live = _current_event_start(bet)
+    if live is not None:
+        return live
     ost = getattr(bet, "original_start_time", None)
     if ost:
         try:
@@ -826,6 +861,12 @@ def _outcome_day(r) -> str | None:
     TOTALS ARE UNCHANGED BY THIS -- it redistributes P&L across days, it never
     creates or removes any. Verified as a control when shipped.
     """
+    # SAME ORDER AS _bet_stamp, deliberately: the window that SELECTS bets and
+    # the curve that PLOTS them must answer the same question, and a rescheduled
+    # match would otherwise land in one but not the other.
+    live = _current_event_start(r)
+    if live is not None:
+        return live.date().isoformat()
     ost = getattr(r, "original_start_time", None)
     if ost:
         try:
