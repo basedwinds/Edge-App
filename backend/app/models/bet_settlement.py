@@ -53,6 +53,11 @@ AUTO_SETTLE_MARKET_TYPES = {
     # soccer halves -- graded off ESPN half-time linescores (see
     # espn_soccer_client.fetch_half_time_goals); second half is FT minus HT.
     "first_half_winner", "second_half_winner", "first_half_total", "second_half_total",
+    # Half SPREADS (2026-08-26). This set is the coarse cross-sport filter, so
+    # naming them here also lets WNBA's identically-named markets through it --
+    # harmless, because _pick_grader then finds no wnba grader and skips them,
+    # which is the same "stays pending" outcome they have today.
+    "first_half_spread", "second_half_spread",
     "first_half_team_total", "second_half_team_total", "second_half_btts",
     # ftts needs SoccerMatch.first_scorer (ESPN scoring plays); its grader
     # returns None when that is unknown, so those bets stay pending.
@@ -60,6 +65,7 @@ AUTO_SETTLE_MARKET_TYPES = {
     # cup + UEFA regulation markets (2026-08-08). cup_advance is deliberately
     # NOT here -- see _SOCCER_GRADERS for why it must stay unsettleable.
     "cup_moneyline_3way", "uefa_moneyline_3way", "cup_total", "uefa_total",
+    "cup_spread", "uefa_spread",
     # Leagues Cup (2026-08-08). All four are ordinary single-match questions
     # settled off the regulation score, so they reuse the SAME graders the
     # league markets use -- there is no new settlement rule here, only new
@@ -267,13 +273,70 @@ def _grade_soccer_moneyline_3way(bet: PlacedBet, game: SoccerMatch) -> str:
     return "won" if side_to_result.get(bet.side) == game.result_ft else "lost"
 
 
-def _grade_soccer_spread(bet: PlacedBet, game: SoccerMatch) -> str:
+def _soccer_bet_is_home(bet: PlacedBet, game: SoccerMatch) -> "bool | None":
+    """Is this bet on the HOME side? None means the club could not be identified.
+
+    THE BUG THIS REPLACES, measured 2026-08-26. Every team-side soccer grader
+    used to be written as
+
+        home_value if bet.team == game.home_team else away_value
+
+    which has no branch for "matches neither". The bet team comes from Kalshi or
+    Polymarket and the match row from ESPN, and those two disagree constantly --
+    1,302 of 3,275 bets on these market types matched NEITHER side by exact
+    compare. Every one of them silently took the away branch, so a bet on the
+    home club was graded against its opponent. Resolving them properly found
+    **663 bets graded backwards** (game_spread 194, team_total 267,
+    first_half_team_total 97, second_half_team_total 105), 422 of them already
+    settled. No real money was on any of them -- the whole population is paper --
+    but paper is the sample every soccer per-type verdict is drawn from.
+
+    CASING WAS NOT THE PROBLEM, and checking that first is what made the scope
+    clear: a case/space-insensitive compare rescues ZERO of the 1,302. These are
+    real name variants -- "Alaves" vs "Deportivo Alaves", "Vicente Barcelos" vs
+    "Gil Vicente FC", "Orlando City SC" vs "Orlando". So _names_eq, which fixed
+    the analogous esports bug, is not enough here either.
+
+    canonical_team_key is the app's own club resolver -- the same one the pricing
+    and rating paths use, including its league-scoped table -- so this makes
+    settlement agree with the rest of the app rather than inventing a third
+    notion of club identity.
+
+    RETURNS None RATHER THAN GUESSING. 4 bets resolve to neither side even with
+    the resolver (e.g. "Madeira" against CS Maritimo), and one grader's ambiguity
+    must not become a paid result: pending is recoverable, a backwards grade is
+    not. That is the same rule the half graders already follow for a missing
+    half-time score.
+    """
+    if not bet.team:
+        return None
+    if bet.team == game.home_team:
+        return True
+    if bet.team == game.away_team:
+        return False
+    from app.ingestion.market_matcher_soccer import canonical_team_key
+
+    league = getattr(game, "league", None)
+    kb = canonical_team_key(bet.team, league)
+    kh = canonical_team_key(game.home_team or "", league)
+    ka = canonical_team_key(game.away_team or "", league)
+    if kb == kh and kb != ka:
+        return True
+    if kb == ka and kb != kh:
+        return False
+    return None
+
+
+def _grade_soccer_spread(bet: PlacedBet, game: SoccerMatch) -> "str | None":
     """Same "wins by more than bet.line goals" convention as
     _grade_spread -- reused directly, not re-derived, see that function's
     own comment on why the sign convention already holds without
     adjustment."""
+    is_home = _soccer_bet_is_home(bet, game)
+    if is_home is None:
+        return None
     margin = (
-        (game.home_goals_ft - game.away_goals_ft) if bet.team == game.home_team
+        (game.home_goals_ft - game.away_goals_ft) if is_home
         else (game.away_goals_ft - game.home_goals_ft)
     )
     if margin == bet.line:
@@ -290,7 +353,7 @@ def _grade_soccer_total(bet: PlacedBet, game: SoccerMatch) -> str:
     return "won" if actual_total > bet.line else "lost"  # side == "over" -- Soccer's own total ladder is always framed as Over, see market_catalog_soccer.py
 
 
-def _grade_soccer_team_total(bet: PlacedBet, game: SoccerMatch) -> str:
+def _grade_soccer_team_total(bet: PlacedBet, game: SoccerMatch) -> "str | None":
     """Soccer's own team_total, reading goals rather than home_score/away_score.
 
     REAL BUG this fixes (2026-08-06): "team_total" is one of the few market
@@ -301,7 +364,10 @@ def _grade_soccer_team_total(bet: PlacedBet, game: SoccerMatch) -> str:
     settlement for all sports. It stayed hidden only because soccer results
     were never being written, so the grader never actually ran.
     """
-    team_goals = game.home_goals_ft if bet.team == game.home_team else game.away_goals_ft
+    is_home = _soccer_bet_is_home(bet, game)
+    if is_home is None:
+        return None
+    team_goals = game.home_goals_ft if is_home else game.away_goals_ft
     if team_goals == bet.line:
         return "push"
     return "won" if team_goals > bet.line else "lost"
@@ -353,10 +419,39 @@ def _grade_soccer_half_team_total(bet: PlacedBet, game: SoccerMatch, half: int) 
     g = _soccer_half_goals(game, half)
     if g is None:
         return None
-    team_goals = g[0] if bet.team == game.home_team else g[1]
+    is_home = _soccer_bet_is_home(bet, game)
+    if is_home is None:
+        return None
+    team_goals = g[0] if is_home else g[1]
     if team_goals == bet.line:
         return "push"
     return "won" if team_goals > bet.line else "lost"
+
+
+def _grade_soccer_half_spread(bet: PlacedBet, game: SoccerMatch, half: int) -> "str | None":
+    """"<team> win by more than <line> goals in the Nth Half" -- the full-time
+    spread convention applied to one half's goals.
+
+    Read off the markets' own rules text rather than assumed: "If Real Sociedad
+    win by more than 1.5 goals in the 1st Half of the Real Madrid vs Real
+    Sociedad ... then the market resolves to Yes." Same team+line shape as
+    _grade_soccer_spread, so the sign convention carries over unchanged; the only
+    difference is which goals are counted.
+
+    `side` is None on every one of these markets, which is consistent -- the
+    proposition is already one-sided ("does THIS team cover"), and the ticker
+    names the team. So nothing here reads side.
+    """
+    g = _soccer_half_goals(game, half)
+    if g is None:
+        return None
+    is_home = _soccer_bet_is_home(bet, game)
+    if is_home is None:
+        return None
+    margin = (g[0] - g[1]) if is_home else (g[1] - g[0])
+    if margin == bet.line:
+        return "push"
+    return "won" if margin > bet.line else "lost"
 
 
 def _grade_soccer_second_half_btts(bet: PlacedBet, game: SoccerMatch) -> "str | None":
@@ -954,6 +1049,14 @@ _SOCCER_GRADERS = {
     "uefa_moneyline_3way": _grade_soccer_moneyline_3way,
     "cup_total": _grade_soccer_total,
     "uefa_total": _grade_soccer_total,
+    # The SPREAD siblings of the two lines above, added 2026-08-26 -- they were
+    # left out when the cup/UEFA totals were wired and nothing noticed, because
+    # an unmapped type fails silently. Their rules text settles on regulation
+    # exactly like the totals do ("after 90 minutes plus stoppage time, does not
+    # include extra time or penalties"), so the same 90-minute grader is right,
+    # and team/line/side are populated on all 164 active markets.
+    "cup_spread": _grade_soccer_spread,
+    "uefa_spread": _grade_soccer_spread,
     "leagues_cup_moneyline_3way": _grade_soccer_moneyline_3way,
     "leagues_cup_total": _grade_soccer_total,
     # Spread reuses the league grader, which reads bet.team as the favoured
@@ -978,6 +1081,8 @@ _SOCCER_GRADERS = {
     "second_half_total": lambda b, g: _grade_soccer_half_total(b, g, 2),
     "first_half_team_total": lambda b, g: _grade_soccer_half_team_total(b, g, 1),
     "second_half_team_total": lambda b, g: _grade_soccer_half_team_total(b, g, 2),
+    "first_half_spread": lambda b, g: _grade_soccer_half_spread(b, g, 1),
+    "second_half_spread": lambda b, g: _grade_soccer_half_spread(b, g, 2),
     "second_half_btts": _grade_soccer_second_half_btts,
     # Graded off first_scorer, NOT the final score -- see the grader.
     "ftts": _grade_soccer_ftts,
