@@ -343,14 +343,22 @@ CUP_MARKET_TYPES = {"cup_moneyline_3way", "cup_advance", "cup_total", "cup_sprea
 # stat-projection futures (see PLAYER_STAT_TRACKING_ONLY in routers/markets.py):
 # the stake is zeroed AFTER it is computed, so model_prob and edge still surface
 # and the row keeps accruing forward evidence.
-# leagues_cup_advance added 2026-08-26. It is the SAME market shape as
-# cup_advance -- who progressed, which for a Leagues Cup knockout can turn on a
-# penalty shootout no column here records -- and it has no grader either. It was
-# left out of this set when the Leagues Cup markets went in, so it was priced,
-# stakeable and unsettleable: precisely the trap the comment above describes.
-# Found by asking which types the staking path FUNDS that nothing can grade;
-# it had 4 funded rows and no real money on it yet.
-TRACKING_ONLY_MARKET_TYPES = {"cup_advance", "leagues_cup_advance"}
+# leagues_cup_advance was added here 2026-08-26 and REMOVED the same day. The
+# reason given was the one the comment above gives for cup_advance -- "no grader
+# exists, so a bet on it could never settle" -- and that reason is FALSE for both
+# of them. Measured: 35 of cup_advance's 41 bets are already settled, all from
+# Kalshi's own market resolution (18 won, 17 lost), and 2 of leagues_cup_advance's
+# 5 the same way. app/ingestion/market_resolution_settlement.py grades every
+# pending Kalshi bet whose market finalizes, with no market_type filter, so
+# nothing about extra time or penalties keeps these unsettleable.
+#
+# cup_advance is LEFT SUPPRESSED pending a decision, because a second and
+# genuinely different concern survives: it settles on progression -- aggregate
+# over two legs, extra time, penalties -- while _cup_prediction prices it from a
+# 90-minute model. That is a PRICING objection, not a settlement one, and its
+# record (18-17) neither confirms nor refutes it. Do not lift it on the strength
+# of this comment alone; measure the pricing.
+TRACKING_ONLY_MARKET_TYPES = {"cup_advance"}
 
 
 def _cup_prediction(match: SoccerMatch | None):

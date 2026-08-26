@@ -272,50 +272,44 @@ def is_bucket_enabled(
 # fix behind an abstention.
 TRACKING_ONLY_MARKET_TYPES = frozenset({"total"})
 
-# SPORT-SCOPED tracking-only, for cells nothing can GRADE.
+# RETRACTED 2026-08-26, the same day it shipped. This was UNGRADEABLE_CELLS, a
+# sport-scoped set gating wnba half/quarter markets and mlb f5 on the reasoning
+# that WnbaGame has no period columns and MlbGame no inning columns, so nothing
+# could ever settle them.
 #
-# Separate from the set above on purpose. That one is a MODEL judgement ("this
-# type's prices are wrong") and is deliberately league-blind. This one is a
-# PLUMBING fact ("no settlement path exists for this cell"), and plumbing is
-# per-sport: wnba first_half_winner is ungradeable because WnbaGame stores no
-# period scores, while soccer's first_half_winner grades fine off the half-time
-# linescore. Putting a sport-scoped fact in a league-blind table is how a soccer
-# alias once rewrote FC Barcelona, so these stay keyed by (sport, market_type).
+# THE PREMISE WAS FALSE. I mapped the settlement paths by grepping app/models/
+# and missed app/ingestion/market_resolution_settlement.py, whose
+# settle_from_kalshi_resolution() grades EVERY pending Kalshi bet whose market
+# has finalized, with NO market_type filter at all. Its own docstring calls it
+# "the authoritative, 100%-coverage settlement path" and says in as many words
+# that it covers what the per-sport graders cannot. Whether our tables hold
+# period scores is irrelevant: Kalshi resolves its own market and we read that.
 #
-# MEASURED 2026-08-26. WnbaGame has 13 columns and MlbGame 18, and NEITHER has
-# any quarter/half/inning column -- compare NflGame, which carries
-# home_score_1h/away_score_1h and is why the NFL's winner_1h grades. So there is
-# no data to write a grader against; this is not a missing mapping, it is a
-# missing fetch. Real money had already landed on three of these four cells
-# ($60 across 6 bets), and the staking path was still funding them.
+# The evidence was already sitting in the book and I did not look for it before
+# gating: 1,048 settled bets on those very cells, 1,048 of them settled from
+# Kalshi resolution, plus all NINE real ones. "Nothing can grade these" was
+# checkable against the graded history of the exact cells being gated.
 #
-# REVERSIBLE, and the condition is concrete: fetch period scores for these
-# sports (the WNBA ones are on ESPN's linescore, same shape as the soccer
-# half-time fetch), wire the graders, and delete the cell from this set. The
-# stake is zeroed AFTER it is computed, so model_prob and edge still surface and
-# the row keeps accruing forward evidence in the meantime.
-UNGRADEABLE_CELLS = frozenset({
-    ("wnba", "first_half_winner"), ("wnba", "first_half_total"),
-    ("wnba", "first_half_spread"), ("wnba", "second_half_winner"),
-    ("wnba", "second_half_total"), ("wnba", "second_half_spread"),
-    ("wnba", "q1_winner"), ("wnba", "q1_total"), ("wnba", "q1_spread"),
-    ("wnba", "q2_winner"), ("wnba", "q2_total"), ("wnba", "q2_spread"),
-    ("wnba", "q3_winner"), ("wnba", "q3_total"), ("wnba", "q3_spread"),
-    ("wnba", "q4_winner"), ("wnba", "q4_total"), ("wnba", "q4_spread"),
-    ("mlb", "f5"),
-})
+# AND THE COST WAS REAL. Those cells returned +25.9% ROI over 1,048 settled bets
+# against +3.9% for the other 40,079 in the book, and the nine real bets went
+# 7-for-9 for +$102 on $90. Treat that ROI as directional only -- the rows are
+# paper-filled and half/quarter markets on ONE game are heavily correlated, so
+# the effective sample is far below 1,048 -- but the direction is not in doubt,
+# and the gate had no premise left either way.
+#
+# THE LESSON, which is why this comment stays instead of a clean deletion:
+# before gating a cell for "nothing can grade it", query the settled history of
+# that cell. A cell with a graded past is gradeable, whatever the code map says.
+
 
 
 def gate_kelly(kelly, clv_stats: dict, sport: str, market_type: str):
     """Zero out a computed kelly fraction if its (sport, market_type) bucket is
-    CLV-suppressed, if the market type is tracking-only, or if the cell has no
-    settlement path at all. One-liner used at
+    CLV-suppressed, or if the market type is tracking-only. One-liner used at
     each router's kelly call site so the gate rolls out uniformly -- 24 call
     sites, which is why the rule lives HERE rather than in any single router.
     The CLV half is still a no-op for every bucket; see SUPPRESSION_ENABLED."""
     if kelly is not None and market_type in TRACKING_ONLY_MARKET_TYPES:
-        return None
-    if kelly is not None and (sport, market_type) in UNGRADEABLE_CELLS:
         return None
     if kelly is not None and not is_bucket_enabled(clv_stats, sport, market_type):
         return None
