@@ -28,12 +28,58 @@ from app.ingestion.market_matcher_tennis import full_name_to_abbreviated_key, ma
 log = logging.getLogger(__name__)
 
 
+# Where the per-session cache of unfinished matches lives. session.info is
+# SQLAlchemy's own per-session scratch dict, so the cache lives exactly as long
+# as the session does and cannot leak between poller passes.
+_UPCOMING_CACHE_KEY = "_tennis_upcoming_matches"
+
+
 def _load_upcoming_matches(session: Session) -> list[dict]:
+    """Every unfinished tennis match, ONCE PER SESSION.
+
+    This is a full scan of TennisMatch where winner_key IS NULL -- 3,686 rows --
+    and find_or_create_upcoming_match calls it ONCE PER EVENT. With 250 events a
+    pass that is 250 identical scans, and the whole thing runs inside the
+    app-wide write lock.
+
+    MEASURED 2026-08-27. Instrumenting the lock named
+    poller_tennis.refresh_kalshi_tennis_markets as its single worst holder, and
+    per-phase timing put 71.9s of a 72.3s hold in match resolution -- 99.4%.
+    Every upsert in that function combined is 0.3s and the commit is 0.1s. For
+    those 72 seconds nothing else in the app can write, which is why the soccer
+    poller was measured doing 8s of work while queueing ten minutes.
+
+    (A standalone probe timed one scan at 0.043s, i.e. ~11s for 250 -- so the
+    isolated cost UNDERSTATES it several-fold. The same query under a live,
+    contended process against a 9.9GB database is far slower than in a quiet
+    one. Do not size a production cost from an idle measurement.)
+
+    The cache is per SESSION, not global, so it cannot serve stale rows into a
+    later pass: the poller opens a fresh session inside the lock each time.
+    Anything created during the pass is appended by find_or_create_upcoming_match
+    itself -- without that, two events for the same new match in one pass would
+    both miss and create a duplicate, which is the very thing this lookup exists
+    to prevent."""
+    cached = session.info.get(_UPCOMING_CACHE_KEY)
+    if cached is not None:
+        return cached
     rows = session.query(TennisMatch).filter(TennisMatch.winner_key.is_(None)).all()
-    return [
+    cached = [
         {"id": r.id, "player_a_name": r.player_a_name, "player_b_name": r.player_b_name}
         for r in rows
     ]
+    session.info[_UPCOMING_CACHE_KEY] = cached
+    return cached
+
+
+def _remember_new_match(session: Session, match: TennisMatch) -> None:
+    """Add a just-created match to this session's cache, so the REST of this
+    pass can find it. Skipped silently when nothing has loaded the cache yet."""
+    cached = session.info.get(_UPCOMING_CACHE_KEY)
+    if cached is not None:
+        cached.append({"id": match.id,
+                       "player_a_name": match.player_a_name,
+                       "player_b_name": match.player_b_name})
 
 
 # Grand Slam surface, keyed by a lowercase substring found in whichever
@@ -248,6 +294,9 @@ def find_or_create_upcoming_match(
     )
     session.add(match)
     session.flush()
+    # Must happen AFTER the flush: the cache stores ids, and this row has none
+    # until it is flushed.
+    _remember_new_match(session, match)
     return match
 
 
