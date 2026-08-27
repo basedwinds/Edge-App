@@ -76,7 +76,21 @@ def upsert_cod_match(session: Session, row: dict) -> CodMatch:
 def _upsert_snapshot(session: Session, market: Market, last_price: float | None,
                      volume: float | None, yes_bid: float | None = None,
                      yes_ask: float | None = None) -> None:
-    session.flush()  # the market needs an id before a snapshot can reference it
+    # FLUSH ONLY WHEN THE MARKET IS NEW. This used to flush unconditionally, on
+    # EVERY upsert -- and the soccer poller alone does 3,751 of them a cycle, so
+    # that was 3,751 forced round trips where SQLAlchemy emits SQL for every
+    # pending change instead of batching them into one commit.
+    #
+    # The flush exists for exactly one reason: a market added this cycle has no
+    # id yet, and MarketSnapshot.market_id needs one. A market that already
+    # exists in the DB already has its id populated, so flushing for it buys
+    # nothing. Only a handful of markets are genuinely new on any given cycle.
+    #
+    # Measured 2026-08-26 via per-stage timing added to poller_soccer: the
+    # soccer upsert stage was 764s for 3,751 rows.
+    if market.id is None:
+        session.flush()
+ # the market needs an id before a snapshot can reference it
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=yes_bid, yes_ask=yes_ask, last_price=last_price, volume=volume,
