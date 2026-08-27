@@ -221,3 +221,10 @@ def get_session():
         yield session
     finally:
         session.close()
+
+
+# Registers the before_flush hook that drops market snapshots recording nothing
+# new. Imported for its SIDE EFFECT, at the bottom so every name above exists
+# first. See snapshot_dedupe's docstring: 89% of snapshot writes carried no new
+# information, and one hook covers all 97 write sites without editing any.
+from app.db import snapshot_dedupe as _snapshot_dedupe  # noqa: E402,F401
