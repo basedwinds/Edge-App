@@ -1260,6 +1260,58 @@ def _pick_grader(bet: PlacedBet, market_type: "str | None" = None):
     return _GRADERS.get(mt)  # nfl/nba/wnba/cfb/mlb
 
 
+def _event_has_started(bet: PlacedBet, game) -> bool:
+    """False when the event's own start time is still in the future.
+
+    A BACKSTOP, not the fix. The cause of the 2026-08-27 incident was
+    tennis_results.apply_results_index writing a result to any fixture with the
+    same PLAYER PAIR regardless of date, so a 2026-08-20 Harris/Ruiz result
+    landed on their unplayed 2026-08-27 fixture -- mirrored into "4-6 3-4"
+    because the score is stored in the fixture's own player order -- and a REAL
+    $10 bet was settled as lost on a match sitting in a rain delay. That is
+    fixed at source there.
+
+    This catches whatever the next such bug is, from any sport and any writer:
+    a bet graded before its event begins is wrong no matter how the result got
+    there.
+
+    DELIBERATELY PERMISSIVE ON MISSING OR UNPARSEABLE TIMES. Start times in this
+    app are known-unreliable -- a rescheduled or reused fixture can carry a
+    start from a different meeting entirely, which is why 14 of 16 real bets
+    flagged as "settled early" turned out to be correct settlements with stale
+    start times. Returning True when the time cannot be trusted keeps those
+    grading; only a CONFIDENT future start blocks.
+    """
+    # datetime is imported per-function throughout this module, not at module
+    # scope -- keep that convention rather than adding a global import.
+    import datetime
+
+    start = None
+    if start is None:
+        for attr in ("estimated_start_time", "start_time", "commence_time",
+                     "gametime", "event_date"):
+            raw_v = getattr(game, attr, None)
+            if not raw_v:
+                continue
+            try:
+                parsed = datetime.datetime.fromisoformat(
+                    str(raw_v).replace("Z", "+00:00"))
+                start = (parsed.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+                         if parsed.tzinfo is not None else parsed)
+                break
+            except (TypeError, ValueError):
+                continue
+    if start is None:
+        return True  # unknown start -> do not block; see the note above
+    if start > datetime.datetime.utcnow():
+        log.warning(
+            "refusing to settle bet %s (%s/%s): its event starts %s, which is in "
+            "the future. A result on an unstarted event is the wrong result.",
+            bet.id, bet.sport, bet.market_type, start)
+        return False
+    return True
+
+
 def _settlement_note(bet: PlacedBet, game) -> str:
     if bet.sport == "soccer":
         return f"auto-settled: final score {game.away_team} {game.away_goals_ft} @ {game.home_team} {game.home_goals_ft}"
@@ -1492,6 +1544,10 @@ def settle_finished_games(session: Session) -> int:
         game = _get_game(session, bet)
         if game is None or not _game_is_final(bet, game):
             continue  # not final yet
+        if not _event_has_started(bet, game):
+            # A result exists for an event that has not begun. That is not a
+            # fast grader, it is the wrong result -- see _event_has_started.
+            continue
         grader = _pick_grader(bet, effective_market_type(session, bet))
         if grader is None:
             continue
