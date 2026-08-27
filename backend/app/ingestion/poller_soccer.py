@@ -476,8 +476,15 @@ def refresh_kalshi_soccer_markets():
     # SUBTRACTION (315s step - 125s fetch measured separately), and Kalshi
     # rate-limit backoff makes the fetch half swing 174s -> 415s on its own. The
     # next pass says outright where the time actually goes.
+    # STAGE 1 NEEDS THE SAME WAIT/WORK SPLIT AS STAGE 2, and not having it made
+    # its first two readings unreadable: 4.7s then 779.8s. t_stage0 was stamped
+    # BEFORE `with db_write_lock()`, so that number silently included however
+    # long this poller queued for the lock -- the exact mistake stage 2 was
+    # already fixed for, repeated one block higher up. A 160x swing is a
+    # queueing signature, not a workload one.
     t_stage0 = time.time()
     with db_write_lock():
+        t_s1_wait = time.time() - t_stage0
         session = SessionLocal()
         try:
             by_event: dict[str, list[dict]] = {}
@@ -591,13 +598,14 @@ def refresh_kalshi_soccer_markets():
         "kalshi soccer: %d/%d matches resolved, %d moneyline rows, %d spread rows, %d total rows, %d btts rows, "
         "%d 1H rows, %d 1H-spread, %d 1H-total, %d 1H-btts, %d 2H rows, %d 2H-spread, %d 2H-total, %d 2H-btts, "
         "%d ftts, %d correct-score, %d team-total "
-        "[match-resolve %.1fs, %d upserts in %d batches %.1fs "
+        "[match-resolve %.1fs = %.1fs wait + %.1fs work, "
+        "%d upserts in %d batches %.1fs "
         "= %.1fs waiting for the lock + %.1fs holding it]",
         matched, len(by_event), len(rows), len(spread_rows), len(total_rows), len(btts_rows),
         counts["1h"], counts["1h_spread"], counts["1h_total"], counts["1h_btts"],
         counts["2h"], counts["2h_spread"], counts["2h_total"], counts["2h_btts"],
         counts["ftts"], counts["score"], counts["teamtotal"],
-        t_stage1 - t_stage0, len(work),
+        t_stage1 - t_stage0, t_s1_wait, (t_stage1 - t_stage0) - t_s1_wait, len(work),
         (len(work) + _KALSHI_UPSERT_BATCH - 1) // _KALSHI_UPSERT_BATCH,
         t_stage2 - t_stage1, t_lock_wait, t_lock_work,
     )
