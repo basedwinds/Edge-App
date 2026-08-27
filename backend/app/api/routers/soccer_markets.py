@@ -74,7 +74,7 @@ from app.models import playoff_sim_service_mls
 from app.models.season_sim_soccer import (SeasonSimResult, prob_points_at_least, simulate_season,
                                           current_season_table, season_progress, season_progress_ok,
                                           season_progress_note)
-from app.models.staking import apply_ladder_futures_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
+from app.models.staking import apply_duplicate_listing_cap, apply_ladder_futures_cap, FUTURES_MAX_SPREAD, FUTURES_MIN_MARKET_PRICE, FUTURES_UNIT_SCALE, has_real_trading, kelly_fraction, suggested_stake_dollars, size_stake_dollars
 from app.models.clv_selection import bucket_clv_stats, gate_kelly
 
 router = APIRouter(prefix="/soccer", tags=["soccer"])
@@ -1614,6 +1614,27 @@ def list_soccer_futures(session: Session = Depends(get_session)):
     ladder_zeroed = apply_ladder_futures_cap(out, "soccer")
     if ladder_zeroed:
         log.info("soccer futures: collapsed %d team_points ladder rungs", ladder_zeroed)
+
+    # ONE STAKE PER PROPOSITION ACROSS VENUES. Soccer was the ONLY router of
+    # eleven that never called this -- it did not even import it -- while
+    # market_catalog_soccer's own upsert_polymarket_soccer_league_winner_row
+    # docstring says these rows "MUST go through apply_duplicate_listing_cap or
+    # one title gets staked twice". The instruction was written and never wired,
+    # which is the same helper-exists-but-is-not-called shape as the 2026-08
+    # rollout that left $4,180 double-staked across four routers.
+    #
+    # MEASURED on the live board before fixing: 26 propositions are listed more
+    # than once -- 8 across Kalshi AND Polymarket, 18 duplicated within Kalshi
+    # alone -- and 0 are currently staked twice. The exposure is latent, held
+    # back only by the volume gate and the 20pp bar, not by anything structural.
+    # Adding a second venue for relegation would widen it.
+    #
+    # No fixture_attr: these are season-long rows with no match to key on, so
+    # identity is (team, market_type, line, side) exactly as for NFL and MLB
+    # futures.
+    duped = apply_duplicate_listing_cap(out)
+    if duped:
+        log.info("soccer futures: collapsed %d cross-listed duplicate(s)", duped)
 
     # The MLS bracket model is UNCALIBRATED, and saying so is the point.
     #
