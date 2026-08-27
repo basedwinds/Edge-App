@@ -415,13 +415,6 @@ def refresh_soccer_news_adjustments():
             session.close()
 
 
-# Upserts per lock acquisition in refresh_kalshi_soccer_markets's second
-# stage. ~3,600 rows a cycle, so 400 is roughly nine acquisitions -- short
-# enough that another poller waits under ten seconds, long enough that lock
-# churn is not itself the cost.
-_KALSHI_UPSERT_BATCH = 400
-
-
 def refresh_kalshi_soccer_markets():
     """REAL BUG this fixes (found live 2026-07-20, worst offender in this
     file -- ~17 separate Kalshi calls all used to happen INSIDE one open
@@ -577,21 +570,40 @@ def refresh_kalshi_soccer_markets():
     # clock includes queueing that is not this poller's work at all. Reporting
     # one number for both is what made the previous estimate wrong twice; these
     # are measured separately so the next change targets the right thing.
+    # ONE LOCK ACQUISITION, NOT TEN. Batching this was my own change earlier
+    # today and the measurement it enabled then refuted it.
+    #
+    # The premise was that a long single hold starved other writers. With wait
+    # and work finally separated, the hold is 4-8s for all 3,795 upserts -- it
+    # was never long. What batching actually bought was TEN trips through a
+    # contended queue instead of one:
+    #
+    #   batched, 10 acquisitions:  985.3s waiting + 8.1s holding
+    #                              145.7s waiting + 4.3s holding
+    #
+    # Waiting is ~99% of it, and each extra acquisition is another full wait.
+    # Under contention, ten short holds are far worse for this poller than one
+    # short hold, and the 8s it holds cannot be what starves anything else.
+    #
+    # The real cost is elsewhere -- something holds this lock for minutes and it
+    # is not this poller, whose total work is under ten seconds. Reverting so the
+    # next investigation starts from a poller that is not making its own problem
+    # worse. The wait/work timing STAYS: it is what showed this, and it is what
+    # will identify the actual holder.
     t_lock_wait = 0.0
     t_lock_work = 0.0
-    for i in range(0, len(work), _KALSHI_UPSERT_BATCH):
-        _w0 = time.time()
-        with db_write_lock():
-            _w1 = time.time()
-            t_lock_wait += _w1 - _w0
-            session = SessionLocal()
-            try:
-                for fn, row, mid in work[i:i + _KALSHI_UPSERT_BATCH]:
-                    fn(session, row, mid)
-                session.commit()
-            finally:
-                session.close()
-            t_lock_work += time.time() - _w1
+    _w0 = time.time()
+    with db_write_lock():
+        _w1 = time.time()
+        t_lock_wait = _w1 - _w0
+        session = SessionLocal()
+        try:
+            for fn, row, mid in work:
+                fn(session, row, mid)
+            session.commit()
+        finally:
+            session.close()
+        t_lock_work = time.time() - _w1
     t_stage2 = time.time()
 
     log.info(
@@ -599,14 +611,13 @@ def refresh_kalshi_soccer_markets():
         "%d 1H rows, %d 1H-spread, %d 1H-total, %d 1H-btts, %d 2H rows, %d 2H-spread, %d 2H-total, %d 2H-btts, "
         "%d ftts, %d correct-score, %d team-total "
         "[match-resolve %.1fs = %.1fs wait + %.1fs work, "
-        "%d upserts in %d batches %.1fs "
+        "%d upserts in one hold %.1fs "
         "= %.1fs waiting for the lock + %.1fs holding it]",
         matched, len(by_event), len(rows), len(spread_rows), len(total_rows), len(btts_rows),
         counts["1h"], counts["1h_spread"], counts["1h_total"], counts["1h_btts"],
         counts["2h"], counts["2h_spread"], counts["2h_total"], counts["2h_btts"],
         counts["ftts"], counts["score"], counts["teamtotal"],
         t_stage1 - t_stage0, t_s1_wait, (t_stage1 - t_stage0) - t_s1_wait, len(work),
-        (len(work) + _KALSHI_UPSERT_BATCH - 1) // _KALSHI_UPSERT_BATCH,
         t_stage2 - t_stage1, t_lock_wait, t_lock_work,
     )
 
