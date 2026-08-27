@@ -317,8 +317,11 @@ _KALSHI_SPORT_MATCHERS: dict[str, callable] = {
 DORMANT_SPORTS = ("cbb",)
 
 
-def wake_dormant_sports(session: Session) -> dict[str, int]:
-    """Un-dismiss a dormant sport's catalog entries once it has OPEN markets."""
+def wake_dormant_sports(session: Session, probed: dict | None = None) -> dict[str, int]:
+    """Un-dismiss a dormant sport's catalog entries once it has OPEN markets.
+
+    `probed` is probe_dormant_sports' output, so the per-ticker Kalshi requests
+    can happen with no lock held. Without it this fetches inline, unchanged."""
     woken: dict[str, int] = {}
     for sport in DORMANT_SPORTS:
         matcher = _KALSHI_SPORT_MATCHERS.get(sport)
@@ -329,14 +332,17 @@ def wake_dormant_sports(session: Session) -> dict[str, int]:
         if not rows:
             continue
         tickers = {e.identifier for e in rows}
-        open_now = set()
-        for t in sorted(tickers):
-            try:
-                data = get_json(f"{KALSHI_BASE}/markets?series_ticker={t}&status=open&limit=1")
-            except Exception:  # noqa: BLE001 - a fetch failure must not fake a wake-up
-                continue
-            if (data or {}).get("markets"):
-                open_now.add(t)
+        if probed is not None:
+            open_now = probed.get(sport, set())
+        else:
+            open_now = set()
+            for t in sorted(tickers):
+                try:
+                    data = get_json(f"{KALSHI_BASE}/markets?series_ticker={t}&status=open&limit=1")
+                except Exception:  # noqa: BLE001 - a fetch failure must not fake a wake-up
+                    continue
+                if (data or {}).get("markets"):
+                    open_now.add(t)
         if not open_now:
             log.info("dormant sport %s: still no open markets (%d series watched)",
                      sport, len(tickers))
@@ -1001,7 +1007,74 @@ _SESSION_AWARE_FETCHERS = {fetch_kalshi_other_series, fetch_polymarket_other_eve
 _NO_BOOTSTRAP_SPORTS = {OTHER_SPORT}
 
 
-def scan_catalog(session: Session) -> list[CatalogEntry]:
+def fetch_catalog_items(session: Session) -> dict:
+    """Every sport x platform's catalog items, FETCHED ONLY -- no writes.
+
+    Split out 2026-08-27 so run_catalog_scan can do its network with NO lock
+    held. Measured: that job held the app-wide write lock for 638-699s in a
+    single acquisition, the largest hold in the app, and while it ran the
+    soccer and tennis pollers were measured waiting 646s and 635s to get in.
+    Most of that is this fetch -- Kalshi's full /series?category=Sports plus
+    Polymarket's whole event list, per sport.
+
+    This is the same restructuring the nine sports' pollers got on 2026-07-20
+    (see poller_lock.py's docstring): all network first with nothing locked,
+    then take the lock only around the DB write.
+
+    SEPARATING THE PHASES CANNOT CHANGE WHAT A FETCHER SEES. SessionLocal runs
+    autoflush=False, so rows added by an earlier sport in the same run were
+    ALREADY invisible to a later fetcher's queries -- scan_catalog's own dedupe
+    comment says exactly that, and is why the `seen` set exists. The two
+    session-aware fetchers therefore read the same committed state either way.
+
+    A fetcher that raises is recorded as None rather than dropped, so the write
+    phase can tell "fetch failed, skip this one" apart from "fetched nothing",
+    which is the difference between leaving a sport alone and treating its
+    catalog as empty.
+    """
+    out: dict = {}
+    for sport, fetchers in _SPORT_FETCHERS.items():
+        for platform, fetch_fn in fetchers:
+            try:
+                items = (fetch_fn(session) if fetch_fn in _SESSION_AWARE_FETCHERS
+                         else fetch_fn())
+            except Exception:
+                log.exception("%s %s catalog fetch failed", sport, platform)
+                items = None
+            out[(sport, platform)] = items
+    return out
+
+
+def probe_dormant_sports(session: Session) -> dict:
+    """Which dormant sports' series currently have OPEN markets. Network only.
+
+    The read-then-network half of wake_dormant_sports, split out for the same
+    reason as fetch_catalog_items: it issues one Kalshi request PER SERIES
+    TICKER, and doing that under the write lock is what made this job the
+    app's worst blocker."""
+    out: dict = {}
+    for sport in DORMANT_SPORTS:
+        matcher = _KALSHI_SPORT_MATCHERS.get(sport)
+        if matcher is None:
+            continue
+        rows = [e for e in session.query(CatalogEntry).all()
+                if e.identifier and matcher(e.identifier, e.title or "")]
+        if not rows:
+            continue
+        tickers = {e.identifier for e in rows}
+        open_now = set()
+        for tk in sorted(tickers):
+            try:
+                data = get_json(f"{KALSHI_BASE}/markets?series_ticker={tk}&status=open&limit=1")
+            except Exception:  # noqa: BLE001 - a fetch failure must not fake a wake-up
+                continue
+            if (data or {}).get("markets"):
+                open_now.add(tk)
+        out[sport] = open_now
+    return out
+
+
+def scan_catalog(session: Session, prefetched: dict | None = None) -> list[CatalogEntry]:
     """Runs the diff for every sport x platform, upserts CatalogEntry rows,
     and returns any entries newly flagged THIS scan (empty on each sport's
     own bootstrap scan, by design). Errors from any single sport/platform
@@ -1034,11 +1107,19 @@ def scan_catalog(session: Session) -> list[CatalogEntry]:
         if is_bootstrap:
             bootstrapped_sports.append(sport)
         for platform, fetch_fn in fetchers:
-            try:
-                items = fetch_fn(session) if fetch_fn in _SESSION_AWARE_FETCHERS else fetch_fn()
-            except Exception:
-                log.exception("%s %s catalog scan failed", sport, platform)
-                continue
+            if prefetched is not None:
+                # Already fetched with no lock held -- see fetch_catalog_items.
+                # None means that fetcher RAISED, which must skip the sport
+                # rather than be read as "its catalog is empty".
+                items = prefetched.get((sport, platform))
+                if items is None:
+                    continue
+            else:
+                try:
+                    items = fetch_fn(session) if fetch_fn in _SESSION_AWARE_FETCHERS else fetch_fn()
+                except Exception:
+                    log.exception("%s %s catalog scan failed", sport, platform)
+                    continue
             counted += len(items)
 
             for item in items:

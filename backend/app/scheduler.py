@@ -7,7 +7,8 @@ from app import db_backup
 from app import sports as app_sports
 from app.db.database import SessionLocal
 from app.ingestion import market_rules, tennis_best_of
-from app.ingestion.catalog_scan import scan_catalog, wake_dormant_sports
+from app.ingestion.catalog_scan import (fetch_catalog_items, probe_dormant_sports,
+                                        scan_catalog, wake_dormant_sports)
 from app.ingestion.poller import run_full_refresh
 from app.ingestion.poller_soccer import refresh_mls_playoff_sim
 from app.ingestion import soccer_xg_refresh
@@ -24,7 +25,7 @@ from app.ingestion.poller_lol import run_full_refresh_lol
 from app.ingestion.poller_racing import run_full_refresh_racing
 from app.ingestion.poller_cfb import run_full_refresh_cfb
 from app.ingestion.poller_wnba import refresh_wnba_season_sim, run_full_refresh_wnba
-from app.ingestion.poller_lock import serialized
+from app.ingestion.poller_lock import db_write_lock, serialized
 from app.models.dead_market_sanity_check import run_dead_market_sanity_check
 from app.models.snapshot_maintenance import prune_market_snapshots
 from app.models.market_cleanup import close_stale_game_markets, reconcile_vanished_market_status
@@ -405,13 +406,36 @@ def run_catalog_scan():
     full /series?category=Sports and Polymarket's full NFL event list
     (hundreds of items), unlike the targeted per-series calls the 5-minute
     price refresh makes, so it doesn't need to run nearly as often."""
+    # PHASE 1 -- ALL NETWORK, NO LOCK HELD.
+    #
+    # This used to run whole under serialized(), which holds the app-wide write
+    # lock across the entire function, network included. A full night of lock
+    # instrumentation measured a SINGLE acquisition of 638-699s -- the largest
+    # hold in the app -- and the soccer and tennis pollers waiting 646s and 635s
+    # to get in behind it.
+    #
+    # Same restructuring the nine sports' pollers got on 2026-07-20: fetch
+    # everything with no session-held lock, then take the lock only for the
+    # write. See poller_lock.py's docstring for the original incident.
+    prefetch_session = SessionLocal()
+    try:
+        prefetched = fetch_catalog_items(prefetch_session)
+        probed = probe_dormant_sports(prefetch_session)
+    except Exception:
+        log.exception("catalog scan prefetch failed; falling back to inline fetch")
+        prefetched = probed = None
+    finally:
+        prefetch_session.close()
+
+    # PHASE 2 -- the write, and only this takes the lock.
     session = SessionLocal()
     try:
-        scan_catalog(session)
-        # A sport that was dismissed while between seasons must not stay
-        # dismissed once it relists -- see wake_dormant_sports.
-        wake_dormant_sports(session)
-        session.commit()
+        with db_write_lock():
+            scan_catalog(session, prefetched=prefetched)
+            # A sport that was dismissed while between seasons must not stay
+            # dismissed once it relists -- see wake_dormant_sports.
+            wake_dormant_sports(session, probed=probed)
+            session.commit()
     except Exception:
         log.exception("catalog scan failed")
         # ROLL BACK BEFORE REUSING THE SESSION. A failed commit leaves the
@@ -425,23 +449,30 @@ def run_catalog_scan():
         except Exception:
             log.exception("catalog scan rollback failed")
     try:
-        # Close flagged entries whose build has since shipped. Runs with the
-        # scan because that is when the catalog picture is freshest, and it is
-        # DB-only (no self-HTTP -- see app/shutdown.py). Without it the backlog
-        # rots: 8 of 48 entries were describing finished work by 2026-08-07.
-        from app.models.catalog_resolution import auto_close_ingested, auto_resolve_flagged
-        summary = auto_resolve_flagged(session)
-        if summary["resolved"]:
-            log.info("catalog auto-resolve closed: %s", "; ".join(summary["resolved"]))
-        # And close the UNTRIAGED entries whose series is already ingesting.
-        # Without this the New Markets queue only grows -- 167 -> 259 in a single
-        # day on 2026-08-13, with today's 75 CFB win totals still queued while
-        # 420 of their markets were live. Same DB-only, no-self-HTTP contract as
-        # the call above.
-        closed = auto_close_ingested(session)
-        if closed["closed"]:
-            log.info("catalog auto-close: %d untriaged entries already ingested (%d -> %d open)",
-                     len(closed["closed"]), closed["open_before"], closed["open_after"])
+        # STILL UNDER THE LOCK, and this needs saying because removing
+        # serialized() from this function is exactly what could have dropped it.
+        # These two WRITE (they close catalog entries), so they keep the same
+        # protection they had when the whole function was wrapped. They are
+        # DB-only by contract -- no network, no self-HTTP (see app/shutdown.py)
+        # -- so holding the lock across them costs nothing, unlike the fetch
+        # phase above.
+        with db_write_lock():
+            # Close flagged entries whose build has since shipped. Runs with the
+            # scan because that is when the catalog picture is freshest.
+            # Without it the backlog rots: 8 of 48 entries were describing
+            # finished work by 2026-08-07.
+            from app.models.catalog_resolution import auto_close_ingested, auto_resolve_flagged
+            summary = auto_resolve_flagged(session)
+            if summary["resolved"]:
+                log.info("catalog auto-resolve closed: %s", "; ".join(summary["resolved"]))
+            # And close the UNTRIAGED entries whose series is already ingesting.
+            # Without this the New Markets queue only grows -- 167 -> 259 in a
+            # single day on 2026-08-13, with today's 75 CFB win totals still
+            # queued while 420 of their markets were live.
+            closed = auto_close_ingested(session)
+            if closed["closed"]:
+                log.info("catalog auto-close: %d untriaged entries already ingested (%d -> %d open)",
+                         len(closed["closed"]), closed["open_before"], closed["open_after"])
     except Exception:
         log.exception("catalog auto-resolve failed")
     finally:
@@ -876,7 +907,7 @@ def start():
         replace_existing=True,
     )
     scheduler.add_job(
-        serialized(run_catalog_scan),
+        run_catalog_scan,   # takes db_write_lock() itself around the WRITE only
         "interval",
         hours=24,
         id="catalog_scan",
