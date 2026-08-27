@@ -326,7 +326,12 @@ def upsert_kalshi_tennis_moneyline_market(session: Session, row: dict, tennis_ma
     market.tennis_match_id = tennis_match_id
     market.team = row["player_name"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
@@ -364,7 +369,12 @@ def upsert_polymarket_tennis_moneyline_row(session: Session, row: dict, tennis_m
     market.tennis_match_id = tennis_match_id
     market.team = row["player_name"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         **quote_fields(row, row.get("last_price")),
@@ -387,7 +397,12 @@ def upsert_kalshi_tennis_set_winner_market(session: Session, row: dict, tennis_m
     market.team = row["player_name"]
     market.line = float(row["set_number"])
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
@@ -428,7 +443,12 @@ def upsert_kalshi_tennis_game_spread_market(session: Session, row: dict, tennis_
     market.team = row.get("player_name")
     market.line = row.get("line")
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
@@ -469,7 +489,12 @@ def upsert_kalshi_tennis_game_total_market(session: Session, row: dict, tennis_m
     market.line = row.get("line")
     market.side = "over"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
@@ -511,7 +536,12 @@ def upsert_kalshi_tennis_exact_match_market(session: Session, row: dict, tennis_
     market.team = row["player_name"]
     market.side = f"{row['player_sets']}-{row['opponent_sets']}"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight
@@ -552,7 +582,12 @@ def upsert_polymarket_tennis_set_winner_row(session: Session, row: dict, tennis_
     market.team = row["player_name"]
     market.line = float(row["set_number"])
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         **quote_fields(row, row.get("last_price")),
@@ -577,7 +612,12 @@ def upsert_polymarket_tennis_match_total_row(session: Session, row: dict, tennis
     market.line = row["line"]
     market.side = "over"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         **quote_fields(row, row.get("over_price")),
@@ -603,7 +643,12 @@ def upsert_polymarket_tennis_set_handicap_row(session: Session, row: dict, tenni
     market.team = row["player_name"]
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         **quote_fields(row, row.get("last_price")),
@@ -629,7 +674,12 @@ def upsert_polymarket_tennis_set_game_total_row(session: Session, row: dict, ten
     market.line = row["line"]
     market.side = f"set_{row['set_number']}"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         **quote_fields(row, row.get("over_price")),
@@ -654,7 +704,12 @@ def upsert_polymarket_tennis_total_sets_row(session: Session, row: dict, tennis_
     market.line = row["line"]
     market.side = "over"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         **quote_fields(row, row.get("over_price")),
@@ -725,7 +780,12 @@ def upsert_kalshi_tennis_tournament_winner_market(session: Session, row: dict) -
     # for a sport-specific meaning" pattern as MmaFight's fighter-name fields.
     market.side = row["tour"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         # KALSHI ROWS ARE ALREADY ORIENTED, so their quote is passed straight

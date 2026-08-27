@@ -87,7 +87,12 @@ def upsert_kalshi_mma_moneyline_market(session: Session, row: dict, mma_fight_id
     _set_fight_id(market, mma_fight_id)
     market.team = row["fighter_name"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
@@ -108,7 +113,12 @@ def upsert_polymarket_mma_moneyline_row(session: Session, row: dict, mma_fight_i
     _set_fight_id(market, mma_fight_id)
     market.team = row["fighter_name"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         **quote_fields(row, row.get("last_price")),
@@ -129,7 +139,12 @@ def upsert_kalshi_mma_distance_market(session: Session, row: dict, mma_fight_id:
     market.team = None
     market.side = "yes"  # single binary market, "Yes" = goes the distance
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
@@ -151,7 +166,12 @@ def upsert_polymarket_mma_distance_row(session: Session, row: dict, mma_fight_id
     market.team = None
     market.side = "yes"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     yes_price = None
     if len(row["outcomes"]) == 2 and len(row["outcome_prices"]) == 2:
         for outcome, price in zip(row["outcomes"], row["outcome_prices"]):
@@ -201,7 +221,12 @@ def upsert_kalshi_mma_mov_market(session: Session, row: dict, mma_fight_id: str 
         else:
             market.side = None
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
@@ -234,7 +259,12 @@ def upsert_kalshi_mma_mof_market(session: Session, row: dict, mma_fight_id: str 
     else:
         market.side = None
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
@@ -271,7 +301,12 @@ def upsert_polymarket_mma_method_row(session: Session, row: dict, mma_fight_id: 
         market.team = None
         market.side = "submission"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     yes_price = None
     if len(row["outcomes"]) == 2 and len(row["outcome_prices"]) == 2:
         for outcome, price in zip(row["outcomes"], row["outcome_prices"]):
@@ -299,7 +334,12 @@ def upsert_kalshi_mma_rounds_market(session: Session, row: dict, mma_fight_id: s
     market.line = float(row["before_round"])
     market.side = "under"  # "ends BEFORE round N" == fight duration under N
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
@@ -322,7 +362,12 @@ def upsert_polymarket_mma_rounds_row(session: Session, row: dict, mma_fight_id: 
     market.line = row["line"]
     market.side = "over"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     over_price = None
     if len(row["outcomes"]) == 2 and len(row["outcome_prices"]) == 2:
         for outcome, price in zip(row["outcomes"], row["outcome_prices"]):
@@ -361,7 +406,12 @@ def upsert_kalshi_mma_round_of_victory_market(session: Session, row: dict, mma_f
             market.team = None
         market.side = None
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
@@ -399,7 +449,12 @@ def upsert_kalshi_mma_title_market(session: Session, row: dict) -> Market:
     market.team = row["fighter"]
     market.group_label = _TITLE_LABEL.get(row["weight_class"], row["weight_class"])
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),

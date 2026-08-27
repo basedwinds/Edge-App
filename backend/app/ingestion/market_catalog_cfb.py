@@ -54,7 +54,12 @@ def upsert_kalshi_cfb_moneyline_market(session: Session, row: dict, cfb_game_id:
     # to CfbGame.home_team/away_team.
     market.team = row["team"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
 
     session.add(
         MarketSnapshot(
@@ -90,7 +95,12 @@ def upsert_kalshi_cfb_spread_market(session: Session, row: dict, cfb_game_id: st
     market.team = row["team"]          # already an ESPN abbreviation, as above
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
 
     session.add(
         MarketSnapshot(
@@ -121,7 +131,12 @@ def upsert_kalshi_cfb_win_total_market(session: Session, row: dict, team: str) -
     market.team = team
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id,
         ts=datetime.datetime.utcnow(),
@@ -151,7 +166,12 @@ def upsert_kalshi_cfb_conference_market(session: Session, row: dict, team: str, 
     market.line = row.get("line")
     market.group_label = row.get("series")
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=market.id,
         ts=datetime.datetime.utcnow(),
@@ -193,7 +213,12 @@ def upsert_polymarket_cfb_futures_market(session: Session, row: dict, team: str 
     market.line = row.get("line")
     market.group_label = row.get("event_title")
     market.status = "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
 
     # outcome_prices[0] is the YES side on the Yes/No markets and the OVER side
     # on the win-total rungs ("O 8.5" is listed first) -- both are the side this

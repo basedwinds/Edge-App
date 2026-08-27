@@ -52,7 +52,12 @@ def upsert_kalshi_wnba_moneyline_market(session: Session, row: dict, wnba_game_i
     market.wnba_game_id = wnba_game_id
     market.team = to_espn_abbr(row["team_abbr_kalshi"])
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
 
     session.add(
         MarketSnapshot(
@@ -91,7 +96,12 @@ def upsert_polymarket_wnba_moneyline_row(session: Session, row: dict, wnba_game_
     market.wnba_game_id = wnba_game_id
     market.team = row["team_espn_abbr"]
     market.status = "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
 
     q = quote_fields(row, row.get("last_price"))
     session.add(
@@ -123,7 +133,12 @@ def upsert_kalshi_wnba_spread_market(session: Session, row: dict, wnba_game_id: 
     market.team = to_espn_abbr(row["team_abbr_kalshi"])
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(
         MarketSnapshot(
             market_id=market.id, ts=datetime.datetime.utcnow(),
@@ -153,7 +168,12 @@ def upsert_kalshi_wnba_team_total_market(session: Session, row: dict, wnba_game_
     market.line = row["line"]
     market.side = "over"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(
         MarketSnapshot(
             market_id=market.id, ts=datetime.datetime.utcnow(),
@@ -179,7 +199,12 @@ def upsert_kalshi_wnba_total_market(session: Session, row: dict, wnba_game_id: s
     market.line = row["line"]
     market.side = "over"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(
         MarketSnapshot(
             market_id=market.id, ts=datetime.datetime.utcnow(),
@@ -217,7 +242,12 @@ def upsert_kalshi_wnba_half_market(session: Session, row: dict, wnba_game_id: st
     if kind == "total":
         market.side = "over"   # Kalshi lists half totals as over-only ladders
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(
         MarketSnapshot(
             market_id=market.id, ts=datetime.datetime.utcnow(),
@@ -253,7 +283,12 @@ def upsert_kalshi_wnba_quarter_market(session: Session, row: dict, wnba_game_id:
     if kind == "total":
         market.side = "over"
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(
         MarketSnapshot(
             market_id=market.id, ts=datetime.datetime.utcnow(),
@@ -277,7 +312,12 @@ def upsert_kalshi_wnba_win_total_market(session: Session, row: dict) -> Market:
     market.team = to_espn_abbr(row["team_abbr_kalshi"])
     market.line = row["line"]
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(
         MarketSnapshot(
             market_id=market.id, ts=datetime.datetime.utcnow(),
@@ -302,7 +342,12 @@ def upsert_kalshi_wnba_standings_market(session: Session, row: dict) -> Market:
     market.team = to_espn_abbr(row["team_abbr_kalshi"])
     market.line = None
     market.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if market.id is None:
+        session.flush()
     session.add(
         MarketSnapshot(
             market_id=market.id, ts=datetime.datetime.utcnow(),

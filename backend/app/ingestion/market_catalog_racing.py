@@ -54,7 +54,12 @@ def upsert_racing_market(session: Session, row: dict, race_event_id: int) -> Mar
     m.line = float(row["line"]) if row["line"] is not None else None
     m.group_label = row.get("event_title") or row["event_ticker"]
     m.status = row.get("status") or "active"
-    session.flush()
+    # Flush only for a market that has no id yet -- see market_catalog_soccer's
+    # copy of this note. Flushing on EVERY upsert forces a round trip per row
+    # instead of one batched commit, and the id it exists to populate is already
+    # set on any market that was not created this cycle.
+    if m.id is None:
+        session.flush()
     session.add(MarketSnapshot(
         market_id=m.id, ts=datetime.datetime.utcnow(),
         yes_bid=row.get("yes_bid"), yes_ask=row.get("yes_ask"),
