@@ -563,8 +563,20 @@ def refresh_kalshi_soccer_markets():
             work.append((upsert_fn, row, _by_suffix(row)))
         counts[label] = len(fetched_rows)
 
+    # SPLIT WAIT FROM WORK. After the per-row flush was removed this stage was
+    # still 663.6s for 3,752 rows -- 177ms each, which is not a plausible cost
+    # for an indexed upsert plus one insert. Batching means this now WAITS for
+    # the shared lock ten times while nine other pollers use it, so the wall
+    # clock includes queueing that is not this poller's work at all. Reporting
+    # one number for both is what made the previous estimate wrong twice; these
+    # are measured separately so the next change targets the right thing.
+    t_lock_wait = 0.0
+    t_lock_work = 0.0
     for i in range(0, len(work), _KALSHI_UPSERT_BATCH):
+        _w0 = time.time()
         with db_write_lock():
+            _w1 = time.time()
+            t_lock_wait += _w1 - _w0
             session = SessionLocal()
             try:
                 for fn, row, mid in work[i:i + _KALSHI_UPSERT_BATCH]:
@@ -572,20 +584,22 @@ def refresh_kalshi_soccer_markets():
                 session.commit()
             finally:
                 session.close()
+            t_lock_work += time.time() - _w1
     t_stage2 = time.time()
 
     log.info(
         "kalshi soccer: %d/%d matches resolved, %d moneyline rows, %d spread rows, %d total rows, %d btts rows, "
         "%d 1H rows, %d 1H-spread, %d 1H-total, %d 1H-btts, %d 2H rows, %d 2H-spread, %d 2H-total, %d 2H-btts, "
         "%d ftts, %d correct-score, %d team-total "
-        "[match-resolve %.1fs, %d upserts in %d batches %.1fs]",
+        "[match-resolve %.1fs, %d upserts in %d batches %.1fs "
+        "= %.1fs waiting for the lock + %.1fs holding it]",
         matched, len(by_event), len(rows), len(spread_rows), len(total_rows), len(btts_rows),
         counts["1h"], counts["1h_spread"], counts["1h_total"], counts["1h_btts"],
         counts["2h"], counts["2h_spread"], counts["2h_total"], counts["2h_btts"],
         counts["ftts"], counts["score"], counts["teamtotal"],
         t_stage1 - t_stage0, len(work),
         (len(work) + _KALSHI_UPSERT_BATCH - 1) // _KALSHI_UPSERT_BATCH,
-        t_stage2 - t_stage1,
+        t_stage2 - t_stage1, t_lock_wait, t_lock_work,
     )
 
 
