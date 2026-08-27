@@ -136,7 +136,28 @@ def run_sanity_check():
     """Catches the "dead/decided market shown as live" bug class (see
     dead_market_sanity_check.py's own docstring) -- runs after the price
     pollers so it's checking freshly-refreshed data, not stale rows from
-    before this tick. Only logs; never raises out to the scheduler."""
+    before this tick. Only logs; never raises out to the scheduler.
+
+    NOT serialized(), as of 2026-08-27, and it should never have been. It was
+    the single largest consumer of the app-wide WRITE lock: **4,722 seconds of
+    hold over 47 runs in one night**, 3.5x everything else combined, from a job
+    that writes nothing at all. It runs every 10 minutes and held the lock ~100s
+    each time, so roughly a sixth of all wall-clock had every poller in the app
+    blocked behind a read-only check.
+
+    Two independent proofs it needs no write lock:
+      * dead_market_sanity_check.py contains no commit/add/delete/flush, and
+        neither do any of the NINE router modules it calls -- 0 across all of
+        them.
+      * those same list_*_markets functions are served over HTTP to users and to
+        the cache warmer constantly, with no lock held. If they needed this lock
+        that would already be broken.
+
+    WHY IT IS SLOW is a separate matter, left alone deliberately: it computes
+    all nine sport boards, the same work the cache warmer already does. Reading
+    the warm cache instead would make it near-free, but that changes WHAT it
+    checks (warm cache vs fresh compute) and this change is only about the lock.
+    """
     try:
         run_dead_market_sanity_check()
     except Exception:
@@ -948,7 +969,7 @@ def start():
     # staggered to start after every sport's first refresh has had a chance
     # to land, so the very first run isn't checking empty/half-refreshed data.
     scheduler.add_job(
-        serialized(run_sanity_check),
+        run_sanity_check,   # read-only; must NOT be serialized() -- see its docstring
         "interval",
         minutes=10,
         id="dead_market_sanity_check",

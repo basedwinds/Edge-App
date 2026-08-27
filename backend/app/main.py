@@ -124,7 +124,7 @@ async def lifespan(app: FastAPI):
     # Dead-market sanity check (see dead_market_sanity_check.py) -- extra
     # delay beyond the last poller's own stagger slot so its network calls
     # have actually had time to finish, not just start.
-    _schedule((len(pollers) + 2) * STARTUP_POLLER_STAGGER_SECONDS, serialized(scheduler_module.run_sanity_check))
+    _schedule((len(pollers) + 2) * STARTUP_POLLER_STAGGER_SECONDS, scheduler_module.run_sanity_check)
     yield
     # FIRST thing on the way out, before anything is torn down: raise the flag
     # that tells every self-HTTP loop to stop calling this server. Those loops
