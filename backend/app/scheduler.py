@@ -623,6 +623,26 @@ def start():
     # Polymarket half of the same gap. Staggered 4 minutes off the Kalshi one so
     # the two never contend for the same worker in a thread pool that is already
     # the app's tightest resource.
+    # WHO HOLDS THE WRITE LOCK. Four rounds of poller tuning found nothing
+    # because the pollers are not the cost -- soccer does 3-8s of work and
+    # queues up to ten minutes. This logs total hold time per caller so the
+    # actual holder names itself instead of being guessed at one module at a
+    # time. Cheap: it reads an in-memory dict.
+    def _log_lock_report():
+        try:
+            from app.ingestion.poller_lock import lock_report
+            log.info("%s", lock_report())
+        except Exception:
+            log.exception("lock report failed")
+
+    scheduler.add_job(
+        _log_lock_report,
+        "interval",
+        minutes=10,
+        id="lock_report",
+        next_run_time=base_tick + timedelta(minutes=6),
+        replace_existing=True,
+    )
     scheduler.add_job(
         observation_logger.settle_from_polymarket,
         "interval",

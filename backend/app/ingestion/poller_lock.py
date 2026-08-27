@@ -42,10 +42,83 @@ attempted here" before it was finally done.
 non-per-sport background jobs (`run_catalog_scan`/`run_sanity_check`/
 `run_surface_backfill`) that were never part of the per-sport contention
 problem and don't need the finer-grained treatment."""
+import contextlib
 import functools
+import logging
+import sys
 import threading
+import time
+
+log = logging.getLogger("poller_lock")
 
 _POLLER_LOCK = threading.Lock()
+
+# ---- instrumentation, added 2026-08-27 -------------------------------------
+# WHY. The soccer poller was measured doing 3-8 SECONDS of work while queueing
+# up to TEN MINUTES for this lock, so the cost is somewhere else entirely and
+# four rounds of tuning pollers found nothing. Instrumenting one caller at a
+# time is how that happened; instrumenting the LOCK names every holder at once.
+#
+# `serialized()` is the specific suspect. It wraps a WHOLE function -- network
+# I/O included -- which is exactly the pattern this module's docstring describes
+# as the 2026-07-20 incident and moved the pollers away from. The background
+# jobs still on it (catalog scan, sanity check, surface backfill) were judged
+# small at the time; nothing has re-checked that since.
+_LOCK_STATS_LOCK = threading.Lock()
+LOCK_STATS: dict[str, dict] = {}
+# Log any single hold longer than this outright. A hold is supposed to be a
+# commit, so seconds is already remarkable.
+_LONG_HOLD_SECONDS = 5.0
+
+
+def _owner(depth: int = 3) -> str:
+    """module.function of the caller, cheaply. sys._getframe rather than
+    inspect.stack(), which builds the whole stack and would itself be a cost on
+    a hot path."""
+    try:
+        f = sys._getframe(depth)
+        return f"{f.f_globals.get('__name__', '?').split('.')[-1]}.{f.f_code.co_name}"
+    except Exception:
+        return "?"
+
+
+def _record(owner: str, waited: float, held: float) -> None:
+    with _LOCK_STATS_LOCK:
+        s = LOCK_STATS.setdefault(
+            owner, {"n": 0, "waited": 0.0, "held": 0.0, "max_held": 0.0})
+        s["n"] += 1
+        s["waited"] += waited
+        s["held"] += held
+        s["max_held"] = max(s["max_held"], held)
+    if held >= _LONG_HOLD_SECONDS:
+        log.warning("db lock held %.1fs by %s (waited %.1fs to get it)",
+                    held, owner, waited)
+
+
+def lock_report() -> str:
+    """Total hold time per caller, worst first -- the answer to 'who owns this
+    lock'. Logged periodically by the scheduler."""
+    with _LOCK_STATS_LOCK:
+        rows = sorted(LOCK_STATS.items(), key=lambda kv: -kv[1]["held"])
+    if not rows:
+        return "db lock: no acquisitions recorded yet"
+    parts = [f"{o} held {v['held']:.0f}s over {v['n']} (max {v['max_held']:.0f}s, "
+             f"waited {v['waited']:.0f}s)" for o, v in rows[:12]]
+    return "db lock holders, worst first: " + "  |  ".join(parts)
+
+
+@contextlib.contextmanager
+def _timed(owner: str):
+    t0 = time.time()
+    _POLLER_LOCK.acquire()
+    waited = time.time() - t0
+    t1 = time.time()
+    try:
+        yield
+    finally:
+        held = time.time() - t1
+        _POLLER_LOCK.release()
+        _record(owner, waited, held)
 
 
 def serialized(fn):
@@ -57,7 +130,10 @@ def serialized(fn):
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        with _POLLER_LOCK:
+        # Named by the WRAPPED function, not by this wrapper -- otherwise every
+        # serialized job would report as "poller_lock.wrapper" and the report
+        # could not tell them apart.
+        with _timed(f"serialized:{getattr(fn, '__name__', '?')}"):
             return fn(*args, **kwargs)
 
     return wrapper
@@ -70,5 +146,9 @@ def db_write_lock():
     the full real-bug story on why this replaced the old whole-function
     wrapping. Callers MUST have already finished every network call before
     entering this block; the lock is non-reentrant (plain threading.Lock),
-    so nesting it inside an already-locked scope would deadlock."""
-    return _POLLER_LOCK
+    so nesting it inside an already-locked scope would deadlock.
+
+    Returns a timing context manager rather than the bare lock, so every hold is
+    attributed to its caller -- see LOCK_STATS above. Usage is unchanged
+    (`with db_write_lock():`) and the underlying lock is the same object."""
+    return _timed(_owner(2))
