@@ -782,9 +782,34 @@ def _current_event_start(bet: PlacedBet):
         return None
     try:
         start_dt, _ = _resolve_bet_start(sess, bet)
-        return start_dt
     except Exception:
         return None
+    # A SETTLED BET CANNOT BE GRADED BEFORE ITS EVENT HAPPENS. If the fixture's
+    # current start is AFTER the day we settled it, that row is no longer
+    # describing this bet's match, and following it would file a finished result
+    # on a future day.
+    #
+    # User-reported 2026-08-27: tennis showed "+5.67u today" with nothing settled
+    # that day. One bet -- 20343, Misasi, placed AND settled 2026-08-08 -- had
+    # been dragged 19 days forward because its fixture row (match 3674) kept
+    # match_date 2026-08-08 while estimated_start_time was overwritten with
+    # 2026-08-27T08:31Z. The same two players meeting again reuses the row; the
+    # tennis:1723 duplicate found the day before is the same shape.
+    #
+    # A DAY THRESHOLD WOULD ALSO HAVE WORKED AND IS WORSE. Measured over all 863
+    # real bets, the moves are -1d x99, 0d x694, +1d x5 and +19d x1 -- so any
+    # bound between 2 and 18 days separates them today. That is a number fitted
+    # to one outlier, and it would silently start cutting genuine postponements
+    # the first time one ran long. This rule needs no number: it is false by
+    # definition, not merely unusual.
+    #
+    # Deliberately NOT applied to a pending bet. A reschedule INTO the future is
+    # exactly what this function exists to follow, and a pending bet contributes
+    # no units to any day, so it cannot invent P&L.
+    if start_dt is not None and bet.settled_at is not None:
+        if start_dt.date() > bet.settled_at.date():
+            return None
+    return start_dt
 
 
 def _within_period(bet: PlacedBet, cutoff) -> bool:
