@@ -797,17 +797,25 @@ def refresh_polymarket_soccer_futures():
     the per-step isolation the step list below exists for.
     """
     rows = polymarket_soccer_client.get_league_winner_markets()
+    # Fetched alongside league_winner because it is the same venue, the same
+    # slug-addressed shape and the same rated-leagues-only rule. Both fetches
+    # finish BEFORE the lock is taken, per this module's own contract.
+    clean_sheet_rows = polymarket_soccer_client.get_most_clean_sheets_markets()
     with db_write_lock():
         session = SessionLocal()
         try:
             for row in rows:
                 market_catalog_soccer.upsert_polymarket_soccer_league_winner_row(session, row)
+            for row in clean_sheet_rows:
+                market_catalog_soccer.upsert_polymarket_soccer_most_clean_sheets_row(session, row)
             session.commit()
         finally:
             session.close()
     leagues = {r["division"] for r in rows}
-    log.info("polymarket soccer futures: %d league_winner rows across %d leagues",
-             len(rows), len(leagues))
+    log.info("polymarket soccer futures: %d league_winner rows across %d leagues, "
+             "%d most_clean_sheets rows across %d leagues",
+             len(rows), len(leagues), len(clean_sheet_rows),
+             len({r["division"] for r in clean_sheet_rows}))
 
 
 def refresh_mls_playoff_sim():

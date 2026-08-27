@@ -538,6 +538,36 @@ def upsert_polymarket_soccer_league_winner_row(session: Session, row: dict) -> M
     return market
 
 
+def upsert_polymarket_soccer_most_clean_sheets_row(session: Session, row: dict) -> Market:
+    """Polymarket's "team with most clean sheets" season future.
+
+    Same season-long, no-soccer_match_id shape as the league_winner row above.
+    The division travels on `source_event_id` (the event SLUG), which is what
+    soccer_markets._futures_division resolves Polymarket futures by -- NOT on a
+    `league` attribute, which the Market model does not have and SQLAlchemy
+    would silently drop, leaving every row unpriced.
+
+    Polymarket-only for now: Kalshi lists no equivalent, so unlike league_winner
+    this needs no duplicate-listing cap. If Kalshi ever adds it, that changes.
+    """
+    source_ticker = f"{row['condition_id']}-most_clean_sheets"
+    market = session.query(Market).filter_by(
+        source="polymarket", source_ticker=source_ticker).one_or_none()
+    if market is None:
+        market = Market(
+            source="polymarket", source_ticker=source_ticker,
+            source_event_id=row["event_slug"],
+            market_type="most_clean_sheets", sport="soccer",
+        )
+        session.add(market)
+    market.team = row["team"]
+    market.group_label = row["group_label"]
+    market.status = row.get("status") or "active"
+    _upsert_snapshot(session, market, row.get("yes_price"), row.get("volume"),
+                     **quote_fields(row, row.get("yes_price")))
+    return market
+
+
 def upsert_kalshi_mls_playoff_market(session: Session, row: dict) -> Market:
     """MLS Cup / Eastern / Western conference bracket futures. Same season-long,
     no-soccer_match_id shape as league_winner above; the only difference is that

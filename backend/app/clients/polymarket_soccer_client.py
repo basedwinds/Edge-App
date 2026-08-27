@@ -642,6 +642,88 @@ LEAGUE_WINNER_EVENT_SLUGS = {
 }
 
 
+# "Team with Most Clean Sheets", by exact event slug for the same reason
+# LEAGUE_WINNER_EVENT_SLUGS is: asking by tag can silently return the wrong
+# league, and a season futures market priced for the wrong league is worse than
+# an absent one.
+#
+# ONLY LEAGUES THIS APP RATES. simulate_season is league-agnostic and prices a
+# league the moment its rows and its Elo pool both exist, so an unrated league
+# would just add permanent blanks -- the same rule
+# refresh_polymarket_soccer_futures already states for league_winner. Polymarket
+# lists this market for ~35 more leagues (Iceland, Estonia, Uzbekistan, ...);
+# they stay out until those leagues are rated.
+MOST_CLEAN_SHEETS_EVENT_SLUGS = {
+    # SP1 AND F1 ARE DELIBERATELY ABSENT. Their events look identical by slug
+    # and title ("LaLiga: Most Clean Sheets 2026-27") but ask a DIFFERENT
+    # QUESTION: "Will Thibaut Courtois (Real Madrid) record the most clean
+    # sheets" -- a GOALKEEPER market, not a team one. 54 and 55 legs against a
+    # 20- and 18-team league is the tell; 13-14 legs name a person and 26 are
+    # placeholders ("Player A" ... "Player Z") that are nobody at all.
+    #
+    # simulate_season produces a per-TEAM clean-sheet distribution, so wiring
+    # these would price a keeper as if he were his club -- ignoring rotation,
+    # injury and transfers -- and would hand the sim names it has never rated.
+    # A goalkeeper market is not a lesser version of the team market, it is a
+    # different one, and this app has no keeper-level model. Every other league
+    # here returns 0 named-person and 0 placeholder legs.
+    "E0":   "premier-league-team-most-clean-sheets-2026-27",
+    "I1":   "serie-a-team-most-clean-sheets-2026-27",
+    "N1":   "eredivisie-team-most-clean-sheets-2026-27",
+    "P1":   "primeira-liga-team-most-clean-sheets-2026-27",
+    "T1":   "super-lig-team-most-clean-sheets-2026-27",
+    "SC0":  "scottish-premiership-team-most-clean-sheets-2026-27",
+    "BRA1": "brazil-serie-a-team-most-clean-sheets-2026",
+    "ARG1": "liga-profesional-argentina-team-most-clean-sheets-2026",
+    "JPN1": "japan-j-league-team-most-clean-sheets-2026-27",
+    "CHN1": "chinese-super-league-team-most-clean-sheets-2026",
+    "NOR1": "norway-eliteserien-team-most-clean-sheets-2026",
+    "SWE1": "allsvenskan-sweden-team-most-clean-sheets-2026",
+}
+
+
+def get_most_clean_sheets_markets() -> list[dict]:
+    """One row per (league, team) leg of each most-clean-sheets event.
+
+    Same shape and same skip rule as get_league_winner_markets below: a leg with
+    no usable Yes price is dropped rather than defaulted, because an outright
+    carrying a guessed price is worse than one that is simply absent.
+    """
+    from app.clients.polymarket_client import GAMMA as _GAMMA, get_json
+
+    rows = []
+    for division, slug in MOST_CLEAN_SHEETS_EVENT_SLUGS.items():
+        try:
+            event = get_json(f"{_GAMMA}/events/slug/{slug}")
+        except Exception:
+            continue  # one missing league must not cost the others
+        group_label = event.get("title") or slug
+        for m in event.get("markets", []):
+            team = (m.get("groupItemTitle") or "").strip()
+            if not team:
+                continue
+            prices = extract_market_prices(m)
+            outcomes, outcome_prices = prices["outcomes"], prices["outcome_prices"]
+            if "Yes" not in outcomes or not outcome_prices:
+                continue
+            yes_idx = outcomes.index("Yes")
+            if yes_idx >= len(outcome_prices):
+                continue
+            rows.append({
+                "event_slug": slug,
+                "division": division,
+                "group_label": group_label,
+                "team": team,
+                "yes_price": outcome_prices[yes_idx],
+                "condition_id": prices["condition_id"],
+                "volume": prices["volume"],
+                "raw_bid": prices["best_bid"],
+                "raw_ask": prices["best_ask"],
+                "status": _market_status(m),
+            })
+    return rows
+
+
 def get_league_winner_markets() -> list[dict]:
     """One row per (league, team) leg of each season-title event.
 

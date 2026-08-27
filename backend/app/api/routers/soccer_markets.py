@@ -1183,6 +1183,14 @@ _POLYMARKET_SLUG_TO_DIVISION = {
     slug: division
     for division, slug in polymarket_soccer_client.LEAGUE_WINNER_EVENT_SLUGS.items()
 }
+# most_clean_sheets resolves the same way, by the slug we asked for by name.
+# Without this every row would fall through to the label map, miss, and be
+# served unpriced -- the failure mode upsert_polymarket_soccer_league_winner_row
+# warns about.
+_POLYMARKET_SLUG_TO_DIVISION.update({
+    slug: division
+    for division, slug in polymarket_soccer_client.MOST_CLEAN_SHEETS_EVENT_SLUGS.items()
+})
 _MARKET_TYPE_LABEL_TO_DIVISION.update({
     ("relegation", label): division for division, (_, label) in kalshi_soccer_client.RELEGATION_SERIES.items()
 })
@@ -1273,10 +1281,15 @@ _SOCCER_LEAGUE_NAME = {
 }
 
 _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top2", "team_points",
+                         # most_clean_sheets (2026-08-27). The sim has computed
+                         # most_clean_sheets_prob all along and nothing read it;
+                         # this is the wiring, not new modelling.
+                         "most_clean_sheets",
                          *_MLS_PLAYOFF_MARKET_TYPES, _LIGAMX_MARKET_TYPE]
 
 _SIM_PROB_FIELD_BY_MARKET_TYPE = {
     "relegation": "relegation_prob",
+    "most_clean_sheets": "most_clean_sheets_prob",
     "top_half": "top_half_prob",
     "top4": "top4_prob",
     "top2": "top2_prob",
