@@ -415,6 +415,13 @@ def refresh_soccer_news_adjustments():
             session.close()
 
 
+# Upserts per lock acquisition in refresh_kalshi_soccer_markets's second
+# stage. ~3,600 rows a cycle, so 400 is roughly nine acquisitions -- short
+# enough that another poller waits under ten seconds, long enough that lock
+# churn is not itself the cost.
+_KALSHI_UPSERT_BATCH = 400
+
+
 def refresh_kalshi_soccer_markets():
     """REAL BUG this fixes (found live 2026-07-20, worst offender in this
     file -- ~17 separate Kalshi calls all used to happen INSIDE one open
@@ -442,6 +449,34 @@ def refresh_kalshi_soccer_markets():
         (kalshi_soccer_client.get_team_total_markets(), market_catalog_soccer.upsert_kalshi_soccer_team_total_market, "teamtotal"),
     ]
 
+    # SPLIT INTO TWO LOCKED STAGES, 2026-08-26. This whole write used to run
+    # under ONE db_write_lock() -- and that lock is the app-wide, non-reentrant
+    # one every poller and `serialized()` share. The soccer pass runs 467-517s
+    # against a 300s interval, so it never stops, and while it held that lock
+    # nothing else could write. `/soccer/markets` swinging 52s -> 150s between
+    # cache-warm passes is that contention, not route cost.
+    #
+    # Stage 1 (match resolution) KEEPS one lock for the whole loop: it is a
+    # read-then-create critical section, and interleaving another writer could
+    # double-create a SoccerMatch.
+    #
+    # Stage 2 (market upserts) takes the lock PER BATCH and commits per batch.
+    # Each upsert is an independent row keyed by its own ticker, and only this
+    # poller writes Kalshi soccer markets, so releasing between batches cannot
+    # corrupt anything. Same shape as the snapshot-prune fix, which deleted 3.9M
+    # rows in ONE transaction under this lock and starved all nine pollers until
+    # APScheduler skipped it.
+    #
+    # The tradeoff is atomicity: a crash mid-write now leaves some markets
+    # updated and some not. That is fine here -- these are idempotent upserts and
+    # the next cycle re-runs them 300s later -- and it is the same tradeoff the
+    # prune made.
+    #
+    # PER-STAGE TIMING IS LOGGED because the estimate that motivated this was a
+    # SUBTRACTION (315s step - 125s fetch measured separately), and Kalshi
+    # rate-limit backoff makes the fetch half swing 174s -> 415s on its own. The
+    # next pass says outright where the time actually goes.
+    t_stage0 = time.time()
     with db_write_lock():
         session = SessionLocal()
         try:
@@ -493,52 +528,65 @@ def refresh_kalshi_soccer_markets():
                 if suffix_key:
                     match_id_by_suffix_key[suffix_key] = match_id
 
-            matched = sum(1 for v in match_id_by_event.values() if v is not None)
-            for row in rows:
-                market_catalog_soccer.upsert_kalshi_soccer_moneyline_market(
-                    session, row, match_id_by_event.get(row["event_ticker"])
-                )
-
-            # Spread/total live on their OWN series/event_ticker per match
-            # (see kalshi_soccer_client.py's docstring), resolved via the
-            # SAME cross-series join key moneyline's event_ticker maps to,
-            # reused directly here rather than re-matching by team name a
-            # second time.
-            for row in spread_rows:
-                suffix_key = kalshi_match_suffix(row["event_ticker"])
-                market_catalog_soccer.upsert_kalshi_soccer_spread_market(
-                    session, row, match_id_by_suffix_key.get(suffix_key) if suffix_key else None
-                )
-            for row in total_rows:
-                suffix_key = kalshi_match_suffix(row["event_ticker"])
-                market_catalog_soccer.upsert_kalshi_soccer_total_market(
-                    session, row, match_id_by_suffix_key.get(suffix_key) if suffix_key else None
-                )
-            for row in btts_rows:
-                suffix_key = kalshi_match_suffix(row["event_ticker"])
-                market_catalog_soccer.upsert_kalshi_soccer_btts_market(
-                    session, row, match_id_by_suffix_key.get(suffix_key) if suffix_key else None
-                )
-
-            counts: dict[str, int] = {}
-            for fetched_rows, upsert_fn, label in second_batch:
-                for row in fetched_rows:
-                    suffix_key = kalshi_match_suffix(row["event_ticker"])
-                    upsert_fn(session, row, match_id_by_suffix_key.get(suffix_key) if suffix_key else None)
-                counts[label] = len(fetched_rows)
-
             session.commit()
-            log.info(
-                "kalshi soccer: %d/%d matches resolved, %d moneyline rows, %d spread rows, %d total rows, %d btts rows, "
-                "%d 1H rows, %d 1H-spread, %d 1H-total, %d 1H-btts, %d 2H rows, %d 2H-spread, %d 2H-total, %d 2H-btts, "
-                "%d ftts, %d correct-score, %d team-total",
-                matched, len(by_event), len(rows), len(spread_rows), len(total_rows), len(btts_rows),
-                counts["1h"], counts["1h_spread"], counts["1h_total"], counts["1h_btts"],
-                counts["2h"], counts["2h_spread"], counts["2h_total"], counts["2h_btts"],
-                counts["ftts"], counts["score"], counts["teamtotal"],
-            )
         finally:
             session.close()
+    t_stage1 = time.time()
+
+    matched = sum(1 for v in match_id_by_event.values() if v is not None)
+
+    # One flat work list, so batching is over the TOTAL upsert count rather than
+    # per market type -- the small types (2h_btts has 5 rows) would otherwise
+    # each take and release the lock for almost nothing.
+    work: list = []
+    for row in rows:
+        work.append((market_catalog_soccer.upsert_kalshi_soccer_moneyline_market,
+                     row, match_id_by_event.get(row["event_ticker"])))
+
+    # Spread/total live on their OWN series/event_ticker per match (see
+    # kalshi_soccer_client.py's docstring), resolved via the SAME cross-series
+    # join key moneyline's event_ticker maps to, reused directly here rather
+    # than re-matching by team name a second time.
+    def _by_suffix(row):
+        sk = kalshi_match_suffix(row["event_ticker"])
+        return match_id_by_suffix_key.get(sk) if sk else None
+
+    for row in spread_rows:
+        work.append((market_catalog_soccer.upsert_kalshi_soccer_spread_market, row, _by_suffix(row)))
+    for row in total_rows:
+        work.append((market_catalog_soccer.upsert_kalshi_soccer_total_market, row, _by_suffix(row)))
+    for row in btts_rows:
+        work.append((market_catalog_soccer.upsert_kalshi_soccer_btts_market, row, _by_suffix(row)))
+    counts: dict[str, int] = {}
+    for fetched_rows, upsert_fn, label in second_batch:
+        for row in fetched_rows:
+            work.append((upsert_fn, row, _by_suffix(row)))
+        counts[label] = len(fetched_rows)
+
+    for i in range(0, len(work), _KALSHI_UPSERT_BATCH):
+        with db_write_lock():
+            session = SessionLocal()
+            try:
+                for fn, row, mid in work[i:i + _KALSHI_UPSERT_BATCH]:
+                    fn(session, row, mid)
+                session.commit()
+            finally:
+                session.close()
+    t_stage2 = time.time()
+
+    log.info(
+        "kalshi soccer: %d/%d matches resolved, %d moneyline rows, %d spread rows, %d total rows, %d btts rows, "
+        "%d 1H rows, %d 1H-spread, %d 1H-total, %d 1H-btts, %d 2H rows, %d 2H-spread, %d 2H-total, %d 2H-btts, "
+        "%d ftts, %d correct-score, %d team-total "
+        "[match-resolve %.1fs, %d upserts in %d batches %.1fs]",
+        matched, len(by_event), len(rows), len(spread_rows), len(total_rows), len(btts_rows),
+        counts["1h"], counts["1h_spread"], counts["1h_total"], counts["1h_btts"],
+        counts["2h"], counts["2h_spread"], counts["2h_total"], counts["2h_btts"],
+        counts["ftts"], counts["score"], counts["teamtotal"],
+        t_stage1 - t_stage0, len(work),
+        (len(work) + _KALSHI_UPSERT_BATCH - 1) // _KALSHI_UPSERT_BATCH,
+        t_stage2 - t_stage1,
+    )
 
 
 def refresh_polymarket_soccer_markets():
