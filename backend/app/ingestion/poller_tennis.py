@@ -14,6 +14,7 @@ reused for every other series in the same refresh pass rather than
 re-matching names per series.
 """
 import datetime
+import time
 import logging
 
 from app.clients import kalshi_tennis_client, polymarket_tennis_client
@@ -56,6 +57,7 @@ def refresh_kalshi_tennis_markets():
     exact_match_rows = kalshi_tennis_client.get_exact_match_markets()
 
     with db_write_lock():
+        _t_lock = time.time()
         session = SessionLocal()
         try:
             by_event: dict[str, list[dict]] = {}
@@ -89,31 +91,57 @@ def refresh_kalshi_tennis_markets():
                 if suffix:
                     match_id_by_suffix[suffix] = match.id if match else None
 
+            _t_resolve = time.time() - _t_lock
             matched = sum(1 for v in match_id_by_event.values() if v is not None)
+            _t0 = time.time()
             for row in rows:
                 market_catalog_tennis.upsert_kalshi_tennis_moneyline_market(
                     session, row, match_id_by_event.get(row["event_ticker"])
                 )
+            _t_ml = time.time() - _t0
 
+            _t0 = time.time()
             for row in set_winner_rows:
                 market_catalog_tennis.upsert_kalshi_tennis_set_winner_market(
                     session, row, match_id_by_suffix.get(row["match_suffix"])
                 )
+            _t_sw = time.time() - _t0
+            _t0 = time.time()
             for row in game_spread_rows:
                 market_catalog_tennis.upsert_kalshi_tennis_game_spread_market(
                     session, row, match_id_by_suffix.get(row["match_suffix"])
                 )
+            _t_gs = time.time() - _t0
+            _t0 = time.time()
             for row in game_total_rows:
                 market_catalog_tennis.upsert_kalshi_tennis_game_total_market(
                     session, row, match_id_by_suffix.get(row["match_suffix"])
                 )
+            _t_gt = time.time() - _t0
+            _t0 = time.time()
             for row in exact_match_rows:
                 market_catalog_tennis.upsert_kalshi_tennis_exact_match_market(
                     session, row, match_id_by_suffix.get(row["match_suffix"])
                 )
+            _t_em = time.time() - _t0
 
+            _t0 = time.time()
             session.commit()
-            log.info("kalshi tennis: %d/%d matches resolved, %d moneyline rows", matched, len(by_event), len(rows))
+            _t_commit = time.time() - _t0
+            # PER-PHASE, because this function holds the app-wide write lock for
+            # 187.4s -- the largest single hold in the app -- and one aggregate
+            # number has sent this investigation at the wrong target four times
+            # today. The per-event match scan was the obvious suspect and is only
+            # ~11s of it (250 calls x 0.043s, measured), so the rest is in here.
+            log.info(
+                "kalshi tennis: %d/%d matches resolved, %d moneyline rows "
+                "[resolve %.1fs, moneyline %d/%.1fs, set_winner %d/%.1fs, "
+                "game_spread %d/%.1fs, game_total %d/%.1fs, exact %d/%.1fs, "
+                "commit %.1fs]",
+                matched, len(by_event), len(rows),
+                _t_resolve, len(rows), _t_ml, len(set_winner_rows), _t_sw,
+                len(game_spread_rows), _t_gs, len(game_total_rows), _t_gt,
+                len(exact_match_rows), _t_em, _t_commit)
         finally:
             session.close()
 
