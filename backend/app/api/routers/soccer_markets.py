@@ -1552,9 +1552,14 @@ def list_soccer_futures(session: Session = Depends(get_session)):
                 # behaviour.
                 if (m.market_type in _SIM_MAY_DECLINE
                         and not any(v for v in prob_dict.values())):
+                    # Left UNPRICED. No note is set here: `no_baseline_reason`
+                    # is a local of list_soccer_markets, NOT of this function --
+                    # referencing it raised UnboundLocalError and 500'd the whole
+                    # futures route, which is how a soccer-only change broke the
+                    # frontend's ability to mark ANY bet placed. model_prob=None
+                    # is the part that matters; see _SIM_EMITTED_NOTHING for the
+                    # reason it is None.
                     model_prob = None
-                    if not no_baseline_reason:
-                        no_baseline_reason = _SIM_EMITTED_NOTHING
                 else:
                     model_prob = round(prob_dict.get(_pool_key(m), 0.0), 4)
         snap = snapshots_by_market.get(m.id)
