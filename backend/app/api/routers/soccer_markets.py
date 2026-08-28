@@ -1287,6 +1287,19 @@ _FUTURES_MARKET_TYPES = ["league_winner", "relegation", "top_half", "top4", "top
                          "most_clean_sheets",
                          *_MLS_PLAYOFF_MARKET_TYPES, _LIGAMX_MARKET_TYPE]
 
+# Types whose simulation can legitimately DECLINE to produce a distribution, so
+# an all-zero result must be read as "not modelled" rather than "0% for
+# everyone". Only most_clean_sheets today: simulate_season skips it on a
+# part-played season with unknown starting counts. The rank markets
+# (relegation/top_half/top4/top2) always produce a real distribution, so they
+# keep the existing 0.0 default and are deliberately not listed.
+_SIM_MAY_DECLINE = {"most_clean_sheets"}
+_SIM_EMITTED_NOTHING = (
+    "No baseline -- the season simulation does not produce a clean-sheet leader "
+    "for a part-played season unless the clean sheets played so far are supplied, "
+    "and counting only simulated matches would understate every team."
+)
+
 _SIM_PROB_FIELD_BY_MARKET_TYPE = {
     "relegation": "relegation_prob",
     "most_clean_sheets": "most_clean_sheets_prob",
@@ -1516,7 +1529,34 @@ def list_soccer_futures(session: Session = Depends(get_session)):
             else:
                 prob_field = _SIM_PROB_FIELD_BY_MARKET_TYPE.get(m.market_type, "champion_prob")
                 prob_dict = getattr(sim_result, prob_field)
-                model_prob = round(prob_dict.get(_pool_key(m), 0.0), 4)
+                # AN ALL-ZERO DISTRIBUTION MEANS THE SIM DECLINED, NOT THAT
+                # EVERY TEAM IS AT 0%.
+                #
+                # simulate_season fills clean_sheet_leader with 0.0 for every
+                # team and then skips it entirely when a season is part-played
+                # and the caller has not supplied starting clean-sheet counts --
+                # its own comment says "Emit nothing in that case rather than a
+                # wrong number", because the count would otherwise cover
+                # simulated matches alone and understate everyone.
+                #
+                # `.get(key, 0.0)` then turned that refusal into a confident
+                # "0% chance". Measured on the live board when most_clean_sheets
+                # shipped: 6 of 12 leagues (ARG1 BRA1 CHN1 NOR1 SC0 SWE1) served
+                # 0.000 for EVERY team, against real market prices of 0.3-0.5 --
+                # a fabricated -30pp edge on every row. The other six summed to
+                # 0.79-1.00 as a real distribution should.
+                #
+                # Same reasoning team_points states just above: a fabricated
+                # price is worse than an absent one. Scoped to the types whose
+                # sim can decline, so the rank markets keep their existing
+                # behaviour.
+                if (m.market_type in _SIM_MAY_DECLINE
+                        and not any(v for v in prob_dict.values())):
+                    model_prob = None
+                    if not no_baseline_reason:
+                        no_baseline_reason = _SIM_EMITTED_NOTHING
+                else:
+                    model_prob = round(prob_dict.get(_pool_key(m), 0.0), 4)
         snap = snapshots_by_market.get(m.id)
         implied = _implied_prob(snap)
         has_traded = has_real_trading(m.source, snap.volume if snap else None, snap.last_price if snap else None)
