@@ -120,7 +120,20 @@ async def lifespan(app: FastAPI):
     # Same reasoning for the catalog scan -- also establishes the "known
     # markets" baseline on a fresh DB right away rather than waiting up to
     # 24h for the first scheduled run (see scheduler.py::run_catalog_scan).
-    _schedule(len(pollers) * STARTUP_POLLER_STAGGER_SECONDS, serialized(scheduler_module.run_catalog_scan))
+    # NOT serialized(). run_catalog_scan takes db_write_lock() itself around its
+    # write phase, and that lock is a plain non-reentrant threading.Lock -- so
+    # wrapping it here made the wrapper acquire the lock, call the function, and
+    # the function block forever waiting for the lock it was already holding.
+    #
+    # SELF-DEADLOCK, and it froze EVERY database write in the app for ~7 hours
+    # on 2026-08-27: py-spy showed 17 threads parked in poller_lock._timed
+    # waiting to acquire, with run_catalog_scan itself among them. The soccer
+    # poller never completed a single pass in that time.
+    #
+    # I unwrapped BOTH call sites for run_sanity_check the same day and only ONE
+    # for this. When a function starts taking the lock itself, every call site
+    # has to be checked -- scheduler.py's registration is not the only one.
+    _schedule(len(pollers) * STARTUP_POLLER_STAGGER_SECONDS, scheduler_module.run_catalog_scan)
     # Dead-market sanity check (see dead_market_sanity_check.py) -- extra
     # delay beyond the last poller's own stagger slot so its network calls
     # have actually had time to finish, not just start.
